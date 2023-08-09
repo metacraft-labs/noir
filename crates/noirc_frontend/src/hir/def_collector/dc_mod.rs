@@ -67,7 +67,129 @@ pub fn collect_defs(
 
     collector.collect_functions(context, ast.functions, errors);
 
+    collector.collect_trait_impls(context, ast.trait_impls, errors);
+
     collector.collect_impls(context, ast.impls);
+}
+
+fn check_trait_method_implementation_generics(
+    _generics: &[Ident],
+    _noir_function: &NoirFunction,
+    _trait_name: &str,
+) -> Result<(), DefCollectorErrorKind> {
+    // TODO
+    Ok(())
+}
+
+fn check_trait_method_implementation_parameters(
+    parameters: &Vec<(Ident, UnresolvedType)>,
+    noir_function: &NoirFunction,
+    trait_name: &String,
+) -> Result<(), DefCollectorErrorKind> {
+    if noir_function.def.parameters.len() != parameters.len() {
+        return Err(DefCollectorErrorKind::MismatchTraitSignature {
+            primary_message: format!("Mismatch signature [Number of parameters] of method with name `{}` that implemetns trait `{}`", noir_function.name(), trait_name),
+            secondary_message: "".to_string(),
+            span: noir_function.name_ident().span(),
+        });
+    }
+    for (count, (pattern, typ, _abi_vis)) in noir_function.def.parameters.iter().enumerate() {
+        let (_expected_name, expected_type) = &parameters[count];
+        if typ != expected_type {
+            return Err(DefCollectorErrorKind::MismatchTraitSignature {
+                primary_message: format!(
+                    "Mismatch signature of method {} that implemtns trait {}",
+                    noir_function.name(),
+                    trait_name,
+                ),
+                secondary_message: format!(
+                    "`{}: {}` expected",
+                    pattern.name_ident().0.contents,
+                    expected_type,
+                ),
+                span: pattern.name_ident().span(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn check_trait_method_implementation_trait_constains(
+    _where_clause: &[TraitConstraint],
+    _noir_function: &NoirFunction,
+    _trait_name: &str,
+) -> Result<(), DefCollectorErrorKind> {
+    // TODO
+    Ok(())
+}
+
+fn check_trait_method_implementation_return_type(
+    return_type: &UnresolvedType,
+    noir_function: &NoirFunction,
+    trait_name: &String,
+) -> Result<(), DefCollectorErrorKind> {
+    if !(return_type == &noir_function.return_type()) {
+        Err(DefCollectorErrorKind::MismatchTraitSignature {
+            primary_message: format!(
+                "mismatch return type of method with name {} that implemetns trait {}",
+                noir_function.name(),
+                trait_name
+            ),
+            secondary_message: "".to_string(),
+            span: noir_function.name_ident().span(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn check_trait_method_implementation(
+    r#trait: &NoirTrait,
+    noir_function: &NoirFunction,
+) -> Result<(), DefCollectorErrorKind> {
+    for item in &r#trait.items {
+        if let TraitItem::Function {
+            name,
+            generics,
+            parameters,
+            return_type,
+            where_clause,
+            body: _,
+        } = item
+        {
+            if name.0.contents == noir_function.def.name.0.contents {
+                // name matches, check for parameters, return type and where clause
+                check_trait_method_implementation_generics(
+                    generics,
+                    noir_function,
+                    &r#trait.name.0.contents,
+                )?;
+                check_trait_method_implementation_parameters(
+                    parameters,
+                    noir_function,
+                    &r#trait.name.0.contents,
+                )?;
+                check_trait_method_implementation_trait_constains(
+                    where_clause,
+                    noir_function,
+                    &r#trait.name.0.contents,
+                )?;
+                check_trait_method_implementation_return_type(
+                    return_type,
+                    noir_function,
+                    &r#trait.name.0.contents,
+                )?;
+                return Ok(());
+            }
+        }
+    }
+
+    Err(DefCollectorErrorKind::MethodNotInTrait {
+        trait_name: r#trait.name.0.contents.to_string(),
+        trait_span: r#trait.name.span(),
+        impl_method_name: noir_function.name().to_string(),
+        impl_method_span: noir_function.name_ident().span(),
+    })
 }
 
 impl<'a> ModCollector<'a> {
@@ -120,6 +242,90 @@ impl<'a> ModCollector<'a> {
             let key = (r#impl.object_type, self.module_id);
             let methods = self.def_collector.collected_impls.entry(key).or_default();
             methods.push((r#impl.generics, r#impl.type_span, unresolved_functions));
+        }
+    }
+
+    fn collect_trait_impls(
+        &mut self,
+        context: &mut Context,
+        impls: Vec<TraitImpl>,
+        errors: &mut Vec<FileDiagnostic>,
+    ) {
+        for r#impl in impls {
+            let mut unresolved_functions =
+                UnresolvedFunctions { file_id: self.file_id, functions: Vec::new() };
+            let trait_name = r#impl.trait_name.clone();
+            let module = &self.def_collector.def_map.modules[self.module_id.0];
+            match module.find_name(&trait_name).types {
+                Some((module_def_id, _visibility)) => match module_def_id {
+                    ModuleDefId::TraitId(trait_id) => {
+                        for item in r#impl.items {
+                            match item {
+                                TraitImplItem::Function(noir_function) => {
+                                    if let Some(unresolved_trait) =
+                                        self.def_collector.collected_traits.get(&trait_id)
+                                    {
+                                        match check_trait_method_implementation(
+                                            &unresolved_trait.trait_def,
+                                            &noir_function,
+                                        ) {
+                                            Ok(()) => {
+                                                let func_id = context.def_interner.push_empty_fn();
+                                                context.def_interner.push_function_definition(
+                                                    noir_function.name().to_owned(),
+                                                    func_id,
+                                                );
+                                                unresolved_functions.push_fn(
+                                                    self.module_id,
+                                                    func_id,
+                                                    noir_function,
+                                                );
+                                            }
+                                            Err(error) => {
+                                                errors
+                                                    .push(error.into_file_diagnostic(self.file_id));
+                                            }
+                                        }
+                                    } else {
+                                        // ??
+                                    }
+                                }
+                                TraitImplItem::Constant(_name, _typ, _value) => {
+                                    // TODO: Implement this
+                                }
+                                TraitImplItem::Type { name: _, alias: _ } => {
+                                    // TODO: Implement this
+                                }
+                            }
+                        }
+                        let key = (r#impl.object_type, self.module_id);
+                        let methods = self.def_collector.collected_impls.entry(key).or_default();
+                        methods.push((
+                            r#impl.impl_generics,
+                            r#impl.object_type_span,
+                            unresolved_functions,
+                        ));
+                    }
+                    _ => {
+                        let error = DefCollectorErrorKind::NotATrait {
+                            primary_message: format!(
+                                "{} is not a trait, therefore it can't be implemented",
+                                trait_name
+                            ),
+                            secondary_message: "".to_string(),
+                            span: trait_name.span(),
+                        };
+                        errors.push(error.into_file_diagnostic(self.file_id));
+                    }
+                },
+                None => {
+                    let error = DefCollectorErrorKind::TraitNotFound {
+                        trait_name: trait_name.to_string(),
+                        span: trait_name.span(),
+                    };
+                    errors.push(error.into_file_diagnostic(self.file_id));
+                }
+            }
         }
     }
 
