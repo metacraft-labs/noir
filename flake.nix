@@ -268,7 +268,7 @@
         nativeBuildInputs = with pkgs; [
           which
           starship
-          git
+          gitFull
           nil
           nixpkgs-fmt
           toml2json
