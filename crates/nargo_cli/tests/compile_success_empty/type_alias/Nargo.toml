@@ -1,0 +1,7 @@
+[package]
+name = "type_alias"
+type = "bin"
+authors = [""]
+compiler_version = "0.7.0"
+
+[dependencies]
