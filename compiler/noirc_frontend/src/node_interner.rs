@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use arena::{Arena, Index};
 use fm::FileId;
@@ -11,8 +12,8 @@ use crate::hir::def_collector::dc_crate::{UnresolvedStruct, UnresolvedTrait, Unr
 use crate::hir::def_map::{LocalModuleId, ModuleId};
 use crate::hir::StorageSlot;
 use crate::hir_def::stmt::HirLetStatement;
-use crate::hir_def::traits::Trait;
 use crate::hir_def::traits::TraitImpl;
+use crate::hir_def::traits::{Trait, TraitGeneric};
 use crate::hir_def::types::{StructType, Type};
 use crate::hir_def::{
     expr::HirExpression,
@@ -358,20 +359,23 @@ impl NodeInterner {
         let self_type_typevar_id = self.next_type_variable_id();
         let self_type_typevar = Shared::new(TypeBinding::Unbound(self_type_typevar_id));
 
+        let generics = vecmap(&typ.trait_def.generics, |g| {
+            let id = self.next_type_variable_id();
+            TraitGeneric {
+                name: Rc::new(g.0.contents.clone()),
+                typevar_id: id,
+                typevar: Shared::new(TypeBinding::Unbound(id)),
+                span: g.0.span(),
+            }
+        });
+
         self.traits.insert(
             type_id,
             Shared::new(Trait::new(
                 type_id,
                 typ.trait_def.name.clone(),
                 typ.trait_def.span,
-                vecmap(&typ.trait_def.generics, |_| {
-                    // Temporary type variable ids before the trait is resolved to its actual ids.
-                    // This lets us record how many arguments the type expects so that other types
-                    // can refer to it with generic arguments before the generic parameters themselves
-                    // are resolved.
-                    let id = TypeVariableId(0);
-                    (id, Shared::new(TypeBinding::Unbound(id)))
-                }),
+                generics,
                 self_type_typevar_id,
                 self_type_typevar,
             )),

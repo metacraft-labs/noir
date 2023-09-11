@@ -496,7 +496,7 @@ fn resolve_trait_methods(
     for item in &unresolved_trait.trait_def.items {
         if let TraitItem::Function {
             name,
-            generics: _,
+            generics,
             parameters,
             return_type,
             where_clause: _,
@@ -511,17 +511,17 @@ fn resolve_trait_methods(
 
             let mut resolver = Resolver::new(interner, &path_resolver, def_maps, file);
             resolver.set_self_type(Some(self_type));
+            resolver.add_trait_generics(&the_trait.borrow().generics);
+
+            let resolved_generics = resolver.add_generics(generics);
 
             let arguments = vecmap(parameters, |param| resolver.resolve_type(param.1.clone()));
             let resolved_return_type = resolver.resolve_type(return_type.get_type());
 
-            let name = name.clone();
-            // TODO
-            let generics: Generics = vec![];
             let span: Span = name.span();
             let f = TraitFunction {
-                name,
-                generics,
+                name: name.clone(),
+                generics: resolved_generics,
                 arguments,
                 return_type: resolved_return_type,
                 span,

@@ -18,7 +18,7 @@ use crate::hir_def::expr::{
     HirMemberAccess, HirMethodCallExpression, HirPrefixExpression,
 };
 use crate::token::PrimaryAttribute;
-use crate::hir_def::traits::{Trait, TraitConstraint};
+use crate::hir_def::traits::{Trait, TraitConstraint, TraitGeneric};
 use regex::Regex;
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
@@ -643,6 +643,12 @@ impl<'a> Resolver<'a> {
 
             (id, typevar)
         })
+    }
+
+    pub fn add_trait_generics(&mut self, generics: &Vec<TraitGeneric>) {
+        for generic in generics {
+            self.generics.push((generic.name.clone(), generic.typevar.clone(), generic.span.clone()));
+        }
     }
 
     pub fn resolve_struct_fields(

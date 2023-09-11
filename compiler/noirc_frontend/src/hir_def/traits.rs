@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{
     node_interner::{FuncId, TraitId},
     Generics, Ident, Type, TypeVariable, TypeVariableId,
@@ -27,6 +29,14 @@ pub struct TraitType {
     pub span: Span,
 }
 
+#[derive(Debug)]
+pub struct TraitGeneric {
+    pub name: Rc<String>,
+    pub typevar_id: TypeVariableId,
+    pub typevar: TypeVariable,
+    pub span: Span,
+}
+
 /// Represents a trait in the type system. Each instance of this struct
 /// will be shared across all Type::Trait variants that represent
 /// the same trait.
@@ -41,7 +51,7 @@ pub struct Trait {
     pub types: Vec<TraitType>,
 
     pub name: Ident,
-    pub generics: Generics,
+    pub generics: Vec<TraitGeneric>,
     pub span: Span,
 
     /// When resolving the types of Trait elements, all references to `Self` resolve
@@ -83,7 +93,7 @@ impl Trait {
         id: TraitId,
         name: Ident,
         span: Span,
-        generics: Generics,
+        generics: Vec<TraitGeneric>,
         self_type_typevar_id: TypeVariableId,
         self_type_typevar: TypeVariable,
     ) -> Trait {
