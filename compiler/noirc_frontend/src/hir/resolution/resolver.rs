@@ -17,8 +17,8 @@ use crate::hir_def::expr::{
     HirIfExpression, HirIndexExpression, HirInfixExpression, HirLambda, HirLiteral,
     HirMemberAccess, HirMethodCallExpression, HirPrefixExpression,
 };
-use crate::hir_def::traits::Trait;
 use crate::token::PrimaryAttribute;
+use crate::hir_def::traits::{Trait, TraitConstraint};
 use regex::Regex;
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
@@ -37,8 +37,8 @@ use crate::{
 use crate::{
     ArrayLiteral, ContractFunctionType, Distinctness, Generics, LValue, NoirStruct, NoirTypeAlias,
     Path, Pattern, Shared, StructType, Type, TypeAliasType, TypeBinding, TypeVariable, UnaryOp,
-    UnresolvedGenerics, UnresolvedType, UnresolvedTypeData, UnresolvedTypeExpression, Visibility,
-    ERROR_IDENT,
+    UnresolvedGenerics, UnresolvedTraitConstraint, UnresolvedType, UnresolvedTypeData,
+    UnresolvedTypeExpression, Visibility, ERROR_IDENT,
 };
 use fm::FileId;
 use iter_extended::vecmap;
@@ -669,6 +669,16 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    fn resolve_where_clause(
+        &mut self,
+        unresolved: &Vec<UnresolvedTraitConstraint>,
+    ) -> Vec<TraitConstraint> {
+        vecmap(unresolved, |w| TraitConstraint {
+            typ: self.resolve_type(w.typ.clone()),
+            trait_id: w.trait_bound.trait_id,
+        })
+    }
+
     /// Extract metadata from a NoirFunction
     /// to be used in analysis and intern the function parameters
     /// Prerequisite: self.add_generics() has already been called with the given
@@ -767,6 +777,7 @@ impl<'a> Resolver<'a> {
             return_visibility: func.def.return_visibility,
             return_distinctness: func.def.return_distinctness,
             has_body: !func.def.body.is_empty(),
+            where_clause:  self.resolve_where_clause(&func.def.where_clause),
         }
     }
 

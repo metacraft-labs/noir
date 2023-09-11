@@ -1,5 +1,8 @@
 use super::{namespace::PerNs, ModuleDefId, ModuleId};
-use crate::{node_interner::FuncId, Ident};
+use crate::{
+    node_interner::{FuncId, TraitId},
+    Ident,
+};
 use std::collections::{hash_map::Entry, HashMap};
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -13,6 +16,11 @@ pub struct ItemScope {
     values: HashMap<Ident, (ModuleDefId, Visibility)>,
 
     defs: Vec<ModuleDefId>,
+}
+
+pub enum ScopeResolveError {
+    NotFound,
+    WrongType,
 }
 
 impl ItemScope {
@@ -67,6 +75,18 @@ impl ItemScope {
         match module_def {
             ModuleDefId::FunctionId(id) => Some(*id),
             _ => None,
+        }
+    }
+    pub fn find_trait_with_name(
+        &self,
+        trait_name: &Ident,
+    ) -> Result<TraitId, ScopeResolveError> {
+        let (module_def, _) =
+            self.types.get(trait_name).ok_or_else(|| ScopeResolveError::NotFound)?;
+
+        match module_def {
+            ModuleDefId::TraitId(id) => Ok(*id),
+            _ => Err(ScopeResolveError::WrongType),
         }
     }
 

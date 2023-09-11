@@ -27,6 +27,7 @@ pub struct TypeChecker<'interner> {
     delayed_type_checks: Vec<TypeCheckFn>,
     interner: &'interner mut NodeInterner,
     errors: Vec<TypeCheckError>,
+    current_function: Option<FuncId>,
 }
 
 /// Type checks a function and assigns the
@@ -40,6 +41,7 @@ pub fn type_check_func(interner: &mut NodeInterner, func_id: FuncId) -> Vec<Type
     let function_body_id = function_body.as_expr();
 
     let mut type_checker = TypeChecker::new(interner);
+    type_checker.current_function = Some(func_id);
 
     // Bind each parameter to its annotated type.
     // This is locally obvious, but it must be bound here so that the
@@ -114,7 +116,7 @@ fn function_info(
 
 impl<'interner> TypeChecker<'interner> {
     fn new(interner: &'interner mut NodeInterner) -> Self {
-        Self { delayed_type_checks: Vec::new(), interner, errors: vec![] }
+        Self { delayed_type_checks: Vec::new(), interner, errors: vec![], current_function: None }
     }
 
     pub fn push_delayed_type_check(&mut self, f: TypeCheckFn) {
@@ -130,7 +132,7 @@ impl<'interner> TypeChecker<'interner> {
     }
 
     pub fn check_global(id: &StmtId, interner: &'interner mut NodeInterner) -> Vec<TypeCheckError> {
-        let mut this = Self { delayed_type_checks: Vec::new(), interner, errors: vec![] };
+        let mut this = Self { delayed_type_checks: Vec::new(), interner, errors: vec![], current_function: None, };
         this.check_statement(id);
         this.errors
     }
@@ -277,6 +279,7 @@ mod test {
             return_distinctness: Distinctness::DuplicationAllowed,
             has_body: true,
             return_type: FunctionReturnType::Default(Span::default()),
+            where_clause: Vec::new(),
         };
         interner.push_fn_meta(func_meta, func_id);
 

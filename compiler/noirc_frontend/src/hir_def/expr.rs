@@ -2,7 +2,7 @@ use acvm::FieldElement;
 use fm::FileId;
 use noirc_errors::Location;
 
-use crate::node_interner::{DefinitionId, ExprId, FuncId, NodeInterner, StmtId};
+use crate::node_interner::{DefinitionId, ExprId, FuncId, NodeInterner, StmtId, TraitId};
 use crate::{BinaryOp, BinaryOpKind, Ident, Shared, UnaryOp};
 
 use super::stmt::HirPattern;
@@ -30,6 +30,7 @@ pub enum HirExpression {
     If(HirIfExpression),
     Tuple(Vec<ExprId>),
     Lambda(HirLambda),
+    TraitMethodReference(TraitId, usize),
     Error,
 }
 
@@ -150,20 +151,39 @@ pub struct HirMethodCallExpression {
     pub location: Location,
 }
 
+#[derive(Debug, Clone)]
+pub enum HirMethodReference {
+    /// A method can come from a regular `impl` block, in which case
+    /// it's syntax sugar for a regular function call, and can be
+    /// translated during type checking
+    FuncId(FuncId),
+
+    /// Or a method can come from a Trait impl block, in which case
+    /// the actual function called will depend on the instantiated type
+    /// and can be only known during monomorphizaiton.
+    TraitMethod(/* trait_id: */ TraitId, /* method_index: */ usize),
+}
+
 impl HirMethodCallExpression {
     pub fn into_function_call(
         mut self,
-        func: FuncId,
+        method: HirMethodReference,
         location: Location,
         interner: &mut NodeInterner,
     ) -> (ExprId, HirExpression) {
         let mut arguments = vec![self.object];
         arguments.append(&mut self.arguments);
 
-        let id = interner.function_definition_id(func);
-        let ident = HirExpression::Ident(HirIdent { location, id });
-        let func = interner.push_expr(ident);
-
+        let expr = match method {
+            HirMethodReference::FuncId(method_id) => {
+                let id = interner.function_definition_id(method_id);
+                HirExpression::Ident(HirIdent { location, id })
+            }
+            HirMethodReference::TraitMethod(trait_id, method_index) => {
+                HirExpression::TraitMethodReference(trait_id, method_index)
+            }
+        };
+        let func = interner.push_expr(expr);
         (func, HirExpression::Call(HirCallExpression { func, arguments, location }))
     }
 }

@@ -11,7 +11,7 @@
 use acvm::FieldElement;
 use iter_extended::{btree_map, vecmap};
 use noirc_printable_type::PrintableType;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::{collections::{BTreeMap, HashMap, VecDeque}, unreachable};
 
 use crate::{
     hir_def::{
@@ -20,8 +20,8 @@ use crate::{
         stmt::{HirAssignStatement, HirLValue, HirLetStatement, HirPattern, HirStatement},
         types,
     },
-    node_interner::{self, DefinitionKind, NodeInterner, StmtId},
     token::PrimaryAttribute,
+    node_interner::{self, DefinitionKind, NodeInterner, StmtId, TraitId, TraitImplKey},
     ContractFunctionType, FunctionKind, Type, TypeBinding, TypeBindings, TypeVariableKind,
     Visibility,
 };
@@ -368,6 +368,15 @@ impl<'interner> Monomorphizer<'interner> {
             HirExpression::Constructor(constructor) => self.constructor(constructor, expr),
 
             HirExpression::Lambda(lambda) => self.lambda(lambda, expr),
+
+            HirExpression::TraitMethodReference(trait_id, method_index) => {
+                if let Type::Function(args, _, _) = self.interner.id_type(expr) {
+                    let self_type = args[0].clone();
+                    self.resolve_trait_method_reference(self_type, expr, trait_id, method_index)
+                } else {
+                    unreachable!("Calling a non-function, this should've been caught in typechecking");
+                }
+            }
 
             HirExpression::MethodCall(_) => {
                 unreachable!("Encountered HirExpression::MethodCall during monomorphization")
@@ -763,6 +772,40 @@ impl<'interner> Monomorphizer<'interner> {
         } else {
             false
         }
+    }
+
+    fn resolve_trait_method_reference(
+        &mut self,
+        self_type: HirType,
+        expr_id: node_interner::ExprId,
+        trait_id: TraitId,
+        method_index: usize,
+    ) -> ast::Expression {
+        let the_trait = self.interner.get_trait(trait_id);
+        let the_trait = the_trait.borrow();
+
+        let function_type = self.interner.id_type(expr_id);
+
+        let trait_impl = self
+            .interner
+            .get_trait_implementation(&TraitImplKey { typ: self_type.substitute(&HashMap::new()), trait_id })
+            .expect("ICE: missing trait impl - should be caught during type checking");
+
+        let hir_func_id = trait_impl.borrow().methods[method_index];
+
+        let func_def = self.lookup_function(hir_func_id, expr_id, &function_type);
+        let func_id = match func_def {
+            Definition::Function(func_id) => func_id,
+            _ => unreachable!(),
+        };
+
+        ast::Expression::Ident(ast::Ident {
+            definition: Definition::Function(func_id),
+            mutable: false,
+            location: None,
+            name: the_trait.methods[method_index].name.0.contents.clone(),
+            typ: Self::convert_type(&function_type),
+        })
     }
 
     fn function_call(
