@@ -163,6 +163,7 @@ impl<'a> ModCollector<'a> {
                     module_id: self.module_id,
                     the_trait: collected_trait,
                     methods: unresolved_functions,
+                    trait_generics: trait_impl.trait_generics.clone(),
                     trait_impl_ident: trait_impl.trait_name.clone(),
                 };
 

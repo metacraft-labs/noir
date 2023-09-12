@@ -59,6 +59,7 @@ pub struct UnresolvedTraitImpl {
     pub module_id: LocalModuleId,
     pub the_trait: UnresolvedTrait,
     pub methods: UnresolvedFunctions,
+    pub trait_generics: Vec<UnresolvedType>,
     pub trait_impl_ident: Ident, // for error reporting
 }
 
@@ -708,6 +709,14 @@ fn resolve_trait_impls(
             methods: vecmap(&impl_methods, |(_, func_id)| *func_id),
         });
 
+        let the_trait = resolver.interner.get_trait(trait_id);
+        let the_trait = the_trait.borrow();
+        
+        for (generic, typ) in the_trait.generics.iter().zip(trait_impl.trait_generics) {
+            let typ = resolver.resolve_type(typ);
+            *generic.typevar.borrow_mut() = TypeBinding::Bound(typ);
+        }
+
         check_methods_signatures(&mut resolver, &impl_methods, trait_id, errors);
 
         let trait_definition_ident = &trait_impl.trait_impl_ident;
@@ -762,6 +771,10 @@ fn check_methods_signatures(
                     for (parameter_index, ((expected, actual), (hir_pattern, _, _))) in
                         method.arguments.iter().zip(&params).zip(&meta.parameters.0).enumerate()
                     {
+                        // TODO(vitkov): this is a dirty dirty hack and without it it won't work 
+                        // at the minimum find a way to explain why this is needed
+                        let expected = expected.substitute(&HashMap::new());
+
                         expected.unify(actual, &mut typecheck_errors, || {
                             TypeCheckError::TraitMethodParameterTypeMismatch {
                                 method_name: func_name.to_string(),
@@ -786,15 +799,17 @@ fn check_methods_signatures(
                 }
             }
 
+            // TODO(vitkov): substitute hack again...
             // Check that impl method return type matches trait return type:
-            let resolved_return_type = resolver.resolve_type(meta.return_type.get_type());
+            let resolved_return_type = resolver.resolve_type(meta.return_type.get_type()).substitute(&HashMap::new());
+            let method_return_type = method.return_type.substitute(&HashMap::new());
 
-            method.return_type.unify(&resolved_return_type, &mut typecheck_errors, || {
+            method_return_type.unify(&resolved_return_type, &mut typecheck_errors, || {
                 let ret_type_span =
                     meta.return_type.get_type().span.expect("return type must always have a span");
 
                 TypeCheckError::TypeMismatch {
-                    expected_typ: method.return_type.to_string(),
+                    expected_typ: method_return_type.to_string(),
                     expr_typ: meta.return_type().to_string(),
                     expr_span: ret_type_span,
                 }
