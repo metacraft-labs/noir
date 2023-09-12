@@ -682,19 +682,22 @@ fn resolve_trait_impls(
         let module_id = ModuleId { krate: crate_id, local_id: local_mod_id };
         let path_resolver = StandardPathResolver::new(module_id);
 
-        let self_type = {
-            let mut resolver =
-                Resolver::new(interner, &path_resolver, &context.def_maps, trait_impl.file_id);
-            resolver.resolve_type(unresolved_type.clone())
-        };
+        let mut resolver =
+            Resolver::new(interner, &path_resolver, &context.def_maps, trait_impl.file_id);
+
+        resolver.add_generics(&trait_impl.the_trait.trait_def.generics);
+        let generics = resolver.get_generics().to_vec();
+        let self_type = resolver.resolve_type(unresolved_type.clone());
+
+        resolver.set_self_type(Some(self_type.clone()));
 
         let mut impl_methods = resolve_function_set(
-            interner,
+            resolver.interner,
             crate_id,
             &context.def_maps,
             trait_impl.methods.clone(),
             Some(self_type.clone()),
-            vec![], // TODO - generic trait impls
+            generics.clone(),
             errors,
         );
 
@@ -705,11 +708,7 @@ fn resolve_trait_impls(
             methods: vecmap(&impl_methods, |(_, func_id)| *func_id),
         });
 
-        let mut new_resolver =
-            Resolver::new(interner, &path_resolver, &context.def_maps, trait_impl.file_id);
-        new_resolver.set_self_type(Some(self_type.clone()));
-
-        check_methods_signatures(&mut new_resolver, &impl_methods, trait_id, errors);
+        check_methods_signatures(&mut resolver, &impl_methods, trait_id, errors);
 
         let trait_definition_ident = &trait_impl.trait_impl_ident;
         let key = TraitImplKey { typ: self_type.clone(), trait_id };
