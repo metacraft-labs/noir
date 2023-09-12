@@ -82,7 +82,7 @@ impl ItemScope {
         trait_name: &Ident,
     ) -> Result<TraitId, ScopeResolveError> {
         let (module_def, _) =
-            self.types.get(trait_name).ok_or_else(|| ScopeResolveError::NotFound)?;
+            self.types.get(trait_name).ok_or(ScopeResolveError::NotFound)?;
 
         match module_def {
             ModuleDefId::TraitId(id) => Ok(*id),

@@ -299,7 +299,7 @@ impl<'a> ModCollector<'a> {
             if let Some(trait_id) =
                 self.find_trait_or_emit_error(module, &w.trait_bound.trait_name, errors)
             {
-                w.trait_bound.trait_id = Some(trait_id.clone());
+                w.trait_bound.trait_id = Some(trait_id);
             }
         }
     }

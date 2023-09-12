@@ -701,7 +701,7 @@ fn resolve_trait_impls(
         let resolved_trait_impl = Shared::new(TraitImpl {
             ident: trait_impl.trait_impl_ident.clone(),
             typ: self_type.clone(),
-            trait_id: trait_id,
+            trait_id,
             methods: vecmap(&impl_methods, |(_, func_id)| *func_id),
         });
 
@@ -714,7 +714,6 @@ fn resolve_trait_impls(
         let trait_definition_ident = &trait_impl.trait_impl_ident;
         let key = TraitImplKey { typ: self_type.clone(), trait_id };
 
-        (self_type.clone(), trait_id);
         if let Some(prev_trait_impl_ident) = interner.get_trait_implementation(&key) {
             let err = DefCollectorErrorKind::Duplicate {
                 typ: DuplicateType::TraitImplementation,
