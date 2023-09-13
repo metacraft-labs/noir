@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use iter_extended::vecmap;
 use noirc_errors::Span;
 
@@ -144,50 +146,79 @@ impl<'interner> TypeChecker<'interner> {
             HirExpression::MethodCall(mut method_call) => {
                 let object_type = self.check_expression(&method_call.object).follow_bindings();
                 let method_name = method_call.method.0.contents.as_str();
-                match self.lookup_method(&object_type, method_name, expr_id) {
-                    Some(method_ref) => {
-                        let mut args = vec![(
-                            object_type,
-                            method_call.object,
-                            self.interner.expr_span(&method_call.object),
-                        )];
 
-                        for arg in &method_call.arguments {
-                            let typ = self.check_expression(arg);
-                            args.push((typ, *arg, self.interner.expr_span(arg)));
-                        }
-
-                        // Desugar the method call into a normal, resolved function call
-                        // so that the backend doesn't need to worry about methods
-                        let location = method_call.location;
-
-                        if let HirMethodReference::FuncId(func_id) = method_ref {
-                            // Automatically add `&mut` if the method expects a mutable reference and
-                            // the object is not already one.
-                            if func_id != FuncId::dummy_id() {
-                                let func_meta = self.interner.function_meta(&func_id);
-                                self.try_add_mutable_reference_to_object(
-                                    &mut method_call,
-                                    &func_meta.typ,
-                                    &mut args,
-                                );
-                            }
-                        };
-
-                        let (function_id, function_call) = method_call.into_function_call(
-                            method_ref.clone(),
-                            location,
-                            self.interner,
-                        );
-
-                        let span = self.interner.expr_span(expr_id);
-                        let ret = self.check_method_call(&function_id, &method_ref, args, span);
-
-                        self.interner.replace_expr(expr_id, function_call);
-                        ret
-                    }
-                    None => Type::Error,
+                let matching_methods = self.lookup_methods(&object_type, method_name, expr_id);
+                if matching_methods.is_empty() {
+                    return Type::Error;
                 }
+
+                let mut args = vec![(
+                    object_type,
+                    method_call.object,
+                    self.interner.expr_span(&method_call.object),
+                )];
+
+                for arg in &method_call.arguments {
+                    let typ = self.check_expression(arg);
+                    args.push((typ, *arg, self.interner.expr_span(arg)));
+                }
+
+                let method_ref = matching_methods
+                    .iter()
+                    .find(|mm| match mm {
+                        HirMethodReference::TraitMethod(trait_id, generics, method_index) => {
+                            let the_trait = self.interner.get_trait(*trait_id);
+                            let the_trait = the_trait.borrow();
+
+                            the_trait.bind_generics(&generics);
+                            let method = &the_trait.methods[*method_index];
+
+                            let overload_ok =
+                                method_call.arguments.iter().zip(&method.parameters).all(
+                                    |(arg, param_type)| {
+                                        let arg_type = self.interner.id_type(arg);
+
+                                        // TODO(vitkov): not sure this is needed but wont hurt for now
+                                        let arg_type = arg_type.substitute(&HashMap::new());
+                                        let param_type = param_type.substitute(&HashMap::new());
+
+                                        arg_type == param_type
+                                    },
+                                );
+
+                            the_trait.unbind_generics();
+                            overload_ok
+                        }
+                        HirMethodReference::FuncId(_) => true,
+                    })
+                    .cloned()
+                    .unwrap_or(matching_methods[0].clone());
+
+                // Desugar the method call into a normal, resolved function call
+                // so that the backend doesn't need to worry about methods
+                let location = method_call.location;
+
+                if let HirMethodReference::FuncId(func_id) = method_ref {
+                    // Automatically add `&mut` if the method expects a mutable reference and
+                    // the object is not already one.
+                    if func_id != FuncId::dummy_id() {
+                        let func_meta = self.interner.function_meta(&func_id);
+                        self.try_add_mutable_reference_to_object(
+                            &mut method_call,
+                            &func_meta.typ,
+                            &mut args,
+                        );
+                    }
+                };
+
+                let (function_id, function_call) =
+                    method_call.into_function_call(method_ref.clone(), location, self.interner);
+
+                let span = self.interner.expr_span(expr_id);
+                let ret = self.check_method_call(&function_id, &method_ref, args, span);
+
+                self.interner.replace_expr(expr_id, function_call);
+                ret
             }
             HirExpression::Cast(cast_expr) => {
                 // Evaluate the LHS
@@ -500,12 +531,13 @@ impl<'interner> TypeChecker<'interner> {
                 (func_meta.typ, param_len)
             }
             HirMethodReference::TraitMethod(trait_id, generics, method_index) => {
-                // TODO(vitkov): generics are unused here?
                 let the_trait = self.interner.get_trait(*trait_id);
                 let the_trait = the_trait.borrow();
+                the_trait.bind_generics(generics); // TODO(vikov): unbind 
+
                 let method: &TraitFunction = &the_trait.methods[*method_index];
 
-                (method.get_type(), method.arguments.len())
+                (method.get_type(), method.parameters.len())
             }
         };
 
@@ -833,27 +865,30 @@ impl<'interner> TypeChecker<'interner> {
         }
     }
 
-    fn lookup_method(
+    // This may return more than one value in the case we have a generic Trait Foo<T>
+    // and it's implemented multiple times for `object_type`, e.g. for Foo<u32> and Foo<i32>
+    fn lookup_methods(
         &mut self,
         object_type: &Type,
         method_name: &str,
         expr_id: &ExprId,
-    ) -> Option<HirMethodReference> {
+    ) -> Vec<HirMethodReference> {
         match object_type {
             Type::Struct(typ, _args) => {
                 match self.interner.lookup_method(typ.borrow().id, method_name) {
-                    Some(method_id) => Some(HirMethodReference::FuncId(method_id)),
+                    Some(method_id) => vec![HirMethodReference::FuncId(method_id)],
                     None => {
                         self.errors.push(TypeCheckError::UnresolvedMethodCall {
                             method_name: method_name.to_string(),
                             object_type: object_type.clone(),
                             span: self.interner.expr_span(expr_id),
                         });
-                        None
+                        vec![]
                     }
                 }
             }
             Type::NamedGeneric(_, _) => {
+                let mut methods = Vec::new();
                 let func_meta = self.interner.function_meta(&self.current_function.unwrap());
 
                 for constraint in func_meta.where_clause {
@@ -865,9 +900,9 @@ impl<'interner> TypeChecker<'interner> {
 
                             for (method_index, method) in the_trait.methods.iter().enumerate() {
                                 if method.name.0.contents == method_name {
-                                    return Some(HirMethodReference::TraitMethod(
+                                    methods.push(HirMethodReference::TraitMethod(
                                         trait_id,
-                                        Vec::new(), // TODO(vitkov): where clauses should also have generics
+                                        constraint.trait_generics.clone(),
                                         method_index,
                                     ));
                                 }
@@ -876,31 +911,33 @@ impl<'interner> TypeChecker<'interner> {
                     }
                 }
 
-                self.errors.push(TypeCheckError::UnresolvedMethodCall {
-                    method_name: method_name.to_string(),
-                    object_type: object_type.clone(),
-                    span: self.interner.expr_span(expr_id),
-                });
-                None
+                if methods.is_empty() {
+                    self.errors.push(TypeCheckError::UnresolvedMethodCall {
+                        method_name: method_name.to_string(),
+                        object_type: object_type.clone(),
+                        span: self.interner.expr_span(expr_id),
+                    });
+                }
+                methods
             }
             // Mutable references to another type should resolve to methods of their element type.
             // This may be a struct or a primitive type.
-            Type::MutableReference(element) => self.lookup_method(element, method_name, expr_id),
+            Type::MutableReference(element) => self.lookup_methods(element, method_name, expr_id),
             // If we fail to resolve the object to a struct type, we have no way of type
             // checking its arguments as we can't even resolve the name of the function
-            Type::Error => None,
+            Type::Error => vec![],
 
             // In the future we could support methods for non-struct types if we have a context
             // (in the interner?) essentially resembling HashMap<Type, Methods>
             other => match self.interner.lookup_primitive_method(other, method_name) {
-                Some(method_id) => Some(HirMethodReference::FuncId(method_id)),
+                Some(method_id) => vec![HirMethodReference::FuncId(method_id)],
                 None => {
                     self.errors.push(TypeCheckError::UnresolvedMethodCall {
                         method_name: method_name.to_string(),
                         object_type: object_type.clone(),
                         span: self.interner.expr_span(expr_id),
                     });
-                    None
+                    vec![]
                 }
             },
         }

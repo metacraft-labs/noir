@@ -17,8 +17,8 @@ use crate::hir_def::expr::{
     HirIfExpression, HirIndexExpression, HirInfixExpression, HirLambda, HirLiteral,
     HirMemberAccess, HirMethodCallExpression, HirPrefixExpression,
 };
-use crate::token::PrimaryAttribute;
 use crate::hir_def::traits::{Trait, TraitConstraint, TraitGeneric};
+use crate::token::PrimaryAttribute;
 use regex::Regex;
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
@@ -647,7 +647,11 @@ impl<'a> Resolver<'a> {
 
     pub fn add_trait_generics(&mut self, generics: &Vec<TraitGeneric>) {
         for generic in generics {
-            self.generics.push((generic.name.clone(), generic.typevar.clone(), generic.span.clone()));
+            self.generics.push((
+                generic.name.clone(),
+                generic.typevar.clone(),
+                generic.span.clone(),
+            ));
         }
     }
 
@@ -682,6 +686,7 @@ impl<'a> Resolver<'a> {
         vecmap(unresolved, |w| TraitConstraint {
             typ: self.resolve_type(w.typ.clone()),
             trait_id: w.trait_bound.trait_id,
+            trait_generics: vecmap(&w.trait_bound.trait_generics, |v| self.resolve_type(v.clone())),
         })
     }
 
@@ -783,7 +788,7 @@ impl<'a> Resolver<'a> {
             return_visibility: func.def.return_visibility,
             return_distinctness: func.def.return_distinctness,
             has_body: !func.def.body.is_empty(),
-            where_clause:  self.resolve_where_clause(&func.def.where_clause),
+            where_clause: self.resolve_where_clause(&func.def.where_clause),
         }
     }
 

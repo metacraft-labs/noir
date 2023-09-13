@@ -43,6 +43,15 @@ pub fn type_check_func(interner: &mut NodeInterner, func_id: FuncId) -> Vec<Type
     let mut type_checker = TypeChecker::new(interner);
     type_checker.current_function = Some(func_id);
 
+    // for w in meta.where_clause {
+    //     let the_trait = interner.get_trait(*w.trait_id);
+    //     let the_trait = the_trait.borrow();
+
+    //     for trait_generic in &the_trait.generics {
+    //     }
+    //     // let _ = the_trait.self_type_typevar.borrow_mut().bind_to(self_type, the_trait.span);
+    // }
+
     // Bind each parameter to its annotated type.
     // This is locally obvious, but it must be bound here so that the
     // Definition object of the parameter in the NodeInterner is given the correct type.

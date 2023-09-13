@@ -2,15 +2,15 @@ use std::rc::Rc;
 
 use crate::{
     node_interner::{FuncId, TraitId},
-    Generics, Ident, Type, TypeVariable, TypeVariableId,
+    Generics, Ident, Type, TypeBinding, TypeVariable, TypeVariableId,
 };
 use noirc_errors::Span;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct TraitFunction {
     pub name: Ident,
-    pub generics: Generics,
-    pub arguments: Vec<Type>,
+    pub generics: Generics, // TODO(vitkov): this not worky, need implement
+    pub parameters: Vec<Type>,
     pub return_type: Type,
     pub span: Span,
 }
@@ -62,6 +62,22 @@ pub struct Trait {
     pub self_type_typevar: TypeVariable,
 }
 
+impl Trait {
+    pub fn bind_generics(&self, types: &Vec<Type>) {
+        assert!(self.generics.len() == types.len());
+
+        for (generic, typ) in self.generics.iter().zip(types) {
+            *generic.typevar.borrow_mut() = TypeBinding::Bound(typ.clone());
+        }
+    }
+
+    pub fn unbind_generics(&self) {
+        for generic in self.generics.iter() {
+            *generic.typevar.borrow_mut() = TypeBinding::Unbound(generic.typevar_id);
+        }
+    }
+}
+
 pub struct TraitImpl {
     pub ident: Ident,
     pub typ: Type,
@@ -73,7 +89,7 @@ pub struct TraitImpl {
 pub struct TraitConstraint {
     pub typ: Type,
     pub trait_id: Option<TraitId>,
-    // pub trait_generics: Generics, TODO
+    pub trait_generics: Vec<Type>,
 }
 
 impl std::hash::Hash for Trait {
@@ -124,7 +140,7 @@ impl std::fmt::Display for Trait {
 impl TraitFunction {
     pub fn get_type(&self) -> Type {
         Type::Function(
-            self.arguments.clone(),
+            self.parameters.clone(),
             Box::new(self.return_type.clone()),
             Box::new(Type::Unit),
         )

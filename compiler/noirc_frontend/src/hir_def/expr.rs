@@ -239,28 +239,3 @@ pub struct HirLambda {
     pub body: ExprId,
     pub captures: Vec<HirCapturedVar>,
 }
-
-trait Nightmare<T> {
-    fn asd(&self, t: T);
-}
-
-struct Foo {
-}
-
-impl Nightmare<i32> for Foo {
-    fn asd(&self, t: i32) {
-        todo!()
-    }
-}
-
-impl Nightmare<Foo> for Foo {
-    fn asd(&self, t: Foo) {
-        todo!()
-    }
-}
-
-fn asdf() {
-    let foo = Foo{};
-    foo.asd(100);
-    foo.asd(Foo{});
-}

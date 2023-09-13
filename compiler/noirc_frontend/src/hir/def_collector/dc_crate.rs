@@ -523,7 +523,7 @@ fn resolve_trait_methods(
             let f = TraitFunction {
                 name: name.clone(),
                 generics: resolved_generics,
-                arguments,
+                parameters: arguments,
                 return_type: resolved_return_type,
                 span,
             };
@@ -714,11 +714,9 @@ fn resolve_trait_impls(
 
         let resolved_impl_generics = vecmap(&trait_impl.trait_generics, |t| resolver.resolve_type(t.clone()));
         
-        for (generic, typ) in the_trait.generics.iter().zip(&resolved_impl_generics) {
-            *generic.typevar.borrow_mut() = TypeBinding::Bound(typ.clone());
-        }
-
+        the_trait.bind_generics(&resolved_impl_generics);
         check_methods_signatures(&mut resolver, &impl_methods, trait_id, errors);
+        the_trait.unbind_generics();
 
         let trait_definition_ident = &trait_impl.trait_impl_ident;
         let key = TraitImplKey { typ: self_type.clone(), trait_id, generics: resolved_impl_generics };
@@ -767,10 +765,10 @@ fn check_methods_signatures(
             let function_typ = meta.typ.instantiate(resolver.interner);
 
             if let Type::Function(params, _, _) = function_typ.0 {
-                if method.arguments.len() == params.len() {
+                if method.parameters.len() == params.len() {
                     // Check the parameters of the impl method against the parameters of the trait method
                     for (parameter_index, ((expected, actual), (hir_pattern, _, _))) in
-                        method.arguments.iter().zip(&params).zip(&meta.parameters.0).enumerate()
+                        method.parameters.iter().zip(&params).zip(&meta.parameters.0).enumerate()
                     {
                         // TODO(vitkov): this is a dirty dirty hack and without it it won't work 
                         // at the minimum find a way to explain why this is needed
@@ -790,7 +788,7 @@ fn check_methods_signatures(
                     errors.push(
                         DefCollectorErrorKind::MismatchTraitImplementationNumParameters {
                             actual_num_parameters: meta.parameters.0.len(),
-                            expected_num_parameters: method.arguments.len(),
+                            expected_num_parameters: method.parameters.len(),
                             trait_name: the_trait.name.to_string(),
                             method_name: func_name.to_string(),
                             span: meta.location.span,
