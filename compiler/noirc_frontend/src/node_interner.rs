@@ -29,7 +29,7 @@ use crate::{
 pub struct TraitImplKey {
     pub typ: Type,
     pub trait_id: TraitId,
-    // pub generics: Generics - TODO
+    pub generics: Vec<Type>,
 }
 
 /// The node interner is the central storage location of all nodes in Noir's Hir (the

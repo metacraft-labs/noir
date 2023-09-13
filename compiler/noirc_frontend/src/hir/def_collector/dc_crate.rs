@@ -711,16 +711,17 @@ fn resolve_trait_impls(
 
         let the_trait = resolver.interner.get_trait(trait_id);
         let the_trait = the_trait.borrow();
+
+        let resolved_impl_generics = vecmap(&trait_impl.trait_generics, |t| resolver.resolve_type(t.clone()));
         
-        for (generic, typ) in the_trait.generics.iter().zip(trait_impl.trait_generics) {
-            let typ = resolver.resolve_type(typ);
-            *generic.typevar.borrow_mut() = TypeBinding::Bound(typ);
+        for (generic, typ) in the_trait.generics.iter().zip(&resolved_impl_generics) {
+            *generic.typevar.borrow_mut() = TypeBinding::Bound(typ.clone());
         }
 
         check_methods_signatures(&mut resolver, &impl_methods, trait_id, errors);
 
         let trait_definition_ident = &trait_impl.trait_impl_ident;
-        let key = TraitImplKey { typ: self_type.clone(), trait_id };
+        let key = TraitImplKey { typ: self_type.clone(), trait_id, generics: resolved_impl_generics };
 
         if let Some(prev_trait_impl_ident) = interner.get_trait_implementation(&key) {
             let err = DefCollectorErrorKind::Duplicate {

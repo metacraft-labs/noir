@@ -292,7 +292,7 @@ impl<'interner> TypeChecker<'interner> {
 
                 Type::Function(params, Box::new(lambda.return_type), Box::new(env_type))
             }
-            HirExpression::TraitMethodReference(_, _) => unreachable!(),
+            HirExpression::TraitMethodReference(_, _, _) => unreachable!(),
         };
 
         self.interner.push_expr_type(expr_id, typ.clone());
@@ -499,7 +499,8 @@ impl<'interner> TypeChecker<'interner> {
 
                 (func_meta.typ, param_len)
             }
-            HirMethodReference::TraitMethod(trait_id, method_index) => {
+            HirMethodReference::TraitMethod(trait_id, generics, method_index) => {
+                // TODO(vitkov): generics are unused here?
                 let the_trait = self.interner.get_trait(*trait_id);
                 let the_trait = the_trait.borrow();
                 let method: &TraitFunction = &the_trait.methods[*method_index];
@@ -866,6 +867,7 @@ impl<'interner> TypeChecker<'interner> {
                                 if method.name.0.contents == method_name {
                                     return Some(HirMethodReference::TraitMethod(
                                         trait_id,
+                                        Vec::new(), // TODO(vitkov): where clauses should also have generics
                                         method_index,
                                     ));
                                 }

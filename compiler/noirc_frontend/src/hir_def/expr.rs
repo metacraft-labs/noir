@@ -30,7 +30,7 @@ pub enum HirExpression {
     If(HirIfExpression),
     Tuple(Vec<ExprId>),
     Lambda(HirLambda),
-    TraitMethodReference(TraitId, usize),
+    TraitMethodReference(TraitId, Vec<Type>, usize),
     Error,
 }
 
@@ -161,7 +161,7 @@ pub enum HirMethodReference {
     /// Or a method can come from a Trait impl block, in which case
     /// the actual function called will depend on the instantiated type
     /// and can be only known during monomorphizaiton.
-    TraitMethod(/* trait_id: */ TraitId, /* method_index: */ usize),
+    TraitMethod(/* trait_id: */ TraitId, /* generics: */ Vec<Type>, /* method_index: */ usize),
 }
 
 impl HirMethodCallExpression {
@@ -179,8 +179,8 @@ impl HirMethodCallExpression {
                 let id = interner.function_definition_id(method_id);
                 HirExpression::Ident(HirIdent { location, id })
             }
-            HirMethodReference::TraitMethod(trait_id, method_index) => {
-                HirExpression::TraitMethodReference(trait_id, method_index)
+            HirMethodReference::TraitMethod(trait_id, generics, method_index) => {
+                HirExpression::TraitMethodReference(trait_id, generics, method_index)
             }
         };
         let func = interner.push_expr(expr);
@@ -238,4 +238,29 @@ pub struct HirLambda {
     pub return_type: Type,
     pub body: ExprId,
     pub captures: Vec<HirCapturedVar>,
+}
+
+trait Nightmare<T> {
+    fn asd(&self, t: T);
+}
+
+struct Foo {
+}
+
+impl Nightmare<i32> for Foo {
+    fn asd(&self, t: i32) {
+        todo!()
+    }
+}
+
+impl Nightmare<Foo> for Foo {
+    fn asd(&self, t: Foo) {
+        todo!()
+    }
+}
+
+fn asdf() {
+    let foo = Foo{};
+    foo.asd(100);
+    foo.asd(Foo{});
 }

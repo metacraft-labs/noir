@@ -369,10 +369,10 @@ impl<'interner> Monomorphizer<'interner> {
 
             HirExpression::Lambda(lambda) => self.lambda(lambda, expr),
 
-            HirExpression::TraitMethodReference(trait_id, method_index) => {
+            HirExpression::TraitMethodReference(trait_id, generics, method_index) => {
                 if let Type::Function(args, _, _) = self.interner.id_type(expr) {
                     let self_type = args[0].clone();
-                    self.resolve_trait_method_reference(self_type, expr, trait_id, method_index)
+                    self.resolve_trait_method_reference(self_type, expr, trait_id, generics, method_index)
                 } else {
                     unreachable!("Calling a non-function, this should've been caught in typechecking");
                 }
@@ -779,6 +779,7 @@ impl<'interner> Monomorphizer<'interner> {
         self_type: HirType,
         expr_id: node_interner::ExprId,
         trait_id: TraitId,
+        trait_generics: Vec<Type>,
         method_index: usize,
     ) -> ast::Expression {
         let the_trait = self.interner.get_trait(trait_id);
@@ -788,7 +789,7 @@ impl<'interner> Monomorphizer<'interner> {
 
         let trait_impl = self
             .interner
-            .get_trait_implementation(&TraitImplKey { typ: self_type.substitute(&HashMap::new()), trait_id })
+            .get_trait_implementation(&TraitImplKey { typ: self_type.substitute(&HashMap::new()), trait_id, generics: trait_generics })
             .expect("ICE: missing trait impl - should be caught during type checking");
 
         let hir_func_id = trait_impl.borrow().methods[method_index];
