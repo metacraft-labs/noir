@@ -272,7 +272,7 @@ fn collect_impls(
 
         for (generics, span, unresolved) in methods {
             let mut resolver = Resolver::new(interner, &path_resolver, def_maps, file);
-            resolver.add_generics(generics);
+            resolver.add_generics(generics, false);
             let typ = resolver.resolve_type(unresolved_type.clone());
 
             extend_errors(errors, unresolved.file_id, resolver.take_errors());
@@ -337,7 +337,7 @@ fn collect_trait_impls(
             let file = def_maps[&crate_id].file_id(*module_id);
 
             let mut resolver = Resolver::new(interner, &path_resolver, def_maps, file);
-            resolver.add_generics(&ast.def.generics);
+            resolver.add_generics(&ast.def.generics, false);
             let typ = resolver.resolve_type(unresolved_type.clone());
 
             // Add the method to the struct's namespace
@@ -514,7 +514,7 @@ fn resolve_trait_methods(
             resolver.set_self_type(Some(self_type));
             resolver.add_trait_generics(&the_trait.borrow().generics);
 
-            let resolved_generics = resolver.add_generics(generics);
+            let resolved_generics = resolver.add_generics(generics, false);
 
             let arguments = vecmap(parameters, |param| resolver.resolve_type(param.1.clone()));
             let resolved_return_type = resolver.resolve_type(return_type.get_type());
@@ -632,7 +632,7 @@ fn resolve_impls(
 
         for (generics, _, functions) in methods {
             let mut resolver = Resolver::new(interner, &path_resolver, def_maps, file);
-            resolver.add_generics(&generics);
+            resolver.add_generics(&generics, false);
             let generics = resolver.get_generics().to_vec();
             let self_type = resolver.resolve_type(unresolved_type.clone());
 
@@ -686,7 +686,7 @@ fn resolve_trait_impls(
         let mut resolver =
             Resolver::new(interner, &path_resolver, &context.def_maps, trait_impl.file_id);
 
-        resolver.add_generics(&trait_impl.the_trait.trait_def.generics);
+        resolver.add_generics(&trait_impl.the_trait.trait_def.generics, false);
         let generics = resolver.get_generics().to_vec();
         let self_type = resolver.resolve_type(unresolved_type.clone());
 
@@ -770,10 +770,6 @@ fn check_methods_signatures(
                     for (parameter_index, ((expected, actual), (hir_pattern, _, _))) in
                         method.parameters.iter().zip(&params).zip(&meta.parameters.0).enumerate()
                     {
-                        // TODO(vitkov): this is a dirty dirty hack and without it it won't work 
-                        // at the minimum find a way to explain why this is needed
-                        let expected = expected.substitute(&HashMap::new());
-
                         expected.unify(actual, &mut typecheck_errors, || {
                             TypeCheckError::TraitMethodParameterTypeMismatch {
                                 method_name: func_name.to_string(),
@@ -783,6 +779,7 @@ fn check_methods_signatures(
                                 parameter_index: parameter_index + 1,
                             }
                         });
+                        // println!("Unified!");
                     }
                 } else {
                     errors.push(
@@ -798,17 +795,14 @@ fn check_methods_signatures(
                 }
             }
 
-            // TODO(vitkov): substitute hack again...
-            // Check that impl method return type matches trait return type:
-            let resolved_return_type = resolver.resolve_type(meta.return_type.get_type()).substitute(&HashMap::new());
-            let method_return_type = method.return_type.substitute(&HashMap::new());
+            let resolved_return_type = resolver.resolve_type(meta.return_type.get_type());
 
-            method_return_type.unify(&resolved_return_type, &mut typecheck_errors, || {
+            method.return_type.unify(&resolved_return_type, &mut typecheck_errors, || {
                 let ret_type_span =
                     meta.return_type.get_type().span.expect("return type must always have a span");
 
                 TypeCheckError::TypeMismatch {
-                    expected_typ: method_return_type.to_string(),
+                    expected_typ: method.return_type.to_string(),
                     expr_typ: meta.return_type().to_string(),
                     expr_span: ret_type_span,
                 }
@@ -852,7 +846,7 @@ fn resolve_function_set(
     def_maps: &BTreeMap<CrateId, CrateDefMap>,
     unresolved_functions: UnresolvedFunctions,
     self_type: Option<Type>,
-    impl_generics: Vec<(Rc<String>, Shared<TypeBinding>, Span)>,
+    impl_generics: Vec<(Rc<String>, Shared<TypeBinding>, Span, bool)>,
     errors: &mut Vec<FileDiagnostic>,
 ) -> Vec<(FileId, FuncId)> {
     let file_id = unresolved_functions.file_id;

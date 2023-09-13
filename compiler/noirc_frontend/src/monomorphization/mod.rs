@@ -787,6 +787,7 @@ impl<'interner> Monomorphizer<'interner> {
 
         let function_type = self.interner.id_type(expr_id);
 
+        // TODO(vitkov): subst hack
         let trait_impl = self
             .interner
             .get_trait_implementation(&TraitImplKey { typ: self_type.substitute(&HashMap::new()), trait_id, generics: trait_generics })

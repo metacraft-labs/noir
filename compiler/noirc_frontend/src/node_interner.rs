@@ -361,6 +361,7 @@ impl NodeInterner {
 
         let generics = vecmap(&typ.trait_def.generics, |g| {
             let id = self.next_type_variable_id();
+            println!("NEW TRAIT GENERIC UNREAL!! {:?} {}", id, g.0.contents.clone());
             TraitGeneric {
                 name: Rc::new(g.0.contents.clone()),
                 typevar_id: id,

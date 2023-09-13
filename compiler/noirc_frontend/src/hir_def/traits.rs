@@ -64,8 +64,6 @@ pub struct Trait {
 
 impl Trait {
     pub fn bind_generics(&self, types: &Vec<Type>) {
-        assert!(self.generics.len() == types.len());
-
         for (generic, typ) in self.generics.iter().zip(types) {
             *generic.typevar.borrow_mut() = TypeBinding::Bound(typ.clone());
         }

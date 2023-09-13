@@ -173,21 +173,26 @@ impl<'interner> TypeChecker<'interner> {
                             the_trait.bind_generics(&generics);
                             let method = &the_trait.methods[*method_index];
 
-                            let overload_ok =
-                                method_call.arguments.iter().zip(&method.parameters).all(
-                                    |(arg, param_type)| {
-                                        let arg_type = self.interner.id_type(arg);
+                            // We don't actually care what those errors are and won't report them.
+                            // if there are *any* errors, in which case we try the next overload
+                            let mut args_errors = Vec::new();
 
-                                        // TODO(vitkov): not sure this is needed but wont hurt for now
-                                        let arg_type = arg_type.substitute(&HashMap::new());
-                                        let param_type = param_type.substitute(&HashMap::new());
+                            for (arg, param_type) in
+                                method_call.arguments.iter().zip(method.parameters.iter().skip(1))
+                            {
+                                let arg_type = self.interner.id_type(arg);
 
-                                        arg_type == param_type
-                                    },
-                                );
+                                arg_type.unify(param_type, &mut args_errors, || {
+                                    TypeCheckError::TypeMismatch {
+                                        expected_typ: "".to_owned(), // dummy error
+                                        expr_typ: "".to_owned(),
+                                        expr_span: Span::default(),
+                                    }
+                                });
+                            }
 
                             the_trait.unbind_generics();
-                            overload_ok
+                            args_errors.len() == 0
                         }
                         HirMethodReference::FuncId(_) => true,
                     })
@@ -533,7 +538,7 @@ impl<'interner> TypeChecker<'interner> {
             HirMethodReference::TraitMethod(trait_id, generics, method_index) => {
                 let the_trait = self.interner.get_trait(*trait_id);
                 let the_trait = the_trait.borrow();
-                the_trait.bind_generics(generics); // TODO(vikov): unbind 
+                the_trait.bind_generics(generics); // TODO(vikov): unbind
 
                 let method: &TraitFunction = &the_trait.methods[*method_index];
 
