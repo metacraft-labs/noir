@@ -450,7 +450,7 @@ fn collect_trait_impls(
 
                 if let Err((first_def, second_def)) = result {
                     let err = DefCollectorErrorKind::Duplicate {
-                        typ: DuplicateType::Function,
+                        typ: DuplicateType::TraitImplementation,
                         first_def,
                         second_def,
                     };

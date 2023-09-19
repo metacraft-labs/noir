@@ -50,7 +50,7 @@ pub enum DefCollectorErrorKind {
     TraitMissingMethod { trait_name: Ident, method_name: Ident, trait_impl_span: Span },
     #[cfg(feature = "aztec")]
     #[error("Aztec dependency not found. Please add aztec as a dependency in your Cargo.toml")]
-    AztecNotFound{},
+    AztecNotFound {},
 }
 
 impl DefCollectorErrorKind {
@@ -170,9 +170,9 @@ impl From<DefCollectorErrorKind> for Diagnostic {
                 )
             }
             #[cfg(feature = "aztec")]
-            DefCollectorErrorKind::AztecNotFound {  } => {
-                Diagnostic::from_message("Aztec dependency not found. Please add aztec as a dependency in your Cargo.toml")
-            }
+            DefCollectorErrorKind::AztecNotFound {} => Diagnostic::from_message(
+                "Aztec dependency not found. Please add aztec as a dependency in your Cargo.toml",
+            ),
         }
     }
 }

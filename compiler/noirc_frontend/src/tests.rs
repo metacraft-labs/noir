@@ -14,6 +14,7 @@ mod test {
     use crate::hir::def_map::ModuleData;
     use crate::hir::resolution::errors::ResolverError;
     use crate::hir::resolution::import::PathResolutionError;
+    use crate::hir::type_check::TypeCheckError;
     use crate::hir::Context;
     use crate::node_interner::{NodeInterner, StmtId};
 
@@ -100,6 +101,11 @@ mod test {
             compilator_errors.resolver_errors
         );
         assert!(
+            compilator_errors.def_errors.len() == 1,
+            "Expected 0 def collector errors, got: {:?}",
+            compilator_errors.def_errors
+        );
+        assert!(
             compilator_errors.type_errors.len() == 0,
             "Expected 0 type check error, got: {:?}",
             compilator_errors.type_errors
@@ -107,12 +113,522 @@ mod test {
         for err in compilator_errors.def_errors {
             match &err {
                 (DefCollectorErrorKind::Duplicate { typ, first_def, second_def }, _file_id) => {
-                    assert_eq!(typ, &DuplicateType::Function);
+                    assert_eq!(typ, &DuplicateType::TraitImplementation);
                     assert_eq!(first_def, "default");
                     assert_eq!(second_def, "default");
                 }
                 _ => {
                     assert!(false, "No other errors are expected in this test case!");
+                }
+            };
+        }
+    }
+
+    #[test]
+    fn check_trait_wrong_method_return_type() {
+        let src = "
+        trait Default {
+            fn default() -> Self;
+        }
+        
+        struct Foo {
+        }
+        
+        impl Default for Foo {
+            fn default() -> Field {
+                0
+            }
+        }
+        
+        fn main() {
+        }
+        ";
+        let compilator_errors = get_program_errors(src);
+        assert!(!compilator_errors.has_parser_errors());
+        assert!(
+            compilator_errors.resolver_errors.len() == 0,
+            "Expected 0 resolver errors, got: {:?}",
+            compilator_errors.resolver_errors
+        );
+        assert!(
+            compilator_errors.def_errors.len() == 0,
+            "Expected 0 def collector errors, got: {:?}",
+            compilator_errors.def_errors
+        );
+        assert!(
+            compilator_errors.type_errors.len() == 1,
+            "Expected 1 type check error, got: {:?}",
+            compilator_errors.type_errors
+        );
+        for err in compilator_errors.type_errors {
+            match &err {
+                (
+                    TypeCheckError::TypeMismatch { expected_typ, expr_typ, expr_span: _ },
+                    _file_id,
+                ) => {
+                    assert_eq!(expected_typ, "Foo");
+                    assert_eq!(expr_typ, "Field");
+                }
+                _ => {
+                    assert!(false, "No other errors are expected in this test case!");
+                }
+            };
+        }
+    }
+
+    #[test]
+    fn check_trait_wrong_method_return_type2() {
+        let src = "
+        trait Default {
+            fn default(x: Field, y: Field) -> Self;
+        }
+        
+        struct Foo {
+            bar: Field,
+            array: [Field; 2],
+        }
+        
+        impl Default for Foo {
+            fn default(x: Field, _y: Field) -> Field {
+                x
+            }
+        }
+        
+        fn main() {
+        }";
+        let compilator_errors = get_program_errors(src);
+        assert!(!compilator_errors.has_parser_errors());
+        assert!(
+            compilator_errors.resolver_errors.len() == 0,
+            "Expected 0 resolver errors, got: {:?}",
+            compilator_errors.resolver_errors
+        );
+        assert!(
+            compilator_errors.def_errors.len() == 0,
+            "Expected 0 def collector errors, got: {:?}",
+            compilator_errors.def_errors
+        );
+        assert!(
+            compilator_errors.type_errors.len() == 1,
+            "Expected 1 type check error, got: {:?}",
+            compilator_errors.type_errors
+        );
+        for err in compilator_errors.type_errors {
+            match &err {
+                (
+                    TypeCheckError::TypeMismatch { expected_typ, expr_typ, expr_span: _ },
+                    _file_id,
+                ) => {
+                    assert_eq!(expected_typ, "Foo");
+                    assert_eq!(expr_typ, "Field");
+                }
+                _ => {
+                    assert!(false, "No other errors are expected in this test case!");
+                }
+            };
+        }
+    }
+
+    #[test]
+    fn check_trait_missing_implementation() {
+        let src = "
+        trait Default {
+            fn default(x: Field, y: Field) -> Self;
+        
+            fn method2(x: Field) -> Field;
+        
+        }
+        
+        struct Foo {
+            bar: Field,
+            array: [Field; 2],
+        }
+        
+        impl Default for Foo {
+            fn default(x: Field, y: Field) -> Self {
+                Self { bar: x, array: [x,y] }
+            }
+        }
+        
+        fn main() {
+        }
+        ";
+        let compilator_errors = get_program_errors(src);
+        assert!(!compilator_errors.has_parser_errors());
+        assert!(
+            compilator_errors.resolver_errors.len() == 0,
+            "Expected 0 resolver errors, got: {:?}",
+            compilator_errors.resolver_errors
+        );
+        assert!(
+            compilator_errors.def_errors.len() == 1,
+            "Expected 0 def collector errors, got: {:?}",
+            compilator_errors.def_errors
+        );
+        assert!(
+            compilator_errors.type_errors.len() == 0,
+            "Expected 0 type check error, got: {:?}",
+            compilator_errors.type_errors
+        );
+        for err in compilator_errors.def_errors {
+            match &err {
+                (
+                    DefCollectorErrorKind::TraitMissingMethod {
+                        trait_name,
+                        method_name,
+                        trait_impl_span: _,
+                    },
+                    _file_id,
+                ) => {
+                    assert_eq!(trait_name, "Default");
+                    assert_eq!(method_name, "method2");
+                }
+                _ => {
+                    assert!(false, "No other errors are expected in this test case!");
+                }
+            };
+        }
+    }
+
+    #[test]
+    fn check_trait_not_in_scope() {
+        let src = "
+        struct Foo {
+            bar: Field,
+            array: [Field; 2],
+        }
+        
+        // Default trait does not exist
+        impl Default for Foo {
+            fn default(x: Field, y: Field) -> Self {
+                Self { bar: x, array: [x,y] }
+            }
+        }
+        
+        fn main() {
+        }
+        
+        ";
+        let compilator_errors = get_program_errors(src);
+        assert!(!compilator_errors.has_parser_errors());
+        assert!(
+            compilator_errors.resolver_errors.len() == 0,
+            "Expected 0 resolver errors, got: {:?}",
+            compilator_errors.resolver_errors
+        );
+        assert!(
+            compilator_errors.def_errors.len() == 1,
+            "Expected 0 def collector errors, got: {:?}",
+            compilator_errors.def_errors
+        );
+        assert!(
+            compilator_errors.type_errors.len() == 0,
+            "Expected 0 type check error, got: {:?}",
+            compilator_errors.type_errors
+        );
+        for err in compilator_errors.def_errors {
+            match &err {
+                (DefCollectorErrorKind::TraitNotFound { trait_ident }, _file_id) => {
+                    assert_eq!(trait_ident, "Default");
+                }
+                _ => {
+                    assert!(false, "No other errors are expected in this test case!");
+                }
+            };
+        }
+    }
+
+    #[test]
+    fn check_trait_wrong_method_name() {
+        let src = "
+        trait Default {
+        }
+        
+        struct Foo {
+            bar: Field,
+            array: [Field; 2],
+        }
+        
+        // wrong trait name method should not compile
+        impl Default for Foo {
+            fn doesnt_exist(x: Field, y: Field) -> Self {
+                Self { bar: x, array: [x,y] }
+            }
+        }
+        
+        fn main() {
+        }";
+        let compilator_errors = get_program_errors(src);
+        assert!(!compilator_errors.has_parser_errors());
+        assert!(
+            compilator_errors.resolver_errors.len() == 0,
+            "Expected 0 resolver errors, got: {:?}",
+            compilator_errors.resolver_errors
+        );
+        assert!(
+            compilator_errors.def_errors.len() == 1,
+            "Expected 0 def collector errors, got: {:?}",
+            compilator_errors.def_errors
+        );
+        assert!(
+            compilator_errors.type_errors.len() == 0,
+            "Expected 0 type check error, got: {:?}",
+            compilator_errors.type_errors
+        );
+        for err in compilator_errors.def_errors {
+            match &err {
+                (DefCollectorErrorKind::MethodNotInTrait { trait_name, impl_method }, _file_id) => {
+                    assert_eq!(trait_name, "Default");
+                    assert_eq!(impl_method, "doesnt_exist");
+                }
+                _ => {
+                    assert!(false, "No other errors are expected in this test case!");
+                }
+            };
+        }
+    }
+
+    #[test]
+    fn check_trait_wrong_parameter() {
+        let src = "
+        trait Default {
+            fn default(x: Field) -> Self;
+        }
+        
+        struct Foo {
+            bar: u32,
+        }
+        
+        impl Default for Foo {
+            fn default(x: u32) -> Self {
+                Foo {bar: x}
+            }
+        }
+        
+        fn main() {
+        }
+        ";
+        let compilator_errors = get_program_errors(src);
+        assert!(!compilator_errors.has_parser_errors());
+        assert!(
+            compilator_errors.resolver_errors.len() == 0,
+            "Expected 0 resolver errors, got: {:?}",
+            compilator_errors.resolver_errors
+        );
+        assert!(
+            compilator_errors.def_errors.len() == 0,
+            "Expected 0 def collector errors, got: {:?}",
+            compilator_errors.def_errors
+        );
+        assert!(
+            compilator_errors.type_errors.len() == 1,
+            "Expected 0 type check error, got: {:?}",
+            compilator_errors.type_errors
+        );
+        for err in compilator_errors.type_errors {
+            match &err {
+                (
+                    TypeCheckError::TraitMethodParameterTypeMismatch {
+                        method_name,
+                        expected_typ,
+                        actual_typ,
+                        ..
+                    },
+                    _file_id,
+                ) => {
+                    assert_eq!(method_name, "default");
+                    assert_eq!(expected_typ, "Field");
+                    assert_eq!(actual_typ, "u32");
+                }
+                _ => {
+                    assert!(
+                        false,
+                        "No other errors are expected in this test case! Found = {:?}",
+                        err
+                    );
+                }
+            };
+        }
+    }
+
+    #[test]
+    fn check_trait_wrong_parameter2() {
+        let src = "
+        trait Default {
+            fn default(x: Field, y: Field) -> Self;
+        }
+        
+        struct Foo {
+            bar: Field,
+            array: [Field; 2],
+        }
+        
+        impl Default for Foo {
+            fn default(x: Field, y: Foo) -> Self {
+                Self { bar: x, array: [x, y.bar] }
+            }
+        }
+        
+        fn main() {
+        }";
+        let compilator_errors = get_program_errors(src);
+        assert!(!compilator_errors.has_parser_errors());
+        assert!(
+            compilator_errors.resolver_errors.len() == 0,
+            "Expected 0 resolver errors, got: {:?}",
+            compilator_errors.resolver_errors
+        );
+        assert!(
+            compilator_errors.def_errors.len() == 0,
+            "Expected 0 def collector errors, got: {:?}",
+            compilator_errors.def_errors
+        );
+        assert!(
+            compilator_errors.type_errors.len() == 1,
+            "Expected 0 type check error, got: {:?}",
+            compilator_errors.type_errors
+        );
+        for err in compilator_errors.type_errors {
+            match &err {
+                (
+                    TypeCheckError::TraitMethodParameterTypeMismatch {
+                        method_name,
+                        expected_typ,
+                        actual_typ,
+                        ..
+                    },
+                    _file_id,
+                ) => {
+                    assert_eq!(method_name, "default");
+                    assert_eq!(expected_typ, "Field");
+                    assert_eq!(actual_typ, "Foo");
+                }
+                _ => {
+                    assert!(
+                        false,
+                        "No other errors are expected in this test case! Found = {:?}",
+                        err
+                    );
+                }
+            };
+        }
+    }
+
+    #[test]
+    fn check_trait_wrong_parameter_type() {
+        let src = "
+        trait Default {
+            fn default(x: Field, y: NotAType) -> Field;
+        }
+        
+        fn main(x: Field, y: Field) {
+            assert(y == x);
+        }";
+        let compilator_errors = get_program_errors(src);
+        assert!(!compilator_errors.has_parser_errors());
+        assert!(
+            compilator_errors.resolver_errors.len() == 1,
+            "Expected 0 resolver errors, got: {:?}",
+            compilator_errors.resolver_errors
+        );
+        assert!(
+            compilator_errors.def_errors.len() == 0,
+            "Expected 0 def collector errors, got: {:?}",
+            compilator_errors.def_errors
+        );
+        assert!(
+            compilator_errors.type_errors.len() == 0,
+            "Expected 0 type check error, got: {:?}",
+            compilator_errors.type_errors
+        );
+        for err in compilator_errors.resolver_errors {
+            match &err {
+                (ResolverError::PathResolutionError(path_solution_error), _file_id) => {
+                    match path_solution_error {
+                        PathResolutionError::Unresolved(ident) => {
+                            assert_eq!(ident, "NotAType");
+                        }
+                        PathResolutionError::ExternalContractUsed(_) => {
+                            assert!(
+                                false,
+                                "No other errors are expected in this test case! Found = {:?}",
+                                err
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    assert!(
+                        false,
+                        "No other errors are expected in this test case! Found = {:?}",
+                        err
+                    );
+                }
+            };
+        }
+    }
+
+    #[test]
+    fn check_trait_wrong_parameters_count() {
+        let src = "
+        trait Default {
+            fn default(x: Field, y: Field) -> Self;
+        }
+        
+        struct Foo {
+            bar: Field,
+            array: [Field; 2],
+        }
+        
+        impl Default for Foo {
+            fn default(x: Field) -> Self {
+                Self { bar: x, array: [x, x] }
+            }
+        }
+        
+        fn main() {
+        }
+        ";
+        let compilator_errors = get_program_errors(src);
+        assert!(!compilator_errors.has_parser_errors());
+        assert!(
+            compilator_errors.resolver_errors.len() == 0,
+            "Expected 0 resolver errors, got: {:?}",
+            compilator_errors.resolver_errors
+        );
+        assert!(
+            compilator_errors.def_errors.len() == 1,
+            "Expected 0 def collector errors, got: {:?}",
+            compilator_errors.def_errors
+        );
+        assert!(
+            compilator_errors.type_errors.len() == 0,
+            "Expected 0 type check error, got: {:?}",
+            compilator_errors.type_errors
+        );
+        for err in compilator_errors.def_errors {
+            match &err {
+                (
+                    DefCollectorErrorKind::MismatchTraitImplementationNumParameters {
+                        actual_num_parameters,
+                        expected_num_parameters,
+                        trait_name,
+                        method_name,
+                        ..
+                    },
+                    _file_id,
+                ) => {
+                    assert_eq!(actual_num_parameters, &(1 as usize));
+                    assert_eq!(expected_num_parameters, &(2 as usize));
+                    assert_eq!(method_name, "default");
+                    assert_eq!(trait_name, "Default");
+                }
+                _ => {
+                    assert!(
+                        false,
+                        "No other errors are expected in this test case! Found = {:?}",
+                        err
+                    );
                 }
             };
         }
