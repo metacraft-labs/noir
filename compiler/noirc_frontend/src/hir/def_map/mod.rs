@@ -2,13 +2,12 @@ use crate::graph::CrateId;
 use crate::hir::def_collector::dc_crate::DefCollector;
 use crate::hir::Context;
 use crate::node_interner::{FuncId, NodeInterner};
-use crate::parser::{parse_program, ParsedModule};
+use crate::parser::{parse_program, ParsedModule, ParserError};
 use crate::token::{PrimaryAttribute, TestScope};
 use arena::{Arena, Index};
 use fm::{FileId, FileManager};
-use noirc_errors::{FileDiagnostic, Location};
+use noirc_errors::Location;
 use std::collections::BTreeMap;
-
 mod module_def;
 pub use module_def::*;
 mod item_scope;
@@ -17,6 +16,8 @@ mod module_data;
 pub use module_data::*;
 mod namespace;
 pub use namespace::*;
+
+use super::def_collector::dc_crate::CompilationErrors;
 
 #[cfg(feature = "aztec")]
 mod aztec_library;
@@ -70,26 +71,30 @@ pub struct CrateDefMap {
 
 impl CrateDefMap {
     /// Collect all definitions in the crate
-    pub fn collect_defs(
-        crate_id: CrateId,
-        context: &mut Context,
-        errors: &mut Vec<FileDiagnostic>,
-    ) {
+    pub fn collect_defs(crate_id: CrateId, context: &mut Context) -> CompilationErrors {
         // Check if this Crate has already been compiled
         // XXX: There is probably a better alternative for this.
         // Without this check, the compiler will panic as it does not
         // expect the same crate to be processed twice. It would not
         // make the implementation wrong, if the same crate was processed twice, it just makes it slow.
+        let mut errors = CompilationErrors::default();
         if context.def_map(&crate_id).is_some() {
-            return;
+            return errors;
         }
 
         // First parse the root file.
         let root_file_id = context.crate_graph[crate_id].root_file_id;
-        let ast = parse_file(&context.file_manager, root_file_id, errors);
+        let (ast, parsing_errors) = parse_file(&context.file_manager, root_file_id);
 
         #[cfg(feature = "aztec")]
-        let ast = aztec_library::transform(ast, &crate_id, context, errors);
+        let ast = match aztec_library::transform(ast, &crate_id, context) {
+            Ok(ast) => ast,
+            Err((error, file_id)) => {
+                errors.def_errors.push((error, file_id));
+                return errors;
+            }
+        };
+
 
         // Allocate a default Module for the root, giving it a ModuleId
         let mut modules: Arena<ModuleData> = Arena::default();
@@ -104,7 +109,9 @@ impl CrateDefMap {
         };
 
         // Now we want to populate the CrateDefMap using the DefCollector
-        DefCollector::collect(def_map, context, ast, root_file_id, errors);
+        errors.extend_all(DefCollector::collect(def_map, context, ast, root_file_id));
+        errors.extend_parser_errors(parsing_errors, root_file_id);
+        errors
     }
 
     pub fn root(&self) -> LocalModuleId {
@@ -239,12 +246,13 @@ pub struct Contract {
 pub fn parse_file(
     fm: &FileManager,
     file_id: FileId,
-    all_errors: &mut Vec<FileDiagnostic>,
-) -> ParsedModule {
+    //all_errors: &mut Vec<ParserError>,
+) -> (ParsedModule, Vec<ParserError>) {
     let file = fm.fetch_file(file_id);
     let (program, errors) = parse_program(file.source());
-    all_errors.extend(errors.into_iter().map(|error| error.in_file(file_id)));
-    program
+
+    //all_errors.extend(errors.into_iter().map(|error| error.in_file(file_id)));
+    (program, errors)
 }
 
 impl std::ops::Index<LocalModuleId> for CrateDefMap {

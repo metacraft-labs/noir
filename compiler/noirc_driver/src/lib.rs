@@ -112,7 +112,8 @@ pub fn check_crate(
     deny_warnings: bool,
 ) -> CompilationResult<()> {
     let mut errors = vec![];
-    CrateDefMap::collect_defs(crate_id, context, &mut errors);
+    let diagnostics = CrateDefMap::collect_defs(crate_id, context);
+    diagnostics.info_file_diagnostics(&mut errors);
 
     if has_errors(&errors, deny_warnings) {
         Err(errors)

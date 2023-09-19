@@ -1,5 +1,5 @@
 use acvm::FieldElement;
-use noirc_errors::{CustomDiagnostic, Span};
+use noirc_errors::Span;
 
 use crate::graph::CrateId;
 use crate::token::SecondaryAttribute;
@@ -10,7 +10,8 @@ use crate::{
     ParsedModule, Path, PathKind, Pattern, Statement, UnresolvedType, UnresolvedTypeData,
     Visibility,
 };
-use noirc_errors::FileDiagnostic;
+use fm::FileId;
+use crate::hir::def_collector::errors::DefCollectorErrorKind;
 
 //
 //             Helper macros for creating noir ast nodes
@@ -135,18 +136,23 @@ pub(crate) fn transform(
     mut ast: ParsedModule,
     crate_id: &CrateId,
     context: &Context,
-    errors: &mut Vec<FileDiagnostic>,
-) -> ParsedModule {
+) -> Result<ParsedModule, (DefCollectorErrorKind, FileId)>{
     // Usage -> mut ast -> aztec_library::transform(&mut ast)
 
     // Covers all functions in the ast
     for submodule in ast.submodules.iter_mut().filter(|submodule| submodule.is_contract) {
-        if transform_module(&mut submodule.contents.functions) {
-            check_for_aztec_dependency(crate_id, context, errors);
-            include_relevant_imports(&mut submodule.contents);
+        if transform_module(&mut submodule.contents.functions) { 
+            match check_for_aztec_dependency(crate_id, context) {
+                Ok(()) => {
+                    include_relevant_imports(&mut submodule.contents)
+                }
+                Err(file_id) => {
+                    return Err((DefCollectorErrorKind::AztecNotFound{}, file_id));
+                }
+            }
         }
     }
-    ast
+    Ok(ast)
 }
 
 /// Includes an import to the aztec library if it has not been included yet
@@ -168,18 +174,13 @@ fn include_relevant_imports(ast: &mut ParsedModule) {
 fn check_for_aztec_dependency(
     crate_id: &CrateId,
     context: &Context,
-    errors: &mut Vec<FileDiagnostic>,
-) {
+) -> Result<(), FileId>{
     let crate_graph = &context.crate_graph[crate_id];
     let has_aztec_dependency = crate_graph.dependencies.iter().any(|dep| dep.as_name() == "aztec");
-
-    if !has_aztec_dependency {
-        errors.push(FileDiagnostic::new(
-            crate_graph.root_file_id,
-            CustomDiagnostic::from_message(
-                "Aztec dependency not found. Please add aztec as a dependency in your Cargo.toml",
-            ),
-        ));
+    if has_aztec_dependency {
+        Ok(())
+    } else {
+        Err(crate_graph.root_file_id)
     }
 }
 

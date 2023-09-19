@@ -1,6 +1,5 @@
 use crate::hir::resolution::import::PathResolutionError;
 use crate::Ident;
-
 use noirc_errors::CustomDiagnostic as Diagnostic;
 use noirc_errors::FileDiagnostic;
 use noirc_errors::Span;
@@ -8,7 +7,7 @@ use thiserror::Error;
 
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum DuplicateType {
     Function,
     Module,
@@ -49,6 +48,9 @@ pub enum DefCollectorErrorKind {
     TraitNotFound { trait_ident: Ident },
     #[error("Missing Trait method implementation")]
     TraitMissingMethod { trait_name: Ident, method_name: Ident, trait_impl_span: Span },
+    #[cfg(feature = "aztec")]
+    #[error("Aztec dependency not found. Please add aztec as a dependency in your Cargo.toml")]
+    AztecNotFound{},
 }
 
 impl DefCollectorErrorKind {
@@ -166,6 +168,10 @@ impl From<DefCollectorErrorKind> for Diagnostic {
                     String::new(),
                     span,
                 )
+            }
+            #[cfg(feature = "aztec")]
+            DefCollectorErrorKind::AztecNotFound {  } => {
+                Diagnostic::from_message("Aztec dependency not found. Please add aztec as a dependency in your Cargo.toml")
             }
         }
     }
