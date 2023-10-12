@@ -648,9 +648,24 @@ impl<'interner> Monomorphizer<'interner> {
                 let location = Some(ident.location);
                 let name = definition.name.clone();
                 let typ = self.interner.id_type(expr_id);
+                if let Type::Function(a, ret_type, c) = &typ {
+                    if let Type::TraitAsType(t) = ret_type.as_ref() {
+                        let f = self.interner.function(func_id);
 
+
+                    }
+                }
+                println!("4arli function with name = {name}");
                 let definition = self.lookup_function(*func_id, expr_id, &typ);
+                if let Definition::Function(func_id) = definition {
+                    let f_id = self.interner.find_function(&name).unwrap();
+                    let meta = self.interner.function_meta(&f_id);
+                    let tt = meta.return_type();
+                    println!("tt = {tt}");
+                }
+                println!("before hack it = {typ}");
                 let typ = self.convert_type(&typ);
+                println!("after hack it = {typ}");
                 let ident = ast::Ident { location, mutable, definition, name, typ: typ.clone() };
                 let ident_expression = ast::Expression::Ident(ident);
                 if self.is_function_closure_type(&typ) {

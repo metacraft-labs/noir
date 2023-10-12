@@ -792,7 +792,8 @@ impl<'a> Resolver<'a> {
             name: name_ident,
             kind: func.kind,
             location,
-            typ,
+            typ: typ.clone(),
+            last_statement_type: Some(typ.clone()),
             parameters: parameters.into(),
             return_type: func.def.return_type.clone(),
             return_visibility: func.def.return_visibility,
@@ -1193,7 +1194,11 @@ impl<'a> Resolver<'a> {
             }
             ExpressionKind::MethodCall(call_expr) => {
                 let method = call_expr.method_name;
+                let should_dump =  method.to_string() == "magic_number";
                 let object = self.resolve_expression(call_expr.object);
+                if should_dump {
+                    println!("boc boc {:?}", &object);
+                }
                 let arguments = vecmap(call_expr.arguments, |arg| self.resolve_expression(arg));
                 let location = Location::new(expr.span, self.file);
                 HirExpression::MethodCall(HirMethodCallExpression {

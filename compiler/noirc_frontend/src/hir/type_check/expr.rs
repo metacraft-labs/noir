@@ -143,6 +143,9 @@ impl<'interner> TypeChecker<'interner> {
             HirExpression::MethodCall(mut method_call) => {
                 let object_type = self.check_expression(&method_call.object).follow_bindings();
                 let method_name = method_call.method.0.contents.as_str();
+                if method_name == "magic_number" {
+                    println!("Looking for {method_name} for {object_type}");
+                }
                 match self.lookup_method(&object_type, method_name, expr_id) {
                     Some(method_ref) => {
                         let mut args = vec![(
@@ -843,6 +846,7 @@ impl<'interner> TypeChecker<'interner> {
                 println!("Help {t}");
                 println!("method name = {method_name}");
                 println!("expr_id = {expr_id:?}");
+                println!("id_to_type = {:?}", self.interner.id_type(expr_id));
                 println!("expression = {:?}", self.interner.expression(expr_id));
                 //println!("bindings = {:?}", self.interner.get_instantiation_bindings(expr_id.clone()));
                 //self.interner.store_instantiation_bindings(expr_id, instantiation_bindings)
