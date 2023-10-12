@@ -943,6 +943,7 @@ impl NodeInterner {
             | Type::Forall(..)
             | Type::NotConstant
             | Type::Constant(..)
+            | Type::TraitAsType(..)
             | Type::Error => false,
         }
     }
@@ -1051,6 +1052,7 @@ fn get_type_method_key(typ: &Type) -> Option<TypeMethodKey> {
         | Type::Error
         | Type::NotConstant
         | Type::Struct(_, _)
+        | Type::TraitAsType(_)
         | Type::FmtString(_, _) => None,
     }
 }

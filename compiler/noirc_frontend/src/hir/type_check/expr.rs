@@ -839,6 +839,15 @@ impl<'interner> TypeChecker<'interner> {
                     }
                 }
             }
+            Type::TraitAsType(t) => {
+                println!("Help {t}");
+                println!("method name = {method_name}");
+                println!("expr_id = {expr_id:?}");
+                println!("expression = {:?}", self.interner.expression(expr_id));
+                //println!("bindings = {:?}", self.interner.get_instantiation_bindings(expr_id.clone()));
+                //self.interner.store_instantiation_bindings(expr_id, instantiation_bindings)
+                None
+            }
             Type::NamedGeneric(_, _) => {
                 let func_meta = self.interner.function_meta(
                     &self.current_function.expect("unexpected method outside a function"),

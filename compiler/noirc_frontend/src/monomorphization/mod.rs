@@ -222,9 +222,22 @@ impl<'interner> Monomorphizer<'interner> {
         let modifiers = self.interner.function_modifiers(&f);
         let name = self.interner.function_name(&f).to_owned();
 
-        let return_type = self.convert_type(meta.return_type());
+        let body_expr_id = *self.interner.function(&f).as_expr();
+        let body_return_type = self.interner.id_type(&body_expr_id);
+        println!("fn_name = {}", name);
+        let return_type = self.convert_type(match meta.return_type() {
+            Type::TraitAsType(_) => {
+                println!("body return type = {body_return_type}");
+                &body_return_type
+            }
+            _ => {
+                println!("meta fn type = {}",meta.return_type());
+                meta.return_type()
+            }
+        });
+
         let parameters = self.parameters(meta.parameters);
-        let body = self.expr(*self.interner.function(&f).as_expr());
+        let body = self.expr(body_expr_id);
         let unconstrained = modifiers.is_unconstrained
             || matches!(modifiers.contract_function_type, Some(ContractFunctionType::Open));
 
@@ -381,8 +394,8 @@ impl<'interner> Monomorphizer<'interner> {
                 }
             }
 
-            HirExpression::MethodCall(_) => {
-                unreachable!("Encountered HirExpression::MethodCall during monomorphization")
+            HirExpression::MethodCall(hir_method_call) => {
+                unreachable!("Encountered HirExpression::MethodCall during monomorphization {hir_method_call:?}")
             }
             HirExpression::Error => unreachable!("Encountered Error node during monomorphization"),
         }
@@ -686,7 +699,6 @@ impl<'interner> Monomorphizer<'interner> {
                 ast::Type::FmtString(size, fields)
             }
             HirType::Unit => ast::Type::Unit,
-
             HirType::Array(length, element) => {
                 let element = Box::new(self.convert_type(element.as_ref()));
 
@@ -696,7 +708,10 @@ impl<'interner> Monomorphizer<'interner> {
                     ast::Type::Slice(element)
                 }
             }
-
+            HirType::TraitAsType(_) => {
+                println!("Aide 4i4e");
+                ast::Type::Field
+            }
             HirType::NamedGeneric(binding, _) => {
                 if let TypeBinding::Bound(binding) = &*binding.borrow() {
                     return self.convert_type(binding);
