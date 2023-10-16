@@ -485,7 +485,7 @@ impl<'a> Resolver<'a> {
         &mut self,
         path: Path,
         args: Vec<UnresolvedType>,
-        new_variables: &mut Generics,
+        _new_variables: &mut Generics,
     ) -> Type {
         if args.is_empty() {
             if let Some(t) = self.lookup_trait_or_error(path) {

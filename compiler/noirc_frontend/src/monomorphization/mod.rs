@@ -13,7 +13,6 @@ use iter_extended::{btree_map, vecmap};
 use noirc_errors::Location;
 use noirc_printable_type::PrintableType;
 use std::{
-    borrow::BorrowMut,
     collections::{BTreeMap, HashMap, VecDeque},
     unreachable,
 };
@@ -25,7 +24,6 @@ use crate::{
         stmt::{HirAssignStatement, HirLValue, HirLetStatement, HirPattern, HirStatement},
         types,
     },
-    monomorphization::ast::Expression,
     node_interner::{
         self, DefinitionKind, ExprId, NodeInterner, StmtId, TraitImplKey, TraitMethodId,
     },
