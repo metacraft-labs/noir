@@ -13,6 +13,7 @@ use iter_extended::{btree_map, vecmap};
 use noirc_errors::Location;
 use noirc_printable_type::PrintableType;
 use std::{
+    borrow::BorrowMut,
     collections::{BTreeMap, HashMap, VecDeque},
     unreachable,
 };
@@ -24,7 +25,10 @@ use crate::{
         stmt::{HirAssignStatement, HirLValue, HirLetStatement, HirPattern, HirStatement},
         types,
     },
-    node_interner::{self, DefinitionKind, NodeInterner, StmtId, TraitImplKey, TraitMethodId},
+    monomorphization::ast::Expression,
+    node_interner::{
+        self, DefinitionKind, ExprId, NodeInterner, StmtId, TraitImplKey, TraitMethodId,
+    },
     token::FunctionAttribute,
     ContractFunctionType, FunctionKind, Type, TypeBinding, TypeBindings, TypeVariableKind,
     Visibility,
@@ -231,7 +235,7 @@ impl<'interner> Monomorphizer<'interner> {
                 &body_return_type
             }
             _ => {
-                println!("meta fn type = {}",meta.return_type());
+                println!("meta fn type = {}", meta.return_type());
                 meta.return_type()
             }
         });
@@ -648,21 +652,9 @@ impl<'interner> Monomorphizer<'interner> {
                 let location = Some(ident.location);
                 let name = definition.name.clone();
                 let typ = self.interner.id_type(expr_id);
-                if let Type::Function(a, ret_type, c) = &typ {
-                    if let Type::TraitAsType(t) = ret_type.as_ref() {
-                        let f = self.interner.function(func_id);
-
-
-                    }
-                }
+                let typ = self.substitute_trait_as_type(*func_id, typ);
                 println!("4arli function with name = {name}");
                 let definition = self.lookup_function(*func_id, expr_id, &typ);
-                if let Definition::Function(func_id) = definition {
-                    let f_id = self.interner.find_function(&name).unwrap();
-                    let meta = self.interner.function_meta(&f_id);
-                    let tt = meta.return_type();
-                    println!("tt = {tt}");
-                }
                 println!("before hack it = {typ}");
                 let typ = self.convert_type(&typ);
                 println!("after hack it = {typ}");
@@ -724,8 +716,7 @@ impl<'interner> Monomorphizer<'interner> {
                 }
             }
             HirType::TraitAsType(_) => {
-                println!("Aide 4i4e");
-                ast::Type::Field
+                unreachable!("All TraitAsType should be replaced before calling convert_type");
             }
             HirType::NamedGeneric(binding, _) => {
                 if let TypeBinding::Bound(binding) = &*binding.borrow() {
@@ -810,8 +801,7 @@ impl<'interner> Monomorphizer<'interner> {
         }
     }
 
-    fn is_function_closure(&self, raw_func_id: node_interner::ExprId) -> bool {
-        let t = self.convert_type(&self.interner.id_type(raw_func_id));
+    fn is_function_closure(&self, t: ast::Type) -> bool {
         if self.is_function_closure_type(&t) {
             true
         } else if let ast::Type::Tuple(elements) = t {
@@ -879,7 +869,9 @@ impl<'interner> Monomorphizer<'interner> {
         let hir_arguments = vecmap(&call.arguments, |id| self.interner.expression(id));
         let func: Box<ast::Expression>;
         let return_type = self.interner.id_type(id);
+        let return_type = self.substitute_trait_from_expr(return_type, &call.func);
         let return_type = self.convert_type(&return_type);
+
         let location = call.location;
 
         if let ast::Expression::Ident(ident) = original_func.as_ref() {
@@ -893,8 +885,13 @@ impl<'interner> Monomorphizer<'interner> {
         }
 
         let mut block_expressions = vec![];
-
-        let is_closure = self.is_function_closure(call.func);
+        let func_type = self.interner.id_type(call.func);
+        println!("step 1 -> func_type = {func_type:?}");
+        let func_type = self.substitute_trait_from_expr(func_type, &call.func);
+        println!("step 2 -> func_type = {func_type:?}");
+        let func_type = self.convert_type(&func_type);
+        println!("step 3 -> func_type = {func_type:?}");
+        let is_closure = self.is_function_closure(func_type);
         if is_closure {
             let local_id = self.next_local_id();
 
@@ -1060,6 +1057,48 @@ impl<'interner> Monomorphizer<'interner> {
         Expression::Literal(Literal::Array(arr_literal))
     }
 
+    fn substitute_trait_from_expr(&mut self, typ: Type, expr_id: &ExprId) -> Type {
+        match &typ {
+            Type::TraitAsType(_) => {
+                let original_func = self.expr(*expr_id);
+                if let ast::Expression::Ident(ident) = original_func {
+                    let function_name = ident.name.clone();
+                    if let Some(internal_func_id) = self.interner.find_function(&function_name) {
+                        let hir_function = self.interner.function(&internal_func_id);
+                        let hir_func_as_expr = hir_function.as_expr();
+                        let ret_type = self.interner.id_type(hir_func_as_expr);
+                        if ret_type != Type::Error {
+                            return ret_type;
+                        }
+                    }
+                }
+            }
+            Type::Function(args, ret_type, env) => {
+                println!("substitute_trait_from_expr ... Type::Function ... ");
+                let ret_type =
+                    Box::new(self.substitute_trait_from_expr(ret_type.as_ref().clone(), expr_id));
+                return Type::Function(args.clone(), ret_type, env.clone());
+            }
+            _ => {}
+        }
+        return typ;
+    }
+
+    fn substitute_trait_as_type(&mut self, id: node_interner::FuncId, function_type: Type) -> Type {
+        if let Type::Function(args, ret_type, env_type) = function_type {
+            if let Type::TraitAsType(_trair) = ret_type.as_ref() {
+                let f = self.interner.function(&id);
+                let func_body = f.as_expr();
+                let ret_type = self.interner.id_type(func_body);
+                Type::Function(args, Box::new(ret_type), env_type.clone())
+            } else {
+                Type::Function(args, ret_type, env_type.clone())
+            }
+        } else {
+            function_type
+        }
+    }
+
     fn queue_function(
         &mut self,
         id: node_interner::FuncId,
@@ -1071,7 +1110,6 @@ impl<'interner> Monomorphizer<'interner> {
 
         let bindings = self.interner.get_instantiation_bindings(expr_id);
         let bindings = self.follow_bindings(bindings);
-
         self.queue.push_back((id, new_id, bindings));
         new_id
     }

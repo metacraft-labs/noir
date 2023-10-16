@@ -10,7 +10,7 @@ use crate::{
         },
         types::Type,
     },
-    node_interner::{DefinitionKind, ExprId, FuncId, TraitMethodId},
+    node_interner::{DefinitionId, DefinitionKind, ExprId, FuncId, TraitMethodId},
     BinaryOpKind, Signedness, TypeBinding, TypeVariableKind, UnaryOp,
 };
 
@@ -35,6 +35,25 @@ impl<'interner> TypeChecker<'interner> {
             }
         }
     }
+
+    fn some_weird_name(&mut self, def_id: DefinitionId) -> Type {
+        let typ = self.interner.id_type(def_id);
+        if let Type::Function(args, ret, env) = &typ {
+            let def = self.interner.definition(def_id);
+            if let Type::TraitAsType(_trait) = ret.as_ref() {
+                if let DefinitionKind::Function(func_id) = def.kind {
+                    let f = self.interner.function(&func_id);
+                    let func_body = f.as_expr();
+                    let ret_type = self.interner.id_type(func_body);
+                    let new_type = Type::Function(args.clone(), Box::new(ret_type), env.clone());
+                    println!("new type = {new_type}");
+                    return new_type;
+                }
+            }
+        }
+        typ
+    }
+
     /// Infers a type for a given expression, and return this type.
     /// As a side-effect, this function will also remember this type in the NodeInterner
     /// for the given expr_id key.
@@ -50,7 +69,23 @@ impl<'interner> TypeChecker<'interner> {
                 // E.g. `fn foo<T>(t: T, field: Field) -> T` has type `forall T. fn(T, Field) -> T`.
                 // We must instantiate identifiers at every call site to replace this T with a new type
                 // variable to handle generic functions.
-                let t = self.interner.id_type(ident.id);
+                let t = self.some_weird_name(ident.id);
+                /*
+                 let t = self.interner.id_type(ident.id);
+                 if let Type::Function(args, ret, env) = t.clone() {
+                     let def = self.interner.definition(ident.id);
+
+                     //TODO REPLACE function
+                     if let Type::TraitAsType(_trait) = ret.as_ref() {
+                         println!("Heheh .. {ret}\n");
+                         println!("hir = {ident:?}");
+                         println!("def = {def:?}");
+                         if let DefinitionKind::Function(func_id) = def.kind {
+                             let new_type = self.some_weird_name(func_id, t.clone());
+                             println!("new type = {new_type}")
+                         }
+                     }
+                }*/
                 let (typ, bindings) = t.instantiate(self.interner);
                 self.interner.store_instantiation_bindings(*expr_id, bindings);
                 typ
@@ -132,7 +167,10 @@ impl<'interner> TypeChecker<'interner> {
             HirExpression::Call(call_expr) => {
                 self.check_if_deprecated(&call_expr.func);
 
+                let next_expr = self.interner.expression(&call_expr.func);
+                println!("next_expr = {next_expr:?}");
                 let function = self.check_expression(&call_expr.func);
+                println!("Call = {call_expr:?}\n type = {function}\n");
                 let args = vecmap(&call_expr.arguments, |arg| {
                     let typ = self.check_expression(arg);
                     (typ, *arg, self.interner.expr_span(arg))
@@ -145,7 +183,11 @@ impl<'interner> TypeChecker<'interner> {
                 let method_name = method_call.method.0.contents.as_str();
                 if method_name == "magic_number" {
                     println!("Looking for {method_name} for {object_type}");
+                    if let Type::TraitAsType(_trait) = object_type {
+                        unreachable!("Big big trouble ..\n");
+                    }
                 }
+
                 match self.lookup_method(&object_type, method_name, expr_id) {
                     Some(method_ref) => {
                         let mut args = vec![(

@@ -63,10 +63,11 @@ pub fn type_check_func(interner: &mut NodeInterner, func_id: FuncId) -> Vec<Type
     // Check declared return type and actual return type
     if !can_ignore_ret {
         let (expr_span, empty_function) = function_info(interner, function_body_id);
-
+        //let body_type = type_checker.check_expression(function_body_id);
         let func_span = interner.expr_span(function_body_id); // XXX: We could be more specific and return the span of the last stmt, however stmts do not have spans yet
         if let Type::TraitAsType(t) = &declared_return_type {
-            println!("Cuk Cuk!!");
+            let body_type = interner.id_type(function_body_id);
+            println!("Cuk Cuk!! {}", body_type.follow_bindings());
             let key = TraitImplKey { typ: function_last_type.follow_bindings(), trait_id: t.id };
             match interner.get_trait_implementation(&key) {
                 Some(_implementation) => {}

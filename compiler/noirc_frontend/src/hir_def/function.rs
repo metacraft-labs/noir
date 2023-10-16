@@ -108,8 +108,6 @@ pub struct FuncMeta {
     /// or a Type::Forall for generic functions.
     pub typ: Type,
 
-    pub last_statement_type: Option<Type>,
-
     pub location: Location,
 
     // This flag is needed for the attribute check pass

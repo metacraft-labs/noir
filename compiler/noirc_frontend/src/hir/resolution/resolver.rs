@@ -793,7 +793,6 @@ impl<'a> Resolver<'a> {
             kind: func.kind,
             location,
             typ: typ.clone(),
-            last_statement_type: Some(typ.clone()),
             parameters: parameters.into(),
             return_type: func.def.return_type.clone(),
             return_visibility: func.def.return_visibility,
@@ -1194,7 +1193,7 @@ impl<'a> Resolver<'a> {
             }
             ExpressionKind::MethodCall(call_expr) => {
                 let method = call_expr.method_name;
-                let should_dump =  method.to_string() == "magic_number";
+                let should_dump = method.to_string() == "magic_number";
                 let object = self.resolve_expression(call_expr.object);
                 if should_dump {
                     println!("boc boc {:?}", &object);
