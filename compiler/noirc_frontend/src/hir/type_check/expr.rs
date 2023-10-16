@@ -166,11 +166,8 @@ impl<'interner> TypeChecker<'interner> {
             HirExpression::Index(index_expr) => self.check_index_expression(expr_id, index_expr),
             HirExpression::Call(call_expr) => {
                 self.check_if_deprecated(&call_expr.func);
-
                 let next_expr = self.interner.expression(&call_expr.func);
-                println!("next_expr = {next_expr:?}");
                 let function = self.check_expression(&call_expr.func);
-                println!("Call = {call_expr:?}\n type = {function}\n");
                 let args = vecmap(&call_expr.arguments, |arg| {
                     let typ = self.check_expression(arg);
                     (typ, *arg, self.interner.expr_span(arg))
@@ -181,13 +178,6 @@ impl<'interner> TypeChecker<'interner> {
             HirExpression::MethodCall(mut method_call) => {
                 let object_type = self.check_expression(&method_call.object).follow_bindings();
                 let method_name = method_call.method.0.contents.as_str();
-                if method_name == "magic_number" {
-                    println!("Looking for {method_name} for {object_type}");
-                    if let Type::TraitAsType(_trait) = object_type {
-                        unreachable!("Big big trouble ..\n");
-                    }
-                }
-
                 match self.lookup_method(&object_type, method_name, expr_id) {
                     Some(method_ref) => {
                         let mut args = vec![(

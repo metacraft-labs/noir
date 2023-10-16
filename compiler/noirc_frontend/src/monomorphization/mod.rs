@@ -228,14 +228,11 @@ impl<'interner> Monomorphizer<'interner> {
 
         let body_expr_id = *self.interner.function(&f).as_expr();
         let body_return_type = self.interner.id_type(&body_expr_id);
-        println!("fn_name = {}", name);
         let return_type = self.convert_type(match meta.return_type() {
             Type::TraitAsType(_) => {
-                println!("body return type = {body_return_type}");
                 &body_return_type
             }
             _ => {
-                println!("meta fn type = {}", meta.return_type());
                 meta.return_type()
             }
         });
@@ -653,11 +650,8 @@ impl<'interner> Monomorphizer<'interner> {
                 let name = definition.name.clone();
                 let typ = self.interner.id_type(expr_id);
                 let typ = self.substitute_trait_as_type(*func_id, typ);
-                println!("4arli function with name = {name}");
                 let definition = self.lookup_function(*func_id, expr_id, &typ);
-                println!("before hack it = {typ}");
                 let typ = self.convert_type(&typ);
-                println!("after hack it = {typ}");
                 let ident = ast::Ident { location, mutable, definition, name, typ: typ.clone() };
                 let ident_expression = ast::Expression::Ident(ident);
                 if self.is_function_closure_type(&typ) {
@@ -886,11 +880,8 @@ impl<'interner> Monomorphizer<'interner> {
 
         let mut block_expressions = vec![];
         let func_type = self.interner.id_type(call.func);
-        println!("step 1 -> func_type = {func_type:?}");
         let func_type = self.substitute_trait_from_expr(func_type, &call.func);
-        println!("step 2 -> func_type = {func_type:?}");
         let func_type = self.convert_type(&func_type);
-        println!("step 3 -> func_type = {func_type:?}");
         let is_closure = self.is_function_closure(func_type);
         if is_closure {
             let local_id = self.next_local_id();
@@ -1074,7 +1065,6 @@ impl<'interner> Monomorphizer<'interner> {
                 }
             }
             Type::Function(args, ret_type, env) => {
-                println!("substitute_trait_from_expr ... Type::Function ... ");
                 let ret_type =
                     Box::new(self.substitute_trait_from_expr(ret_type.as_ref().clone(), expr_id));
                 return Type::Function(args.clone(), ret_type, env.clone());
