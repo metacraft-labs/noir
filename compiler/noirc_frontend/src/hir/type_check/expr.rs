@@ -46,7 +46,6 @@ impl<'interner> TypeChecker<'interner> {
                     let func_body = f.as_expr();
                     let ret_type = self.interner.id_type(func_body);
                     let new_type = Type::Function(args.clone(), Box::new(ret_type), env.clone());
-                    println!("new type = {new_type}");
                     return new_type;
                 }
             }
@@ -70,22 +69,6 @@ impl<'interner> TypeChecker<'interner> {
                 // We must instantiate identifiers at every call site to replace this T with a new type
                 // variable to handle generic functions.
                 let t = self.some_weird_name(ident.id);
-                /*
-                 let t = self.interner.id_type(ident.id);
-                 if let Type::Function(args, ret, env) = t.clone() {
-                     let def = self.interner.definition(ident.id);
-
-                     //TODO REPLACE function
-                     if let Type::TraitAsType(_trait) = ret.as_ref() {
-                         println!("Heheh .. {ret}\n");
-                         println!("hir = {ident:?}");
-                         println!("def = {def:?}");
-                         if let DefinitionKind::Function(func_id) = def.kind {
-                             let new_type = self.some_weird_name(func_id, t.clone());
-                             println!("new type = {new_type}")
-                         }
-                     }
-                }*/
                 let (typ, bindings) = t.instantiate(self.interner);
                 self.interner.store_instantiation_bindings(*expr_id, bindings);
                 typ
@@ -874,15 +857,8 @@ impl<'interner> TypeChecker<'interner> {
                     }
                 }
             }
-            Type::TraitAsType(t) => {
-                println!("Help {t}");
-                println!("method name = {method_name}");
-                println!("expr_id = {expr_id:?}");
-                println!("id_to_type = {:?}", self.interner.id_type(expr_id));
-                println!("expression = {:?}", self.interner.expression(expr_id));
-                //println!("bindings = {:?}", self.interner.get_instantiation_bindings(expr_id.clone()));
-                //self.interner.store_instantiation_bindings(expr_id, instantiation_bindings)
-                None
+            Type::TraitAsType(_trait) => {
+                unreachable!("unexpected lookup on trait as return type")
             }
             Type::NamedGeneric(_, _) => {
                 let func_meta = self.interner.function_meta(

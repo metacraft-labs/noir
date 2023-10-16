@@ -1103,20 +1103,6 @@ fn check_methods_signatures(
             let resolved_return_type =
                 resolver.resolve_type(meta.return_type.get_type().into_owned());
 
-            match &method.return_type {
-                Type::TraitAsType(t) => {
-                    println!("NEgresi {t}");
-                }
-                _ => {}
-            }
-
-            match &resolved_return_type {
-                Type::TraitAsType(t) => {
-                    println!("Bobinci {t}");
-                }
-                _ => {}
-            }
-
             method.return_type.unify(&resolved_return_type, &mut typecheck_errors, || {
                 let ret_type_span =
                     meta.return_type.get_type().span.expect("return type must always have a span");
