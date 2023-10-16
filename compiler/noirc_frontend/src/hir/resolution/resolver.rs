@@ -791,7 +791,7 @@ impl<'a> Resolver<'a> {
             name: name_ident,
             kind: func.kind,
             location,
-            typ: typ.clone(),
+            typ,
             parameters: parameters.into(),
             return_type: func.def.return_type.clone(),
             return_visibility: func.def.return_visibility,
