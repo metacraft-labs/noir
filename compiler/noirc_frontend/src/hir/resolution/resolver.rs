@@ -484,15 +484,14 @@ impl<'a> Resolver<'a> {
     fn resolve_trait_as_type(
         &mut self,
         path: Path,
-        args: Vec<UnresolvedType>,
+        _args: Vec<UnresolvedType>,
         _new_variables: &mut Generics,
     ) -> Type {
-        if args.is_empty() {
-            if let Some(t) = self.lookup_trait_or_error(path) {
-                return Type::TraitAsType(t);
-            }
+        if let Some(t) = self.lookup_trait_or_error(path) {
+            Type::TraitAsType(t)
+        } else {
+            Type::Error
         }
-        Type::Error
     }
 
     fn verify_generics_count(
