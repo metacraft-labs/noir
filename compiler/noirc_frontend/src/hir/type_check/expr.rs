@@ -10,7 +10,7 @@ use crate::{
         },
         types::Type,
     },
-    node_interner::{DefinitionId, DefinitionKind, ExprId, FuncId, TraitMethodId},
+    node_interner::{DefinitionKind, ExprId, FuncId, TraitMethodId},
     BinaryOpKind, Signedness, TypeBinding, TypeVariableKind, UnaryOp,
 };
 
@@ -36,23 +36,6 @@ impl<'interner> TypeChecker<'interner> {
         }
     }
 
-    fn some_weird_name(&mut self, def_id: DefinitionId) -> Type {
-        let typ = self.interner.id_type(def_id);
-        if let Type::Function(args, ret, env) = &typ {
-            let def = self.interner.definition(def_id);
-            if let Type::TraitAsType(_trait) = ret.as_ref() {
-                if let DefinitionKind::Function(func_id) = def.kind {
-                    let f = self.interner.function(&func_id);
-                    let func_body = f.as_expr();
-                    let ret_type = self.interner.id_type(func_body);
-                    let new_type = Type::Function(args.clone(), Box::new(ret_type), env.clone());
-                    return new_type;
-                }
-            }
-        }
-        typ
-    }
-
     /// Infers a type for a given expression, and return this type.
     /// As a side-effect, this function will also remember this type in the NodeInterner
     /// for the given expr_id key.
@@ -68,7 +51,7 @@ impl<'interner> TypeChecker<'interner> {
                 // E.g. `fn foo<T>(t: T, field: Field) -> T` has type `forall T. fn(T, Field) -> T`.
                 // We must instantiate identifiers at every call site to replace this T with a new type
                 // variable to handle generic functions.
-                let t = self.some_weird_name(ident.id);
+                let t = self.interner.id_type_substitute_trait_as_type(ident.id);
                 let (typ, bindings) = t.instantiate(self.interner);
                 self.interner.store_instantiation_bindings(*expr_id, bindings);
                 typ

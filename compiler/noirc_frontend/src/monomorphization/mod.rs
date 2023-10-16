@@ -227,12 +227,8 @@ impl<'interner> Monomorphizer<'interner> {
         let body_expr_id = *self.interner.function(&f).as_expr();
         let body_return_type = self.interner.id_type(&body_expr_id);
         let return_type = self.convert_type(match meta.return_type() {
-            Type::TraitAsType(_) => {
-                &body_return_type
-            }
-            _ => {
-                meta.return_type()
-            }
+            Type::TraitAsType(_) => &body_return_type,
+            _ => meta.return_type(),
         });
 
         let parameters = self.parameters(meta.parameters);
@@ -647,7 +643,6 @@ impl<'interner> Monomorphizer<'interner> {
                 let location = Some(ident.location);
                 let name = definition.name.clone();
                 let typ = self.interner.id_type(expr_id);
-                let typ = self.substitute_trait_as_type(*func_id, typ);
                 let definition = self.lookup_function(*func_id, expr_id, &typ);
                 let typ = self.convert_type(&typ);
                 let ident = ast::Ident { location, mutable, definition, name, typ: typ.clone() };
@@ -1070,21 +1065,6 @@ impl<'interner> Monomorphizer<'interner> {
             _ => {}
         }
         return typ;
-    }
-
-    fn substitute_trait_as_type(&mut self, id: node_interner::FuncId, function_type: Type) -> Type {
-        if let Type::Function(args, ret_type, env_type) = function_type {
-            if let Type::TraitAsType(_trair) = ret_type.as_ref() {
-                let f = self.interner.function(&id);
-                let func_body = f.as_expr();
-                let ret_type = self.interner.id_type(func_body);
-                Type::Function(args, Box::new(ret_type), env_type.clone())
-            } else {
-                Type::Function(args, ret_type, env_type.clone())
-            }
-        } else {
-            function_type
-        }
     }
 
     fn queue_function(
