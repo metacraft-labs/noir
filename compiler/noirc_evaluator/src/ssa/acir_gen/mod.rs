@@ -33,6 +33,7 @@ use fxhash::FxHashMap as HashMap;
 use im::Vector;
 use iter_extended::{try_vecmap, vecmap};
 use noirc_frontend::Distinctness;
+use plonky2::plonk::config::PoseidonGoldilocksConfig;
 
 /// Context struct for the acir generation pass.
 /// May be similar to the Evaluator struct in the current SSA IR.

@@ -21,10 +21,11 @@ use noirc_abi::Abi;
 
 use noirc_frontend::{hir::Context, monomorphization::ast::Program};
 
-use self::{abi_gen::gen_abi, acir_gen::GeneratedAcir, ssa_gen::Ssa};
+use self::{abi_gen::gen_abi, acir_gen::GeneratedAcir, ssa_gen::Ssa, plonky2_gen::{Plonky2Circuit, ssa_to_plonky2}};
 
 pub mod abi_gen;
 mod acir_gen;
+pub mod plonky2_gen;
 pub(super) mod function_builder;
 pub mod ir;
 mod opt;
@@ -62,6 +63,49 @@ pub(crate) fn optimize_into_acir(
     let brillig = ssa.to_brillig(print_brillig_trace);
     let last_array_uses = ssa.find_last_array_uses();
     ssa.into_acir(brillig, abi_distinctness, &last_array_uses)
+}
+
+/// convert the final SSA into ACIR and return it.
+/// @CopyPasta from optimize_into_acir
+pub(crate) fn optimize_into_plonky2(
+    program: Program,
+    print_ssa_passes: bool,
+    print_brillig_trace: bool,
+) -> Result<Plonky2Circuit, RuntimeError> {
+    let abi_distinctness = program.return_distinctness;
+    let ssa = SsaBuilder::new(program, print_ssa_passes)?
+        .run_pass(Ssa::defunctionalize, "After Defunctionalization:")
+        .run_pass(Ssa::inline_functions, "After Inlining:")
+        // Run mem2reg with the CFG separated into blocks
+        .run_pass(Ssa::mem2reg, "After Mem2Reg:")
+        .try_run_pass(Ssa::evaluate_assert_constant, "After Assert Constant:")?
+        .try_run_pass(Ssa::unroll_loops, "After Unrolling:")?
+        .run_pass(Ssa::simplify_cfg, "After Simplifying:")
+        // Run mem2reg before flattening to handle any promotion
+        // of values that can be accessed after loop unrolling.
+        // If there are slice mergers uncovered by loop unrolling
+        // and this pass is missed, slice merging will fail inside of flattening.
+        .run_pass(Ssa::mem2reg, "After Mem2Reg:")
+        .run_pass(Ssa::flatten_cfg, "After Flattening:")
+        // Run mem2reg once more with the flattened CFG to catch any remaining loads/stores
+        .run_pass(Ssa::mem2reg, "After Mem2Reg:")
+        .run_pass(Ssa::fold_constants, "After Constant Folding:")
+        .run_pass(Ssa::dead_instruction_elimination, "After Dead Instruction Elimination:")
+        .finish();
+
+    let brillig = ssa.to_brillig(print_brillig_trace);
+    let last_array_uses = ssa.find_last_array_uses();
+    ssa_to_plonky2(ssa)
+}
+
+pub fn create_circuit_plonky2(
+    context: &Context,
+    program: Program,
+    enable_ssa_logging: bool,
+    enable_brillig_logging: bool,
+) -> Result<Plonky2Circuit, RuntimeError> {
+    let generated_plonky2 = optimize_into_plonky2(program, enable_ssa_logging, enable_brillig_logging)?;
+    return Ok(generated_plonky2);
 }
 
 /// Compiles the [`Program`] into [`ACIR`][acvm::acir::circuit::Circuit].

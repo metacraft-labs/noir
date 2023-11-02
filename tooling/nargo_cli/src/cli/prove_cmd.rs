@@ -1,3 +1,5 @@
+use acvm::compiler::compile;
+use backend_interface::BackendError;
 use clap::Args;
 use nargo::constants::{PROVER_INPUT_FILE, VERIFIER_INPUT_FILE};
 use nargo::package::Package;
@@ -90,6 +92,8 @@ pub(crate) fn prove_package(
     let (inputs_map, _) =
         read_inputs_from_file(&package.root_dir, prover_name, Format::Toml, &compiled_program.abi)?;
 
+    // this is super idiotic, noir calculates its witness, does some stuff with it
+    // then we send it to plonky2 which calculates its own witness..
     let solved_witness = execute_program(&compiled_program, &inputs_map)?;
 
     // Write public inputs into Verifier.toml
@@ -105,12 +109,21 @@ pub(crate) fn prove_package(
         Format::Toml,
     )?;
 
-    let proof = backend.prove(&compiled_program.circuit, solved_witness, false)?;
+    let proof = compiled_program
+        .plonky2_circuit
+        .prove(inputs_map)
+        .ok_or(BackendError::CommandFailed("proof failed lol".to_owned()))?;
+    // let proof = backend.prove(&compiled_program.circuit, solved_witness, false)?;
 
     if check_proof {
         let public_inputs = public_abi.encode(&public_inputs, return_value)?;
-        let valid_proof =
-            backend.verify(&proof, public_inputs, &compiled_program.circuit, false)?;
+        // let valid_proof =
+        // backend.verify(&proof, public_inputs, &compiled_program.circuit, false)?;
+
+        let valid_proof = compiled_program
+            .plonky2_circuit
+            .verify(&proof, public_inputs)
+            .ok_or(CliError::Generic("error".to_owned()))?;
 
         if !valid_proof {
             return Err(CliError::InvalidProof("".into()));

@@ -2695,6 +2695,7 @@ dependencies = [
  "noirc_errors",
  "noirc_evaluator",
  "noirc_frontend",
+ "plonky2",
  "serde",
 ]
 
@@ -2725,6 +2726,7 @@ dependencies = [
  "num-bigint",
  "plonky2",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 

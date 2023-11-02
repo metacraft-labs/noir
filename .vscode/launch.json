@@ -1,0 +1,10 @@
+{
+    "configurations": [{
+        "type": "lldb",
+        "request": "launch",
+        "name": "Launch",
+        "program": "${workspaceFolder}/target/debug/nargo",
+        "args": ["prove"],
+        "cwd": "${workspaceFolder}/proj"
+    }]
+}

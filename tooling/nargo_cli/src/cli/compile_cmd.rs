@@ -177,22 +177,25 @@ fn compile_program(
     let program_artifact_path = workspace.package_build_path(package);
     let mut debug_artifact_path = program_artifact_path.clone();
     debug_artifact_path.set_file_name(format!("debug_{}.json", package.name));
-    let cached_program = if let (Ok(preprocessed_program), Ok(mut debug_artifact)) = (
-        read_program_from_file(program_artifact_path),
-        read_debug_artifact_from_file(debug_artifact_path),
-    ) {
-        Some(CompiledProgram {
-            hash: preprocessed_program.hash,
-            circuit: preprocessed_program.bytecode,
-            abi: preprocessed_program.abi,
-            noir_version: preprocessed_program.noir_version,
-            debug: debug_artifact.debug_symbols.remove(0),
-            file_map: debug_artifact.file_map,
-            warnings: debug_artifact.warnings,
-        })
-    } else {
-        None
-    };
+
+    let cached_program: Option<CompiledProgram> = None;
+
+    // let cached_program = if let (Ok(preprocessed_program), Ok(mut debug_artifact)) = (
+    //     read_program_from_file(program_artifact_path),
+    //     read_debug_artifact_from_file(debug_artifact_path),
+    // ) {
+    //     Some(CompiledProgram {
+    //         hash: preprocessed_program.hash,
+    //         circuit: preprocessed_program.bytecode,
+    //         abi: preprocessed_program.abi,
+    //         noir_version: preprocessed_program.noir_version,
+    //         debug: debug_artifact.debug_symbols.remove(0),
+    //         file_map: debug_artifact.file_map,
+    //         warnings: debug_artifact.warnings,
+    //     })
+    // } else {
+    //     None
+    // };
 
     let force_recompile =
         cached_program.as_ref().map_or(false, |p| p.noir_version != NOIR_ARTIFACT_VERSION_STRING);
