@@ -102,6 +102,8 @@ hex = "0.4.2"
 num-bigint = "0.4"
 num-traits = "0.2"
 
+plonky2 = "0.1.4"
+
 [profile.dev]
 # This is required to be able to run `cargo test` in acvm_js due to the `locals exceeds maximum` error.
 # See https://ritik-mishra.medium.com/resolving-the-wasm-pack-error-locals-exceed-maximum-ec3a9d96685b

@@ -44,7 +44,7 @@
 
       rustToolchain = fenix.packages.${system}.fromToolchainFile {
         file = ./rust-toolchain.toml;
-        sha256 = "sha256-Zk2rxv6vwKFkTTidgjPm6gDsseVmmljVt201H7zuDkk=";
+        sha256 = "sha256-LEzmVt0K3MeZe61P051wMlvhtLMKW5lk5ZvhULpRlv0=";
       };
 
       craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;

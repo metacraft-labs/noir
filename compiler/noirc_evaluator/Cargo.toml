@@ -18,3 +18,4 @@ thiserror.workspace = true
 num-bigint = "0.4"
 im = { version = "15.1", features = ["serde"] }
 serde.workspace = true
+plonky2 = "0.1.4"
