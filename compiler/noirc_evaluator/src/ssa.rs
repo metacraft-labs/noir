@@ -21,7 +21,7 @@ use noirc_abi::Abi;
 
 use noirc_frontend::{hir::Context, monomorphization::ast::Program};
 
-use self::{abi_gen::gen_abi, acir_gen::GeneratedAcir, ssa_gen::Ssa, plonky2_gen::{Plonky2Circuit, ssa_to_plonky2}};
+use self::{abi_gen::gen_abi, acir_gen::GeneratedAcir, ssa_gen::Ssa, plonky2_gen::{Plonky2Circuit, Builder}};
 
 pub mod abi_gen;
 mod acir_gen;
@@ -98,7 +98,7 @@ pub(crate) fn optimize_into_plonky2(
     // let dummy_input_witnesses = Vec::new();
 
     let abi = gen_abi(context, sig, &[], vec![]);
-    ssa_to_plonky2(ssa, abi)
+    Ok(Builder::new().build(ssa, abi))
 }
 
 pub fn create_circuit_plonky2(

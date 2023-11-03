@@ -1,23 +1,13 @@
-// TODO(plonky2)
-// this code currently assumes everything is a Field./ noir has multiple type systems (3 in fact)
-// but you're in luck because here we're we're dealing with the IR's type system which is the simplest of them all:
-// types include:
-//  - Field - the sane type
-//  - u32/i60/u44 - truncated signed/unsigned fields
-//  - [T, 100] - arrays
-//  - (T1, T2, T3) - tuples
-
 mod circuit;
 mod config;
 
 use acvm::FieldElement;
-pub use circuit::*;
 use noirc_abi::{Abi, AbiVisibility};
+pub use circuit::*;
 
 use std::collections::HashMap;
 
 use crate::{
-    errors::RuntimeError,
     ssa::ir::{
         instruction::Instruction,
         value::{Value, ValueId},
@@ -38,16 +28,16 @@ use super::{
 };
 
 
-struct State {
+pub(crate) struct Builder {
     builder: P2Builder,
     translation: HashMap<ValueId, Target>,
     dfg: DataFlowGraph,
 }
 
-impl State {
-    fn new() -> State {
+impl Builder {
+    pub(crate) fn new() -> Builder {
         let config = CircuitConfig::standard_recursion_config();
-        State {
+        Builder {
             dfg: DataFlowGraph::default(),
             builder: P2Builder::new(config),
             translation: HashMap::new(),
@@ -68,7 +58,7 @@ impl State {
                 .builder
                 .constant(noir_to_plonky2_field(constant)),
             _ => {
-                todo!("State::get() not implemented for value {:?}", value)
+                todo!("TODO(plonky2): State::get() not implemented for value {:?}", value)
             }
         }
     }
@@ -88,7 +78,7 @@ impl State {
                     super::ir::instruction::BinaryOp::Sub => self.builder.sub(lhs, rhs),
                     super::ir::instruction::BinaryOp::Mul => self.builder.mul(lhs, rhs),
                     super::ir::instruction::BinaryOp::Div => self.builder.div(lhs, rhs),
-                    _ => todo!(),
+                    _ => todo!("TODO(plonky2)"),
                 };
 
                 let destinations: Vec<_> =
@@ -103,7 +93,7 @@ impl State {
             }
             _ => {
                 todo!(
-                    "ssa -> plonky2 not implemented for instruction: {:?} <- {:?}",
+                    "TODO(plonky2): ssa -> plonky2 not implemented for instruction: {:?} <- {:?}",
                     self.dfg.instruction_results(instr_id),
                     instr
                 );
@@ -111,7 +101,7 @@ impl State {
         }
     }
 
-    fn ssa_to_plonky2(mut self, ssa: Ssa, abi: Abi) -> Plonky2Circuit {
+    pub(crate) fn build(mut self, ssa: Ssa, abi: Abi) -> Plonky2Circuit {
         // everything must be inlined after ssa optimizations
         assert!(ssa.functions.len() == 1);
 
@@ -152,10 +142,10 @@ impl State {
     }
 }
 
-pub(crate) fn ssa_to_plonky2(ssa: Ssa, abi: Abi) -> Result<Plonky2Circuit, RuntimeError> {
-    Ok(State::new().ssa_to_plonky2(ssa, abi))
-}
-
 pub(crate) fn noir_to_plonky2_field(field: FieldElement) -> P2Field {
+    // TODO(plonky2): Noir doesn't support the Goldilock field, FieldElement is 254 bit
+    //                if the user punches inin a large integer, we'll panic
+    //
+    // TODO(plonky2): this likely not worketh for negative numbers
     P2Field::from_canonical_u64(field.to_u128() as u64)
 }
