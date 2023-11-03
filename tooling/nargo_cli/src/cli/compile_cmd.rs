@@ -23,10 +23,8 @@ use clap::Args;
 use crate::backends::Backend;
 use crate::errors::{CliError, CompileError};
 
-use super::fs::program::{
-    read_debug_artifact_from_file, read_program_from_file, save_contract_to_file,
-    save_debug_artifact_to_file, save_program_to_file,
-};
+use super::fs::program::save_program_to_file;
+use super::fs::program::{save_contract_to_file, save_debug_artifact_to_file};
 use super::NargoConfig;
 use rayon::prelude::*;
 
@@ -177,22 +175,25 @@ fn compile_program(
     let program_artifact_path = workspace.package_build_path(package);
     let mut debug_artifact_path = program_artifact_path.clone();
     debug_artifact_path.set_file_name(format!("debug_{}.json", package.name));
-    let cached_program = if let (Ok(preprocessed_program), Ok(mut debug_artifact)) = (
-        read_program_from_file(program_artifact_path),
-        read_debug_artifact_from_file(debug_artifact_path),
-    ) {
-        Some(CompiledProgram {
-            hash: preprocessed_program.hash,
-            circuit: preprocessed_program.bytecode,
-            abi: preprocessed_program.abi,
-            noir_version: preprocessed_program.noir_version,
-            debug: debug_artifact.debug_symbols.remove(0),
-            file_map: debug_artifact.file_map,
-            warnings: debug_artifact.warnings,
-        })
-    } else {
-        None
-    };
+
+    let cached_program: Option<CompiledProgram> = None;
+
+    // let cached_program = if let (Ok(preprocessed_program), Ok(mut debug_artifact)) = (
+    //     read_program_from_file(program_artifact_path),
+    //     read_debug_artifact_from_file(debug_artifact_path),
+    // ) {
+    //     Some(CompiledProgram {
+    //         hash: preprocessed_program.hash,
+    //         circuit: preprocessed_program.bytecode,
+    //         abi: preprocessed_program.abi,
+    //         noir_version: preprocessed_program.noir_version,
+    //         debug: debug_artifact.debug_symbols.remove(0),
+    //         file_map: debug_artifact.file_map,
+    //         warnings: debug_artifact.warnings,
+    //     })
+    // } else {
+    //     None
+    // };
 
     let force_recompile =
         cached_program.as_ref().map_or(false, |p| p.noir_version != NOIR_ARTIFACT_VERSION_STRING);
@@ -223,7 +224,8 @@ fn compile_program(
         nargo::ops::optimize_program(program, np_language, &is_opcode_supported_pedersen_hash)
             .expect("Backend does not support an opcode that is in the IR");
 
-    save_program(optimized_program.clone(), package, &workspace.target_directory_path());
+    // TODO(plonky2): uncomment this when Clone is implemented for Plonky2Circuit
+    // save_program(optimized_program.clone(), package, &workspace.target_directory_path());
 
     (context.file_manager, Ok((optimized_program, warnings)))
 }
@@ -251,7 +253,7 @@ fn compile_contract(
     (context.file_manager, Ok((optimized_contract, warnings)))
 }
 
-fn save_program(program: CompiledProgram, package: &Package, circuit_dir: &Path) {
+fn _save_program(program: CompiledProgram, package: &Package, circuit_dir: &Path) {
     let preprocessed_program = PreprocessedProgram {
         hash: program.hash,
         backend: String::from(BACKEND_IDENTIFIER),

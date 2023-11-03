@@ -10,6 +10,7 @@ use iter_extended::vecmap;
 use noirc_abi::{AbiParameter, AbiType, ContractEvent};
 use noirc_errors::{CustomDiagnostic, FileDiagnostic};
 use noirc_evaluator::errors::RuntimeError;
+use noirc_evaluator::ssa::create_circuit_plonky2;
 use noirc_evaluator::{create_circuit, into_abi_params};
 use noirc_frontend::graph::{CrateId, CrateName};
 use noirc_frontend::hir::def_map::{Contract, CrateDefMap};
@@ -357,13 +358,17 @@ pub fn compile_no_check(
     }
 
     let (circuit, debug, abi, warnings) =
-        create_circuit(context, program, options.show_ssa, options.show_brillig)?;
+        create_circuit(context, program.clone(), options.show_ssa, options.show_brillig)?;
+
+    let p2_circuit =
+        create_circuit_plonky2(context, program, options.show_ssa, options.show_brillig)?;
 
     let file_map = filter_relevant_files(&[debug.clone()], &context.file_manager);
 
     Ok(CompiledProgram {
         hash,
         circuit,
+        plonky2_circuit: p2_circuit,
         debug,
         abi,
         file_map,

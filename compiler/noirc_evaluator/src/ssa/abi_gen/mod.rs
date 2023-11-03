@@ -44,7 +44,13 @@ pub(crate) fn gen_abi(
     let (parameters, return_type) = func_sig;
     let parameters = into_abi_params(context, parameters);
     let return_type = return_type.map(|typ| AbiType::from_type(context, &typ));
-    let param_witnesses = param_witnesses_from_abi_param(&parameters, input_witnesses);
+
+    let param_witnesses = if input_witnesses.len() == 0  {
+        BTreeMap::new() // we don't care about this.
+    } else {
+        param_witnesses_from_abi_param(&parameters, input_witnesses)
+    };
+
     Abi { parameters, return_type, param_witnesses, return_witnesses }
 }
 

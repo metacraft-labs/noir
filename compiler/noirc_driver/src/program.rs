@@ -6,6 +6,7 @@ use fm::FileId;
 use base64::Engine;
 use noirc_errors::debug_info::DebugInfo;
 use noirc_evaluator::errors::SsaReport;
+use noirc_evaluator::ssa::plonky2_gen::Plonky2Circuit;
 use serde::{de::Error as DeserializationError, ser::Error as SerializationError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -22,6 +23,10 @@ pub struct CompiledProgram {
 
     #[serde(serialize_with = "serialize_circuit", deserialize_with = "deserialize_circuit")]
     pub circuit: Circuit,
+
+    #[serde(skip_serializing)]
+    pub plonky2_circuit: Plonky2Circuit,
+
     pub abi: noirc_abi::Abi,
     pub debug: DebugInfo,
     pub file_map: BTreeMap<FileId, DebugFile>,
