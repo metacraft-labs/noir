@@ -23,10 +23,8 @@ use clap::Args;
 use crate::backends::Backend;
 use crate::errors::{CliError, CompileError};
 
-use super::fs::program::{
-    read_debug_artifact_from_file, read_program_from_file, save_contract_to_file,
-    save_debug_artifact_to_file, save_program_to_file,
-};
+use super::fs::program::save_program_to_file;
+use super::fs::program::{save_contract_to_file, save_debug_artifact_to_file};
 use super::NargoConfig;
 use rayon::prelude::*;
 
@@ -226,7 +224,8 @@ fn compile_program(
         nargo::ops::optimize_program(program, np_language, &is_opcode_supported_pedersen_hash)
             .expect("Backend does not support an opcode that is in the IR");
 
-    save_program(optimized_program.clone(), package, &workspace.target_directory_path());
+    // TODO(plonky2): uncomment this when Clone is implemented for Plonky2Circuit
+    // save_program(optimized_program.clone(), package, &workspace.target_directory_path());
 
     (context.file_manager, Ok((optimized_program, warnings)))
 }
@@ -254,7 +253,7 @@ fn compile_contract(
     (context.file_manager, Ok((optimized_contract, warnings)))
 }
 
-fn save_program(program: CompiledProgram, package: &Package, circuit_dir: &Path) {
+fn _save_program(program: CompiledProgram, package: &Package, circuit_dir: &Path) {
     let preprocessed_program = PreprocessedProgram {
         hash: program.hash,
         backend: String::from(BACKEND_IDENTIFIER),

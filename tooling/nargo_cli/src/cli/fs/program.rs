@@ -5,8 +5,6 @@ use nargo::artifacts::{
 };
 use noirc_frontend::graph::CrateName;
 
-use crate::errors::FilesystemError;
-
 use super::{create_named_dir, write_to_file};
 
 pub(crate) fn save_program_to_file<P: AsRef<Path>>(
@@ -46,28 +44,4 @@ fn save_build_artifact_to_file<P: AsRef<Path>, T: ?Sized + serde::Serialize>(
     write_to_file(&serde_json::to_vec(build_artifact).unwrap(), &circuit_path);
 
     circuit_path
-}
-
-pub(crate) fn read_program_from_file<P: AsRef<Path>>(
-    circuit_path: P,
-) -> Result<PreprocessedProgram, FilesystemError> {
-    let file_path = circuit_path.as_ref().with_extension("json");
-
-    let input_string =
-        std::fs::read(&file_path).map_err(|_| FilesystemError::PathNotValid(file_path))?;
-    let program = serde_json::from_slice(&input_string)
-        .map_err(|err| FilesystemError::ProgramSerializationError(err.to_string()))?;
-
-    Ok(program)
-}
-
-pub(crate) fn read_debug_artifact_from_file<P: AsRef<Path>>(
-    debug_artifact_path: P,
-) -> Result<DebugArtifact, FilesystemError> {
-    let input_string = std::fs::read(&debug_artifact_path)
-        .map_err(|_| FilesystemError::PathNotValid(debug_artifact_path.as_ref().into()))?;
-    let program = serde_json::from_slice(&input_string)
-        .map_err(|err| FilesystemError::ProgramSerializationError(err.to_string()))?;
-
-    Ok(program)
 }

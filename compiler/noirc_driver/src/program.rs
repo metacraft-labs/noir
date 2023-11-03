@@ -23,7 +23,10 @@ pub struct CompiledProgram {
 
     #[serde(serialize_with = "serialize_circuit", deserialize_with = "deserialize_circuit")]
     pub circuit: Circuit,
+
+    #[serde(skip_serializing)]
     pub plonky2_circuit: Plonky2Circuit,
+
     pub abi: noirc_abi::Abi,
     pub debug: DebugInfo,
     pub file_map: BTreeMap<FileId, DebugFile>,

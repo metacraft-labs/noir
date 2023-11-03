@@ -2695,7 +2695,6 @@ dependencies = [
  "noirc_errors",
  "noirc_evaluator",
  "noirc_frontend",
- "plonky2",
  "serde",
 ]
 

@@ -1,4 +1,3 @@
-use acvm::compiler::compile;
 use backend_interface::BackendError;
 use clap::Args;
 use nargo::constants::{PROVER_INPUT_FILE, VERIFIER_INPUT_FILE};
@@ -80,7 +79,7 @@ pub(crate) fn run(
 }
 
 pub(crate) fn prove_package(
-    backend: &Backend,
+    _backend: &Backend,
     workspace: &Workspace,
     package: &Package,
     compiled_program: CompiledProgram,
@@ -92,14 +91,18 @@ pub(crate) fn prove_package(
     let (inputs_map, _) =
         read_inputs_from_file(&package.root_dir, prover_name, Format::Toml, &compiled_program.abi)?;
 
-    // this is super idiotic, noir calculates its witness, does some stuff with it
-    // then we send it to plonky2 which calculates its own witness..
+
+    // TODO(plonky2):
+    // this is dumb, noir calculates its witness, does some stuff with it, then we send the SSA IR to 
+    // plonky2 which will calculate its own witness.. Note that we rely on execute_program() to emit
+    // "Constraint failed" errors when the program fails to prove.
     let solved_witness = execute_program(&compiled_program, &inputs_map)?;
 
     // Write public inputs into Verifier.toml
     let public_abi = compiled_program.abi.public_abi();
     let (public_inputs, return_value) = public_abi.decode(&solved_witness)?;
 
+    // TODO(plonky2): this likely doesn't work properly, as its based on the noir witness
     write_inputs_to_file(
         &public_inputs,
         &return_value,
@@ -109,21 +112,20 @@ pub(crate) fn prove_package(
         Format::Toml,
     )?;
 
+    // TODO(plonky2): plonky2 prove can fail, but probably shouldn't, since if we're here
+    //                noir managed to calculate a witness.
     let proof = compiled_program
         .plonky2_circuit
-        .prove(inputs_map)
-        .ok_or(BackendError::CommandFailed("proof failed lol".to_owned()))?;
-    // let proof = backend.prove(&compiled_program.circuit, solved_witness, false)?;
+        .prove(&inputs_map)
+        .ok_or(BackendError::CommandFailed("???".to_owned()))?;
 
     if check_proof {
         let public_inputs = public_abi.encode(&public_inputs, return_value)?;
-        // let valid_proof =
-        // backend.verify(&proof, public_inputs, &compiled_program.circuit, false)?;
 
         let valid_proof = compiled_program
             .plonky2_circuit
             .verify(&proof, public_inputs)
-            .ok_or(CliError::Generic("error".to_owned()))?;
+            .ok_or(CliError::Generic("?!?".to_owned()))?;
 
         if !valid_proof {
             return Err(CliError::InvalidProof("".into()));

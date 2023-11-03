@@ -5,6 +5,7 @@
         "name": "Launch",
         "program": "${workspaceFolder}/target/debug/nargo",
         "args": ["prove"],
-        "cwd": "${workspaceFolder}/proj"
+        "cwd": "${workspaceFolder}/proj",
+        "preLaunchTask": "rust: cargo build",
     }]
 }

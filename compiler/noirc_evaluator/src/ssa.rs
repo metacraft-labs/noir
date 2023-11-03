@@ -68,11 +68,13 @@ pub(crate) fn optimize_into_acir(
 /// convert the final SSA into ACIR and return it.
 /// @CopyPasta from optimize_into_acir
 pub(crate) fn optimize_into_plonky2(
+    context: &Context,
     program: Program,
     print_ssa_passes: bool,
-    print_brillig_trace: bool,
 ) -> Result<Plonky2Circuit, RuntimeError> {
-    let abi_distinctness = program.return_distinctness;
+    let sig = program.main_function_signature.clone();
+
+    let _abi_distinctness = program.return_distinctness;
     let ssa = SsaBuilder::new(program, print_ssa_passes)?
         .run_pass(Ssa::defunctionalize, "After Defunctionalization:")
         .run_pass(Ssa::inline_functions, "After Inlining:")
@@ -93,18 +95,19 @@ pub(crate) fn optimize_into_plonky2(
         .run_pass(Ssa::dead_instruction_elimination, "After Dead Instruction Elimination:")
         .finish();
 
-    let brillig = ssa.to_brillig(print_brillig_trace);
-    let last_array_uses = ssa.find_last_array_uses();
-    ssa_to_plonky2(ssa)
+    // let dummy_input_witnesses = Vec::new();
+
+    let abi = gen_abi(context, sig, &[], vec![]);
+    ssa_to_plonky2(ssa, abi)
 }
 
 pub fn create_circuit_plonky2(
     context: &Context,
     program: Program,
     enable_ssa_logging: bool,
-    enable_brillig_logging: bool,
+    _enable_brillig_logging: bool,
 ) -> Result<Plonky2Circuit, RuntimeError> {
-    let generated_plonky2 = optimize_into_plonky2(program, enable_ssa_logging, enable_brillig_logging)?;
+    let generated_plonky2 = optimize_into_plonky2(context, program, enable_ssa_logging)?;
     return Ok(generated_plonky2);
 }
 
