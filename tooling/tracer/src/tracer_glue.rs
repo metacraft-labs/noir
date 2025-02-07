@@ -115,6 +115,22 @@ fn register_value(
                 )
             }
         }
+        PrintableType::SignedInteger { width } => {
+            if let PrintableValue::Field(field_value) = value {
+                let mut noir_type_name = String::new();
+                if let Err(err) = write!(&mut noir_type_name, "u{width}") {
+                    panic!("failed to generate Noir type name: {err}");
+                }
+                let type_id =
+                    tracer.ensure_type_id(runtime_tracing::TypeKind::Int, &noir_type_name);
+                ValueRecord::Int { i: field_value.to_i128() as i64, type_id }
+            } else {
+                panic!(
+                    "type-value mismatch: value: {:?} does not match type SignedInteger",
+                    value
+                )
+            }
+        }
         PrintableType::Boolean => {
             if let PrintableValue::Field(field_value) = value {
                 let type_id = tracer.ensure_type_id(runtime_tracing::TypeKind::Bool, "Bool");
