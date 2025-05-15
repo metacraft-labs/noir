@@ -4457,8 +4457,8 @@ checksum = "afab94fb28594581f62d981211a9a4d53cc8130bbcbbb89a0440d9b8e81a7746"
 
 [[package]]
 name = "runtime_tracing"
-version = "0.6.1"
-source = "git+https://github.com/metacraft-labs/runtime_tracing.git?tag=0.6.1#0088d534fcd99cc5424ea40d440b8a8e6a08a0b0"
+version = "0.10.0"
+source = "git+https://github.com/metacraft-labs/runtime_tracing.git?tag=0.10.0#1be514a1f96506ae24d945f204bb5cb415c8bd34"
 dependencies = [
  "num-derive",
  "num-traits",
