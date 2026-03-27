@@ -39,7 +39,7 @@ pub(crate) struct TraceCommand {
 
     /// Directory where to store trace.json
     #[clap(long, short)]
-    trace_dir: String,
+    out_dir: String,
 
     /// Insert plonky2 information to the trace file
     #[arg(long)]
@@ -146,7 +146,7 @@ pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliErro
         compiled_program,
         package,
         &args.prover_name,
-        &args.trace_dir,
+        &args.out_dir,
         debug_trace_list,
         args.compile_options.pedantic_solving,
     )
@@ -156,7 +156,7 @@ fn trace_program_and_decode(
     program: CompiledProgram,
     package: &Package,
     prover_name: &str,
-    trace_dir: &str,
+    out_dir: &str,
     debug_trace_list: Option<DebugTraceList>,
     pedantic_solving: bool,
 ) -> Result<(), CliError> {
@@ -168,7 +168,7 @@ fn trace_program_and_decode(
         &program,
         &package.name,
         &inputs_map,
-        trace_dir,
+        out_dir,
         debug_trace_list,
         pedantic_solving,
     )
@@ -178,7 +178,7 @@ pub(crate) fn trace_program(
     compiled_program: &CompiledProgram,
     crate_name: &CrateName,
     inputs_map: &InputMap,
-    trace_dir: &str,
+    out_dir: &str,
     debug_trace_list: Option<DebugTraceList>,
     pedantic_solving: bool,
 ) -> Result<(), CliError> {
@@ -205,7 +205,7 @@ pub(crate) fn trace_program(
         Ok(()) => (),
     };
 
-    store_trace(tracer, trace_dir);
+    store_trace(tracer, out_dir);
 
     Ok(())
 }
