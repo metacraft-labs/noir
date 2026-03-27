@@ -12,8 +12,8 @@ use tracing::warn;
 
 /// Stores the trace accumulated in `tracer` in the specified directory. The trace is stored as
 /// multiple JSON files.
-pub fn store_trace(tracer: Tracer, trace_dir: &str) {
-    let trace_path = Path::new(trace_dir).join("trace.json");
+pub fn store_trace(tracer: Tracer, out_dir: &str) {
+    let trace_path = Path::new(out_dir).join("trace.json");
     let mut storing_errors = false;
     match tracer.store_trace_events(&trace_path) {
         Ok(_) => {}
@@ -23,7 +23,7 @@ pub fn store_trace(tracer: Tracer, trace_dir: &str) {
         }
     }
 
-    let trace_path = Path::new(trace_dir).join("trace_metadata.json");
+    let trace_path = Path::new(out_dir).join("trace_metadata.json");
     match tracer.store_trace_metadata(&trace_path) {
         Ok(_) => {}
         Err(err) => {
@@ -32,7 +32,7 @@ pub fn store_trace(tracer: Tracer, trace_dir: &str) {
         }
     }
 
-    let trace_path = Path::new(trace_dir).join("trace_paths.json");
+    let trace_path = Path::new(out_dir).join("trace_paths.json");
     match tracer.store_trace_paths(&trace_path) {
         Ok(_) => {}
         Err(err) => {
@@ -41,7 +41,7 @@ pub fn store_trace(tracer: Tracer, trace_dir: &str) {
         }
     }
     if !storing_errors {
-        println!("Saved trace to {}", trace_dir);
+        println!("Saved trace to {}", out_dir);
     }
 }
 
