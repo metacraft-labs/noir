@@ -64,7 +64,7 @@ pub(crate) struct TraceCommand {
 
     /// Directory where to store trace.json
     #[clap(long, short)]
-    trace_dir: String,
+    out_dir: String,
 
     /// The trace file format to use ('binary' or 'json')
     #[arg(value_parser = clap::value_parser!(TraceFormat))]
@@ -110,7 +110,7 @@ pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliErro
         compiled_program,
         package,
         &args.prover_name,
-        &args.trace_dir,
+        &args.out_dir,
         args.compile_options.pedantic_solving,
         trace_format,
     )
@@ -120,7 +120,7 @@ fn trace_program_and_decode(
     program: CompiledProgram,
     package: &Package,
     prover_name: &str,
-    trace_dir: &str,
+    out_dir: &str,
     pedantic_solving: bool,
     trace_format: TraceEventsFileFormat,
 ) -> Result<(), CliError> {
@@ -128,14 +128,14 @@ fn trace_program_and_decode(
     let (inputs_map, _) =
         read_inputs_from_file(&package.root_dir, prover_name, Format::Toml, &program.abi)?;
 
-    trace_program(&program, &package.name, &inputs_map, trace_dir, pedantic_solving, trace_format)
+    trace_program(&program, &package.name, &inputs_map, out_dir, pedantic_solving, trace_format)
 }
 
 pub(crate) fn trace_program(
     compiled_program: &CompiledProgram,
     crate_name: &CrateName,
     inputs_map: &InputMap,
-    trace_dir: &str,
+    out_dir: &str,
     pedantic_solving: bool,
     trace_format: TraceEventsFileFormat,
 ) -> Result<(), CliError> {
@@ -148,7 +148,7 @@ pub(crate) fn trace_program(
 
     let crate_name_string: String = crate_name.into();
     let mut tracer = create_trace_writer(crate_name_string.as_str(), &[], trace_format);
-    begin_trace(&mut *tracer, trace_dir, trace_format);
+    begin_trace(&mut *tracer, out_dir, trace_format);
     if let Err(error) = noir_tracer::trace_circuit(
         &Bn254BlackBoxSolver(pedantic_solving),
         &compiled_program.program.functions,
@@ -161,7 +161,7 @@ pub(crate) fn trace_program(
         return Err(CliError::from(error));
     };
 
-    finish_trace(&mut *tracer, trace_dir);
+    finish_trace(&mut *tracer, out_dir);
 
     Ok(())
 }
