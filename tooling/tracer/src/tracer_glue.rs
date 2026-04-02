@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 
 pub fn begin_trace(
     tracer: &mut dyn TraceWriter,
-    trace_dir: &str,
+    out_dir: &str,
     trace_format: TraceEventsFileFormat,
 ) {
-    let trace_path = Path::new(trace_dir).join(match trace_format {
+    let trace_path = Path::new(out_dir).join(match trace_format {
         TraceEventsFileFormat::Json => "trace.json",
         TraceEventsFileFormat::BinaryV0 | TraceEventsFileFormat::Binary => "trace.bin",
     });
@@ -23,7 +23,7 @@ pub fn begin_trace(
         }
     }
 
-    let trace_path = Path::new(trace_dir).join("trace_metadata.json");
+    let trace_path = Path::new(out_dir).join("trace_metadata.json");
     match TraceWriter::begin_writing_trace_metadata(tracer, &trace_path) {
         Ok(_) => {}
         Err(err) => {
@@ -31,7 +31,7 @@ pub fn begin_trace(
         }
     }
 
-    let trace_path = Path::new(trace_dir).join("trace_paths.json");
+    let trace_path = Path::new(out_dir).join("trace_paths.json");
     match TraceWriter::begin_writing_trace_paths(tracer, &trace_path) {
         Ok(_) => {}
         Err(err) => {
@@ -42,7 +42,7 @@ pub fn begin_trace(
 
 /// Stores the trace accumulated in `tracer` in the specified directory. The trace is stored as
 /// multiple JSON files.
-pub fn finish_trace(tracer: &mut dyn TraceWriter, trace_dir: &str) {
+pub fn finish_trace(tracer: &mut dyn TraceWriter, out_dir: &str) {
     let mut storing_errors = false;
     match TraceWriter::finish_writing_trace_events(tracer) {
         Ok(_) => {}
@@ -68,7 +68,7 @@ pub fn finish_trace(tracer: &mut dyn TraceWriter, trace_dir: &str) {
         }
     }
     if !storing_errors {
-        println!("Saved trace to {}", trace_dir);
+        println!("Saved trace to {}", out_dir);
     }
 }
 
