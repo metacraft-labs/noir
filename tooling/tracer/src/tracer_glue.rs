@@ -3,72 +3,47 @@ use crate::{SourceLocation, StackFrame, stack_frame::Variable};
 use acvm::FieldElement;
 use acvm::acir::AcirField; // necessary, for `to_i128` to work
 use codetracer_trace_types::{EventLogKind, FullValueRecord, Line, TypeKind, ValueRecord};
-use codetracer_trace_writer::{TraceEventsFileFormat, trace_writer::TraceWriter};
+use codetracer_trace_writer::trace_writer::TraceWriter;
 use noirc_printable_type::{PrintableType, PrintableValue};
 use std::path::{Path, PathBuf};
 
-pub fn begin_trace(
-    tracer: &mut dyn TraceWriter,
-    out_dir: &str,
-    trace_format: TraceEventsFileFormat,
-) {
-    let trace_path = Path::new(out_dir).join(match trace_format {
-        TraceEventsFileFormat::Json => "trace.json",
-        TraceEventsFileFormat::BinaryV0 | TraceEventsFileFormat::Binary => "trace.bin",
-    });
+/// Initialize the trace writer for emitting a CTFS `.ct` container.
+///
+/// The writer (a `CtfsTraceWriter` from `codetracer_trace_writer`) packages
+/// events, metadata and source paths into a single `<program>.ct` file in
+/// `out_dir`. The `program` argument is used both as the file basename and
+/// embedded in the container's `meta.json`. No legacy
+/// `trace.json` / `trace_metadata.json` / `trace_paths.json` sidecars are
+/// emitted — the codetracer db-backend has rejected those bundles since the
+/// 2026-05 convention compliance pass (see
+/// `codetracer-specs/Trace-Files/CTFS-Migration-Guide.md`).
+pub fn begin_trace(tracer: &mut dyn TraceWriter, out_dir: &str, program: &str) {
+    // `CtfsTraceWriter::begin_writing_trace_events` derives the actual `.ct`
+    // path by replacing the supplied path's extension with `.ct`. Passing
+    // `<out_dir>/<program>` therefore yields `<out_dir>/<program>.ct`.
+    let trace_path = Path::new(out_dir).join(program);
     match TraceWriter::begin_writing_trace_events(tracer, &trace_path) {
         Ok(_) => {}
         Err(err) => {
-            panic!("Error: trace writer failed to begin writing trace events: {err}")
-        }
-    }
-
-    let trace_path = Path::new(out_dir).join("trace_metadata.json");
-    match TraceWriter::begin_writing_trace_metadata(tracer, &trace_path) {
-        Ok(_) => {}
-        Err(err) => {
-            panic!("Error: trace writer failed to begin writing trace metadata: {err}")
-        }
-    }
-
-    let trace_path = Path::new(out_dir).join("trace_paths.json");
-    match TraceWriter::begin_writing_trace_paths(tracer, &trace_path) {
-        Ok(_) => {}
-        Err(err) => {
-            panic!("Error: trace writer failed to begin writing trace paths: {err}")
+            panic!("Error: trace writer failed to begin writing CTFS container: {err}")
         }
     }
 }
 
-/// Stores the trace accumulated in `tracer` in the specified directory. The trace is stored as
-/// multiple JSON files.
+/// Finalize the CTFS container produced by `tracer`.
+///
+/// Internally writes the `events.log`, `events.fmt`, `meta.json` and
+/// `paths.json` streams into the `.ct` file and closes it. Any error is
+/// reported but not propagated — the partial container is still useful for
+/// post-mortem inspection.
 pub fn finish_trace(tracer: &mut dyn TraceWriter, out_dir: &str) {
-    let mut storing_errors = false;
     match TraceWriter::finish_writing_trace_events(tracer) {
-        Ok(_) => {}
-        Err(err) => {
-            storing_errors = true;
-            println!("Warning: trace writer failed to finish writing trace events: {err}")
+        Ok(_) => {
+            println!("Saved trace to {}", out_dir);
         }
-    }
-
-    match TraceWriter::finish_writing_trace_metadata(tracer) {
-        Ok(_) => {}
         Err(err) => {
-            storing_errors = true;
-            println!("Warning: trace writer failed to finish writing trace metadata: {err}")
+            println!("Warning: trace writer failed to finalize CTFS container: {err}")
         }
-    }
-
-    match TraceWriter::finish_writing_trace_paths(tracer) {
-        Ok(_) => {}
-        Err(err) => {
-            storing_errors = true;
-            println!("Warning: trace writer failed to finish writing trace paths: {err}")
-        }
-    }
-    if !storing_errors {
-        println!("Saved trace to {}", out_dir);
     }
 }
 
@@ -321,11 +296,16 @@ pub(crate) fn register_return(tracer: &mut dyn TraceWriter, return_value: &Optio
 }
 
 pub(crate) fn register_print(tracer: &mut dyn TraceWriter, s: &str) {
-    TraceWriter::register_special_event(tracer, EventLogKind::Write, s);
+    // The newer `register_special_event` API takes a `metadata` parameter
+    // (used by other recorders to tag the originating command/syscall).  Noir
+    // print events have no such tag, so we pass an empty string — matching
+    // the convention used by the shell recorders (see
+    // `ct-shell-trace-writer/src/trace_bridge.rs`).
+    TraceWriter::register_special_event(tracer, EventLogKind::Write, "", s);
 }
 
 pub(crate) fn register_error(tracer: &mut dyn TraceWriter, s: &str) {
-    TraceWriter::register_special_event(tracer, EventLogKind::Error, s);
+    TraceWriter::register_special_event(tracer, EventLogKind::Error, "", s);
 }
 
 fn printable_type_to_kind_and_name(

@@ -1120,10 +1120,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codetracer_ctfs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ureq",
+ "urlencoding",
+ "zstd",
+]
+
+[[package]]
 name = "codetracer_trace_format_capnp"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37ce75c3c44afe5100f2a163ef819dc6eeb9ead0729f05f78e2962b695be34f4"
+version = "0.16.1"
 dependencies = [
  "capnp",
  "capnpc",
@@ -1133,14 +1143,10 @@ dependencies = [
 [[package]]
 name = "codetracer_trace_format_cbor_zstd"
 version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b49be80d50bce87f88251c9488c54e5441569ee60f0f0056a63792f6944ff2d9"
 
 [[package]]
 name = "codetracer_trace_types"
-version = "0.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07b47e5a4d95c527858f0ae4b3950a6bb12f8d46ad655497335a4145b1c4cc57"
+version = "0.16.3"
 dependencies = [
  "base64",
  "num-derive",
@@ -1154,15 +1160,16 @@ dependencies = [
 
 [[package]]
 name = "codetracer_trace_writer"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3faa682f020df7ca7ba654df7016a540bf589626d006fb4de03fd1c8a11b5cbb"
+version = "0.17.3"
 dependencies = [
  "cbor4ii",
+ "codetracer_ctfs",
  "codetracer_trace_format_capnp",
  "codetracer_trace_format_cbor_zstd",
  "codetracer_trace_types",
+ "num-traits",
  "ruzstd",
+ "serde",
  "serde_json",
  "zeekstd",
 ]
@@ -6855,6 +6862,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "url",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6866,6 +6891,12 @@ dependencies = [
  "serde",
  "serde_derive",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf8_iter"
@@ -7096,6 +7127,24 @@ name = "webpki-root-certs"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36a29fc0408b113f68cf32637857ab740edfafdf460c326cd2afaa2d84cc05dc"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.7",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -7701,6 +7750,15 @@ name = "zmij"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fc5a66a20078bf1251bde995aa2fdcc4b800c70b5d92dd2c62abc5c60f679f8"
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
 
 [[package]]
 name = "zstd-safe"

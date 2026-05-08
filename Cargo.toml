@@ -125,8 +125,16 @@ noirc_artifacts_info = { path = "tooling/noirc_artifacts_info" }
 noir_artifact_cli = { path = "tooling/artifact_cli" }
 noir_ssa_executor = { path = "tooling/ssa_executor" }
 noir_ast_fuzzer = { path = "tooling/ast_fuzzer" }
-codetracer_trace_types = "0.16.2"
-codetracer_trace_writer = "0.17.0"
+# Use the sibling `codetracer-trace-format` workspace via path dependencies
+# rather than the older 0.17.0 release on crates.io.  The local crate
+# (>= 0.17.3) contains `CtfsTraceWriter`, which is required to emit the
+# single-file `.ct` CTFS container that the codetracer db-backend now
+# accepts as its only materialized-trace bundle.  The legacy
+# trace.json + trace_metadata.json + trace_paths.json triplet was
+# retired in the 2026-05 convention pass — see
+# `codetracer-specs/Trace-Files/CTFS-Migration-Guide.md`.
+codetracer_trace_types = { path = "../codetracer-trace-format/codetracer_trace_types" }
+codetracer_trace_writer = { path = "../codetracer-trace-format/codetracer_trace_writer" }
 
 # Arkworks
 ark-bn254 = { version = "^0.5.0", default-features = false, features = [
