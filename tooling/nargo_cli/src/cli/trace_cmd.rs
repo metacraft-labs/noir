@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use bn254_blackbox_solver::Bn254BlackBoxSolver;
 use clap::Args;
 
@@ -23,32 +21,14 @@ use codetracer_trace_writer::{create_trace_writer, TraceEventsFileFormat};
 
 use super::NargoConfig;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TraceFormat {
-    /// Binary format version 1 (latest)
-    Binary,
-
-    /// Binary format version 0
-    BinaryV0,
-
-    /// JSON text format
-    Json
-}
-
-impl FromStr for TraceFormat {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "binary" => Ok(Self::Binary),
-            "binaryv0" => Ok(Self::BinaryV0),
-            "json" => Ok(Self::Json),
-            other => Err(format!("Unknown trace format '{other}'")),
-        }
-    }
-}
-
-/// Compile the program and its secret execution trace into ACIR format
+/// Compile the program and record its execution trace into a CTFS `.ct`
+/// container.
+///
+/// CTFS-only.  The previous `--trace-format binary|binaryv0|json` selector
+/// was removed in the 2026-05 convention compliance pass — codetracer's
+/// db-backend now accepts only the single-file `.ct` bundle for
+/// materialized traces.  See
+/// `codetracer-specs/Trace-Files/CTFS-Migration-Guide.md`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct TraceCommand {
     /// The name of the toml file which contains the inputs for the prover
@@ -62,25 +42,14 @@ pub(crate) struct TraceCommand {
     #[clap(flatten)]
     compile_options: CompileOptions,
 
-    /// Directory where to store trace.json
+    /// Directory where to store the `<package>.ct` CTFS container.
     #[clap(long, short)]
     out_dir: String,
-
-    /// The trace file format to use ('binary' or 'json')
-    #[arg(value_parser = clap::value_parser!(TraceFormat))]
-    #[clap(long, default_value = "binary")]
-    trace_format: TraceFormat,
 }
 
 pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliError> {
     let acir_mode = false;
     let skip_instrumentation = false;
-
-    let trace_format = match args.trace_format {
-        TraceFormat::Binary => TraceEventsFileFormat::Binary,
-        TraceFormat::BinaryV0 => TraceEventsFileFormat::BinaryV0,
-        TraceFormat::Json => TraceEventsFileFormat::Json,
-    };
 
     let toml_path = get_package_manifest(&config.program_dir)?;
     let selection = args.package.map_or(PackageSelection::DefaultOrAll, PackageSelection::Selected);
@@ -112,7 +81,6 @@ pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliErro
         &args.prover_name,
         &args.out_dir,
         args.compile_options.pedantic_solving,
-        trace_format,
     )
 }
 
@@ -122,13 +90,12 @@ fn trace_program_and_decode(
     prover_name: &str,
     out_dir: &str,
     pedantic_solving: bool,
-    trace_format: TraceEventsFileFormat,
 ) -> Result<(), CliError> {
     // Parse the initial witness values from Prover.toml
     let (inputs_map, _) =
         read_inputs_from_file(&package.root_dir, prover_name, Format::Toml, &program.abi)?;
 
-    trace_program(&program, &package.name, &inputs_map, out_dir, pedantic_solving, trace_format)
+    trace_program(&program, &package.name, &inputs_map, out_dir, pedantic_solving)
 }
 
 pub(crate) fn trace_program(
@@ -137,7 +104,6 @@ pub(crate) fn trace_program(
     inputs_map: &InputMap,
     out_dir: &str,
     pedantic_solving: bool,
-    trace_format: TraceEventsFileFormat,
 ) -> Result<(), CliError> {
     let initial_witness = compiled_program.abi.encode(inputs_map, None)?;
 
@@ -147,8 +113,12 @@ pub(crate) fn trace_program(
     };
 
     let crate_name_string: String = crate_name.into();
-    let mut tracer = create_trace_writer(crate_name_string.as_str(), &[], trace_format);
-    begin_trace(&mut *tracer, out_dir, trace_format);
+    // CTFS is the only trace format nargo emits; the writer factory is kept
+    // for symmetry with other recorders and to centralize the format choice
+    // in `codetracer_trace_writer`.
+    let mut tracer =
+        create_trace_writer(crate_name_string.as_str(), &[], TraceEventsFileFormat::Ctfs);
+    begin_trace(&mut *tracer, out_dir, &crate_name_string);
     if let Err(error) = noir_tracer::trace_circuit(
         &Bn254BlackBoxSolver(pedantic_solving),
         &compiled_program.program.functions,
