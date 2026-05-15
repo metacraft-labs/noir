@@ -19,3 +19,11 @@ noirc_printable_type.workspace = true
 codetracer_trace_types.workspace = true
 codetracer_trace_writer.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+# Round 1 strict `_via_ct_print_full` tests in `tests/test_tracer.rs`
+# spawn `nargo trace ...` per fixture, then pipe the resulting `.ct`
+# bundle through `codetracer-trace-format-nim/ct-print --full
+# --strip-paths` and assert on the decoded JSON.
+serde_json.workspace = true
+tempfile.workspace = true

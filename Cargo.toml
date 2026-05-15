@@ -134,7 +134,14 @@ noir_ast_fuzzer = { path = "tooling/ast_fuzzer" }
 # retired in the 2026-05 convention pass — see
 # `codetracer-specs/Trace-Files/CTFS-Migration-Guide.md`.
 codetracer_trace_types = { path = "../codetracer-trace-format/codetracer_trace_types" }
-codetracer_trace_writer = { path = "../codetracer-trace-format/codetracer_trace_writer" }
+# Use the Nim-FFI-backed writer so the produced .ct container uses the v4
+# multi-stream layout that `ct-print --full` understands.  The pure-Rust
+# writer (`codetracer_trace_writer`) emits a SplitBinary single-shard
+# variant that the Nim ct-print decoder cannot read, which makes strict
+# `_via_ct_print_full` testing impossible.  All sibling recorders
+# (Cairo, Leo, Circom, ...) use this dependency too — see
+# `codetracer-specs/Planned-Features/Smart-Contract-Languages/Noir-Aztec.status.org`.
+codetracer_trace_writer = { path = "../codetracer-trace-format/codetracer_trace_writer_nim", package = "codetracer_trace_writer_nim" }
 
 # Arkworks
 ark-bn254 = { version = "^0.5.0", default-features = false, features = [
