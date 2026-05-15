@@ -9,25 +9,54 @@ use std::path::{Path, PathBuf};
 
 /// Initialize the trace writer for emitting a CTFS `.ct` container.
 ///
-/// The writer (a `CtfsTraceWriter` from `codetracer_trace_writer`) packages
-/// events, metadata and source paths into a single `<program>.ct` file in
-/// `out_dir`. The `program` argument is used both as the file basename and
-/// embedded in the container's `meta.json`. No legacy
-/// `trace.json` / `trace_metadata.json` / `trace_paths.json` sidecars are
-/// emitted — the codetracer db-backend has rejected those bundles since the
-/// 2026-05 convention compliance pass (see
+/// The writer is a `NimTraceWriter` from `codetracer_trace_writer_nim`,
+/// re-exported under the `codetracer_trace_writer` crate name via a
+/// `package = "..."` rename in the workspace `Cargo.toml`.  The Nim-FFI
+/// backend writes the v4 multi-stream layout that
+/// `codetracer-trace-format-nim/ct-print` understands; the pure-Rust
+/// `codetracer_trace_writer` produced a SplitBinary single-shard variant
+/// the decoder cannot read.
+///
+/// The writer packages events, metadata and source paths into a single
+/// `<program>.ct` file in `out_dir`. The `program` argument is used both
+/// as the file basename and embedded in the container's `meta.json`.
+/// No legacy `trace.json` / `trace_metadata.json` / `trace_paths.json`
+/// sidecars are emitted — the codetracer db-backend has rejected those
+/// bundles since the 2026-05 convention compliance pass (see
 /// `codetracer-specs/Trace-Files/CTFS-Migration-Guide.md`).
 pub fn begin_trace(tracer: &mut dyn TraceWriter, out_dir: &str, program: &str) {
-    // `CtfsTraceWriter::begin_writing_trace_events` derives the actual `.ct`
-    // path by replacing the supplied path's extension with `.ct`. Passing
+    // The Nim writer derives the actual `.ct` path by replacing the
+    // supplied path's extension with `.ct`. Passing
     // `<out_dir>/<program>` therefore yields `<out_dir>/<program>.ct`.
     let trace_path = Path::new(out_dir).join(program);
-    match TraceWriter::begin_writing_trace_events(tracer, &trace_path) {
-        Ok(_) => {}
-        Err(err) => {
-            panic!("Error: trace writer failed to begin writing CTFS container: {err}")
-        }
+    if let Err(err) = TraceWriter::begin_writing_trace_events(tracer, &trace_path) {
+        panic!("Error: trace writer failed to begin writing CTFS container: {err}")
     }
+    // Other recorders (Cairo, Leo, Circom) also call begin_writing_trace_metadata /
+    // begin_writing_trace_paths so the v4 reader sees a complete bundle.  These
+    // two calls register sidecar paths internally but the actual on-disk
+    // representation is still the single `.ct` file.
+    let metadata_path = Path::new(out_dir).join("trace_metadata.json");
+    if let Err(err) = TraceWriter::begin_writing_trace_metadata(tracer, &metadata_path) {
+        panic!("Error: trace writer failed to begin writing CTFS metadata: {err}")
+    }
+    let paths_path = Path::new(out_dir).join("trace_paths.json");
+    if let Err(err) = TraceWriter::begin_writing_trace_paths(tracer, &paths_path) {
+        panic!("Error: trace writer failed to begin writing CTFS paths: {err}")
+    }
+
+    // Bake the workdir into the metadata so `ct-print --strip-paths` can
+    // normalise it.  Cairo / Leo do the same.
+    if let Ok(cwd) = std::env::current_dir() {
+        TraceWriter::set_workdir(tracer, &cwd);
+    }
+
+    // `start()` registers the implicit top-level frame and pins the
+    // `NONE_TYPE_ID` invariant the writer relies on.  Skipping it leaves
+    // the trace without a function-table entry for "<toplevel>", which
+    // ct-print's v4 reader treats as a structural error.
+    let main_path = Path::new(out_dir).join(program);
+    TraceWriter::start(tracer, &main_path, Line(1));
 }
 
 /// Finalize the CTFS container produced by `tracer`.
@@ -37,14 +66,23 @@ pub fn begin_trace(tracer: &mut dyn TraceWriter, out_dir: &str, program: &str) {
 /// reported but not propagated — the partial container is still useful for
 /// post-mortem inspection.
 pub fn finish_trace(tracer: &mut dyn TraceWriter, out_dir: &str) {
-    match TraceWriter::finish_writing_trace_events(tracer) {
-        Ok(_) => {
-            println!("Saved trace to {}", out_dir);
-        }
-        Err(err) => {
-            println!("Warning: trace writer failed to finalize CTFS container: {err}")
-        }
+    if let Err(err) = TraceWriter::finish_writing_trace_events(tracer) {
+        println!("Warning: trace writer failed to finalize CTFS events: {err}");
+        return;
     }
+    if let Err(err) = TraceWriter::finish_writing_trace_metadata(tracer) {
+        println!("Warning: trace writer failed to finalize CTFS metadata: {err}");
+        return;
+    }
+    if let Err(err) = TraceWriter::finish_writing_trace_paths(tracer) {
+        println!("Warning: trace writer failed to finalize CTFS paths: {err}");
+        return;
+    }
+    if let Err(err) = TraceWriter::close(tracer) {
+        println!("Warning: trace writer failed to close CTFS container: {err}");
+        return;
+    }
+    println!("Saved trace to {}", out_dir);
 }
 
 /// Registers a tracing step to the given `location` in the given `tracer`.
@@ -308,22 +346,14 @@ pub(crate) fn register_error(tracer: &mut dyn TraceWriter, s: &str) {
     TraceWriter::register_special_event(tracer, EventLogKind::Error, "", s);
 }
 
-fn printable_type_to_kind_and_name(
-    printable_type: &PrintableType,
-) -> (TypeKind, String) {
+fn printable_type_to_kind_and_name(printable_type: &PrintableType) -> (TypeKind, String) {
     match printable_type {
         PrintableType::Field => (TypeKind::Int, "Field".to_string()),
-        PrintableType::UnsignedInteger { width } => {
-            (TypeKind::Int, format!("u{width}"))
-        }
-        PrintableType::SignedInteger { width } => {
-            (TypeKind::Int, format!("i{width}"))
-        }
+        PrintableType::UnsignedInteger { width } => (TypeKind::Int, format!("u{width}")),
+        PrintableType::SignedInteger { width } => (TypeKind::Int, format!("i{width}")),
         PrintableType::Boolean => (TypeKind::Bool, "Bool".to_string()),
         PrintableType::Vector { .. } => (TypeKind::Slice, "&[..]".to_string()),
-        PrintableType::Array { length, .. } => {
-            (TypeKind::Seq, format!("Array<{length}, ..>"))
-        }
+        PrintableType::Array { length, .. } => (TypeKind::Seq, format!("Array<{length}, ..>")),
         PrintableType::String { .. } => (TypeKind::String, "String".to_string()),
         PrintableType::Struct { name, .. } => (TypeKind::Struct, name.clone()),
         PrintableType::Unit => (TypeKind::Raw, "()".to_string()),
