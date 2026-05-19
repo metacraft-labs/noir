@@ -19,11 +19,16 @@ use std::path::{Path, PathBuf};
 ///
 /// The writer packages events, metadata and source paths into a single
 /// `<program>.ct` file in `out_dir`. The `program` argument is used both
-/// as the file basename and embedded in the container's `meta.json`.
+/// as the file basename and embedded in the container's `meta.dat`.
+///
 /// No legacy `trace.json` / `trace_metadata.json` / `trace_paths.json`
 /// sidecars are emitted — the codetracer db-backend has rejected those
 /// bundles since the 2026-05 convention compliance pass (see
-/// `codetracer-specs/Trace-Files/CTFS-Migration-Guide.md`).
+/// `codetracer-specs/Trace-Files/CTFS-Migration-Guide.md`).  The
+/// multi-stream writer mints a UUIDv7 `recording_id` (M-REC-1) and
+/// embeds it into `meta.dat` automatically at `close()` time, so we no
+/// longer need to call `begin_writing_trace_metadata` /
+/// `begin_writing_trace_paths` to register sidecar paths.
 pub fn begin_trace(tracer: &mut dyn TraceWriter, out_dir: &str, program: &str) {
     // The Nim writer derives the actual `.ct` path by replacing the
     // supplied path's extension with `.ct`. Passing
@@ -31,18 +36,6 @@ pub fn begin_trace(tracer: &mut dyn TraceWriter, out_dir: &str, program: &str) {
     let trace_path = Path::new(out_dir).join(program);
     if let Err(err) = TraceWriter::begin_writing_trace_events(tracer, &trace_path) {
         panic!("Error: trace writer failed to begin writing CTFS container: {err}")
-    }
-    // Other recorders (Cairo, Leo, Circom) also call begin_writing_trace_metadata /
-    // begin_writing_trace_paths so the v4 reader sees a complete bundle.  These
-    // two calls register sidecar paths internally but the actual on-disk
-    // representation is still the single `.ct` file.
-    let metadata_path = Path::new(out_dir).join("trace_metadata.json");
-    if let Err(err) = TraceWriter::begin_writing_trace_metadata(tracer, &metadata_path) {
-        panic!("Error: trace writer failed to begin writing CTFS metadata: {err}")
-    }
-    let paths_path = Path::new(out_dir).join("trace_paths.json");
-    if let Err(err) = TraceWriter::begin_writing_trace_paths(tracer, &paths_path) {
-        panic!("Error: trace writer failed to begin writing CTFS paths: {err}")
     }
 
     // Bake the workdir into the metadata so `ct-print --strip-paths` can
@@ -61,21 +54,20 @@ pub fn begin_trace(tracer: &mut dyn TraceWriter, out_dir: &str, program: &str) {
 
 /// Finalize the CTFS container produced by `tracer`.
 ///
-/// Internally writes the `events.log`, `events.fmt`, `meta.json` and
-/// `paths.json` streams into the `.ct` file and closes it. Any error is
-/// reported but not propagated — the partial container is still useful for
+/// Flushes the events stream and closes the multi-stream writer, which
+/// emits `events.log`, `meta.dat`, `paths.dat` and the rest of the
+/// internal streams into the single `.ct` file.  Any error is reported
+/// but not propagated — the partial container is still useful for
 /// post-mortem inspection.
+///
+/// The legacy sidecar `finish_writing_trace_metadata` /
+/// `finish_writing_trace_paths` calls were removed after the
+/// Recording-Identifier-Migration: the multi-stream writer now handles
+/// metadata + paths inside `close()` and emits `meta.dat` with the
+/// canonical UUIDv7 `recording_id` (M-REC-1).
 pub fn finish_trace(tracer: &mut dyn TraceWriter, out_dir: &str) {
     if let Err(err) = TraceWriter::finish_writing_trace_events(tracer) {
         println!("Warning: trace writer failed to finalize CTFS events: {err}");
-        return;
-    }
-    if let Err(err) = TraceWriter::finish_writing_trace_metadata(tracer) {
-        println!("Warning: trace writer failed to finalize CTFS metadata: {err}");
-        return;
-    }
-    if let Err(err) = TraceWriter::finish_writing_trace_paths(tracer) {
-        println!("Warning: trace writer failed to finalize CTFS paths: {err}");
         return;
     }
     if let Err(err) = TraceWriter::close(tracer) {
