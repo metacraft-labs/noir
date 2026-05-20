@@ -244,15 +244,20 @@ fn lock_workspace(workspace: &Workspace, exclusive: bool) -> Result<Vec<impl Dro
         let file = File::open(&toml_path)
             .unwrap_or_else(|e| panic!("Expected {path_display} to exist: {e}"));
 
+        // Try the non-blocking lock first; only fall back to the blocking lock
+        // if it is actually contended. Calling the blocking `lock_*` after
+        // `try_lock_*` already succeeded deadlocks on Windows, where file locks
+        // use `LockFileEx` and re-locking a region already held by the *same*
+        // handle blocks forever. On Unix `flock` is idempotent per descriptor,
+        // so the bug only manifested on Windows.
         if exclusive {
             if file.try_lock_exclusive().is_err() {
                 eprintln!("Waiting for lock on {path_display}...");
+                file.lock_exclusive()
+                    .unwrap_or_else(|e| panic!("Failed to lock {path_display}: {e}"));
             }
-            file.lock_exclusive().unwrap_or_else(|e| panic!("Failed to lock {path_display}: {e}"));
-        } else {
-            if file.try_lock_shared().is_err() {
-                eprintln!("Waiting for lock on {path_display}...",);
-            }
+        } else if file.try_lock_shared().is_err() {
+            eprintln!("Waiting for lock on {path_display}...");
             file.lock_shared().unwrap_or_else(|e| panic!("Failed to lock {path_display}: {e}"));
         }
 

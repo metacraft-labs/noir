@@ -58,6 +58,17 @@ pub(crate) fn run(args: CompileCommand, workspace: Workspace) -> Result<(), CliE
     Ok(())
 }
 
+// ANSI/VT100 terminal control sequences used by the `--watch` mode.
+// Previously these came from the `termion` crate, which only compiles on Unix
+// and therefore broke the Windows build. They are simple, standard escape
+// sequences, so we emit them directly to keep `nargo` cross-platform.
+/// Save the current cursor position (`CSI s`).
+const ANSI_CURSOR_SAVE: &str = "\x1B[s";
+/// Restore the previously saved cursor position (`CSI u`).
+const ANSI_CURSOR_RESTORE: &str = "\x1B[u";
+/// Clear everything after the cursor (`CSI J`).
+const ANSI_CLEAR_AFTER_CURSOR: &str = "\x1B[J";
+
 /// Continuously recompile the workspace on any Noir file change event.
 fn watch_workspace(workspace: &Workspace, compile_options: &CompileOptions) -> notify::Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -70,7 +81,7 @@ fn watch_workspace(workspace: &Workspace, compile_options: &CompileOptions) -> n
     debouncer.watcher().watch(&workspace.root_dir, RecursiveMode::Recursive)?;
 
     let mut screen = std::io::stdout();
-    write!(screen, "{}", termion::cursor::Save).unwrap();
+    write!(screen, "{ANSI_CURSOR_SAVE}").unwrap();
     screen.flush().unwrap();
     let _ = compile_workspace_full(workspace, compile_options);
     for res in rx {
@@ -91,7 +102,7 @@ fn watch_workspace(workspace: &Workspace, compile_options: &CompileOptions) -> n
         });
 
         if noir_files_modified {
-            write!(screen, "{}{}", termion::cursor::Restore, termion::clear::AfterCursor).unwrap();
+            write!(screen, "{ANSI_CURSOR_RESTORE}{ANSI_CLEAR_AFTER_CURSOR}").unwrap();
             screen.flush().unwrap();
             let _ = compile_workspace_full(workspace, compile_options);
         }
