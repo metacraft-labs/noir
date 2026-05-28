@@ -44,12 +44,10 @@ pub fn begin_trace(tracer: &mut dyn TraceWriter, out_dir: &str, program: &str) {
         TraceWriter::set_workdir(tracer, &cwd);
     }
 
-    // `start()` registers the implicit top-level frame and pins the
-    // `NONE_TYPE_ID` invariant the writer relies on.  Skipping it leaves
-    // the trace without a function-table entry for "<toplevel>", which
-    // ct-print's v4 reader treats as a structural error.
-    let main_path = Path::new(out_dir).join(program);
-    TraceWriter::start(tracer, &main_path, Line(1));
+    // The initial pending step is registered once the debugger reports the
+    // first real source path.  Starting here would use the generated trace
+    // output path, which is not a source file and leaves GUI replay without
+    // an editor tab.
 }
 
 /// Finalize the CTFS container produced by `tracer`.

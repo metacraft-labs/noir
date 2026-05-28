@@ -230,21 +230,15 @@ fn observed_event_kinds(doc: &serde_json::Value) -> Vec<String> {
 }
 
 fn assert_path_strip_normalised(doc: &serde_json::Value, fixture: &str) {
-    // `--strip-paths` rewrites the absolute tempdir path to `<tmp>/<package>`
-    // for the toplevel start path.  The second path is the fixture's
-    // `src/main.nr` (relative to the workspace cwd at test time).
+    // The initial entry step must point at the real Noir source file, not the
+    // generated trace output path. `--strip-paths` keeps it relative to the
+    // package or workspace root.
     let paths = string_array(doc, "paths");
-    assert_eq!(paths.len(), 2, "paths count for {}: {:?}", fixture, paths);
+    assert_eq!(paths.len(), 1, "paths count for {}: {:?}", fixture, paths);
     assert!(
-        paths[0].starts_with("<tmp>") || paths[0].starts_with("<workdir>"),
-        "first path must be tmp/workdir-stripped; got {} (fixture {})",
+        paths[0].ends_with("src/main.nr"),
+        "path must be the fixture src/main.nr; got {} (fixture {})",
         paths[0],
-        fixture
-    );
-    assert!(
-        paths[1].ends_with("src/main.nr"),
-        "second path must be the fixture src/main.nr; got {} (fixture {})",
-        paths[1],
         fixture
     );
 }
@@ -273,7 +267,7 @@ fn test_a_1_mul_via_ct_print_full() {
 
     // ---- counts ------------------------------------------------------------
     let counts = &doc["counts"];
-    assert_eq!(counts["paths"].as_u64(), Some(2), "paths; counts={counts}");
+    assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(3), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
@@ -335,7 +329,7 @@ fn test_a_1_mul_via_ct_print_full() {
 
 /// `a_2_function_calls.nr` — main → foo → bar twice.
 ///
-/// Pins: 5 calls (1 main + 2 foo + 2 bar), 17 step events, 0
+/// Pins: 5 calls (1 main + 2 foo + 2 bar), 11 step events, 0
 /// io_events, function table = [main, foo, bar] in ensure order,
 /// type table = [None, Field, type_1, "()"], call-entry sequence
 /// = [main, foo, bar, foo, bar], and Field-typed argument values.
@@ -350,13 +344,13 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(doc["metadata"]["program"].as_str(), Some("a_2_function_calls"));
 
     let counts = &doc["counts"];
-    assert_eq!(counts["paths"].as_u64(), Some(2), "paths; counts={counts}");
+    assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(3), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(2), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(4), "types; counts={counts}");
-    assert_eq!(counts["steps"].as_u64(), Some(17), "steps; counts={counts}");
+    assert_eq!(counts["steps"].as_u64(), Some(11), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(17), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(11), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main", "foo", "bar"]);
@@ -364,9 +358,9 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "type_1", "()"]);
     assert_path_strip_normalised(&doc, "a_2_function_calls");
 
-    // 5 call_entry + 17 step + 5 call_exit = 27 events.
+    // 5 call_entry + 11 step + 5 call_exit = 21 events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 27);
+    assert_eq!(events.len(), 21);
     assert_eq!(
         observed_call_sequence(&doc),
         vec![
@@ -375,6 +369,32 @@ fn test_a_2_function_calls_via_ct_print_full() {
             "bar".to_string(),
             "foo".to_string(),
             "bar".to_string(),
+        ]
+    );
+    let observed_steps: Vec<(&str, i64)> = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .map(|e| {
+            (
+                e["function"].as_str().expect("step.function str"),
+                e["line"].as_i64().expect("step.line i64"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        observed_steps,
+        vec![
+            ("main", 1),
+            ("main", 10),
+            ("foo", 6),
+            ("bar", 2),
+            ("foo", 6),
+            ("main", 10),
+            ("foo", 6),
+            ("bar", 2),
+            ("foo", 6),
+            ("main", 11),
+            ("main", 13),
         ]
     );
 
@@ -388,7 +408,6 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(arg_pairs, vec![("x", 4), ("y", 5)]);
 
     // foo's call_entry args are x=4 first time, x=5 second time.
-    // The two foo entries are at indices 2 and 13 in the events vector.
     let foo_entries: Vec<i64> = events
         .iter()
         .filter(|e| e["kind"] == "call_entry" && e["function"] == "foo")
@@ -424,7 +443,7 @@ fn test_if_then_else_reduced_via_ct_print_full() {
     assert_eq!(doc["metadata"]["program"].as_str(), Some("if_then_else_reduced"));
 
     let counts = &doc["counts"];
-    assert_eq!(counts["paths"].as_u64(), Some(2), "paths; counts={counts}");
+    assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(5), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
@@ -490,7 +509,7 @@ fn test_assert_via_ct_print_full() {
     assert_eq!(doc["metadata"]["program"].as_str(), Some("assert"));
 
     let counts = &doc["counts"];
-    assert_eq!(counts["paths"].as_u64(), Some(2), "paths; counts={counts}");
+    assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(4), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
@@ -575,7 +594,7 @@ fn test_types_test_via_ct_print_full() {
     assert_eq!(doc["metadata"]["program"].as_str(), Some("zk_dungeon"));
 
     let counts = &doc["counts"];
-    assert_eq!(counts["paths"].as_u64(), Some(2), "paths; counts={counts}");
+    assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(9), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(11), "types; counts={counts}");
