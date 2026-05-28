@@ -25,7 +25,7 @@ use tail_diff_vecs::tail_diff_vecs;
 use acvm::acir::circuit::brillig::{BrilligBytecode, BrilligFunctionId};
 use acvm::{AcirField, BlackBoxFunctionSolver, FieldElement};
 use acvm::{acir::circuit::Circuit, acir::native_types::WitnessMap};
-use codetracer_trace_types::TypeKind;
+use codetracer_trace_types::{Line, TypeKind};
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use nargo::NargoError;
 use noir_debugger::context::{DebugCommandResult, DebugContext};
@@ -34,6 +34,7 @@ use noirc_artifacts::debug::DebugArtifact;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::path::PathBuf;
 use std::rc::Rc;
 use tracing::debug;
 
@@ -85,6 +86,7 @@ pub struct TracingContext<'a, B: BlackBoxFunctionSolver<FieldElement>> {
     stack_frames: Vec<StackFrame>,
     saved_return_value: Option<Variable>,
     print_output: Rc<RefCell<String>>,
+    trace_started: bool,
 }
 
 impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
@@ -120,6 +122,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
             stack_frames: vec![],
             saved_return_value: None,
             print_output,
+            trace_started: false,
         }
     }
 
@@ -214,28 +217,65 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         }
     }
 
+    fn is_closing_brace_location(location: &SourceLocation) -> bool {
+        if location.line_number <= 0 {
+            return false;
+        }
+
+        let path = std::path::PathBuf::from(location.filepath.to_string());
+        let Ok(source) = std::fs::read_to_string(path) else {
+            return false;
+        };
+
+        source
+            .lines()
+            .nth((location.line_number - 1) as usize)
+            .map(|line| line.trim() == "}")
+            .unwrap_or(false)
+    }
+
+    fn ensure_trace_started(
+        &mut self,
+        tracer: &mut dyn TraceWriter,
+        source_locations: &[SourceLocation],
+    ) {
+        if self.trace_started {
+            return;
+        }
+
+        let Some(location) = source_locations.last() else {
+            return;
+        };
+        let path = PathBuf::from(location.filepath.to_string());
+        // Keep the historical entry step on line 1, but attach it to the
+        // first real source file instead of the generated trace output path.
+        TraceWriter::start(tracer, &path, Line(1));
+        self.trace_started = true;
+    }
+
     /// Propagates information about the current execution state to `tracer`.
     fn update_record(&mut self, tracer: &mut dyn TraceWriter, source_locations: &[SourceLocation]) {
+        self.ensure_trace_started(tracer, source_locations);
+
         let stack_frames = get_stack_frames(&self.debug_context);
         let (first_nomatch, dropped_frames, new_frames) =
             tail_diff_vecs(&self.stack_frames, &stack_frames);
+        let returned_from_frame = !dropped_frames.is_empty();
 
-        for _ in dropped_frames {
+        for dropped_frame_index in (first_nomatch..first_nomatch + dropped_frames.len()).rev() {
             register_return(tracer, &self.saved_return_value);
             self.saved_return_value = None;
-            if self.source_locations.len() > 1 {
+            if dropped_frame_index > 0 {
                 // This branch is for returns not from main.
-                assert!(first_nomatch > 0, "no matching frames after return");
-                let pre_last_index = self.source_locations.len() - 2;
-                let call_site_location = &self.source_locations[pre_last_index];
-                let current_location = source_locations.last().unwrap();
-                if current_location != call_site_location {
-                    let frame = &stack_frames[first_nomatch - 1];
-                    register_step(tracer, call_site_location);
-                    register_variables(tracer, frame);
-                    Self::maybe_update_saved_return_value(frame, &mut self.saved_return_value);
-                    self.maybe_report_print_events(tracer);
-                }
+                let caller_index = dropped_frame_index - 1;
+                let call_site_location = &self.source_locations[caller_index];
+                let frame = stack_frames
+                    .get(caller_index)
+                    .unwrap_or_else(|| &self.stack_frames[caller_index]);
+                register_step(tracer, call_site_location);
+                register_variables(tracer, frame);
+                Self::maybe_update_saved_return_value(frame, &mut self.saved_return_value);
+                self.maybe_report_print_events(tracer);
             }
         }
 
@@ -246,16 +286,23 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         }
 
         let index = stack_frames.len() as isize - 1;
-        if index >= 0 {
+        // Noir can report a nested function's closing brace before the call
+        // stack drops that frame. The return event captures that transition;
+        // recording the brace as a step would expose a stale location with the
+        // callee's locals.
+        if index >= 0 && !returned_from_frame {
             let index = index as usize;
             let location = &source_locations[index];
-            self.maybe_report_print_events(tracer);
-            register_step(tracer, location);
-            register_variables(tracer, &stack_frames[index]);
-            Self::maybe_update_saved_return_value(
-                &stack_frames[index],
-                &mut self.saved_return_value,
-            );
+            let nested_closing_brace = index > 0 && Self::is_closing_brace_location(location);
+            if !nested_closing_brace {
+                self.maybe_report_print_events(tracer);
+                register_step(tracer, location);
+                register_variables(tracer, &stack_frames[index]);
+                Self::maybe_update_saved_return_value(
+                    &stack_frames[index],
+                    &mut self.saved_return_value,
+                );
+            }
         }
 
         self.stack_frames = stack_frames;

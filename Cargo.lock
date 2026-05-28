@@ -1111,7 +1111,10 @@ dependencies = [
 name = "codetracer_trace_writer_nim"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
  "codetracer_trace_types",
+ "serde_json",
+ "zstd-sys",
 ]
 
 [[package]]
@@ -7622,3 +7625,13 @@ name = "zmij"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fc5a66a20078bf1251bde995aa2fdcc4b800c70b5d92dd2c62abc5c60f679f8"
+
+[[package]]
+name = "zstd-sys"
+version = "2.0.16+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
