@@ -1,10 +1,13 @@
-use acvm::acir::native_types::WitnessMapError;
+use acvm::{acir::native_types::WitnessStackError, FieldElement};
 use hex::FromHexError;
-use nargo::NargoError;
+use nargo::{errors::CompileError, NargoError};
 use nargo_toml::ManifestError;
-use noirc_abi::errors::{AbiError, InputParserError};
-use noirc_errors::reporter::ReportedErrors;
-use noirc_frontend::graph::CrateName;
+use noir_debugger::errors::DapError;
+use noirc_abi::{
+    errors::{AbiError, InputParserError},
+    input_parser::InputValue,
+    AbiReturnType,
+};
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -12,8 +15,10 @@ use thiserror::Error;
 pub(crate) enum FilesystemError {
     #[error("Error: {} is not a valid path\nRun either `nargo compile` to generate missing build artifacts or `nargo prove` to construct a proof", .0.display())]
     PathNotValid(PathBuf),
+
     #[error("Error: could not parse hex build artifact (proof, proving and/or verification keys, ACIR checksum) ({0})")]
     HexArtifactNotValid(FromHexError),
+
     #[error(
         " Error: cannot find {0}.toml file.\n Expected location: {1:?} \n Please generate this file at the expected location."
     )]
@@ -23,9 +28,9 @@ pub(crate) enum FilesystemError {
     #[error(transparent)]
     InputParserError(#[from] InputParserError),
 
-    /// WitnessMap serialization error
+    /// WitnessStack serialization error
     #[error(transparent)]
-    WitnessMapSerialization(#[from] WitnessMapError),
+    WitnessStackSerialization(#[from] WitnessStackError),
 
     #[error("Error: could not deserialize build program: {0}")]
     ProgramSerializationError(String),
@@ -35,6 +40,7 @@ pub(crate) enum FilesystemError {
 pub(crate) enum CliError {
     #[error("{0}")]
     Generic(String),
+
     #[error("Error: destination {} already exists", .0.display())]
     DestinationAlreadyExists(PathBuf),
 
@@ -55,9 +61,12 @@ pub(crate) enum CliError {
     #[error(transparent)]
     LspError(#[from] async_lsp::Error),
 
+    #[error(transparent)]
+    DapError(#[from] DapError),
+
     /// Error from Nargo
     #[error(transparent)]
-    NargoError(#[from] NargoError),
+    NargoError(#[from] NargoError<FieldElement>),
 
     /// Error from Manifest
     #[error(transparent)]
@@ -67,44 +76,20 @@ pub(crate) enum CliError {
     #[error(transparent)]
     CompileError(#[from] CompileError),
 
+    #[error("Unexpected return value: expected {expected:?}; got {actual:?}")]
+    UnexpectedReturn { expected: InputValue, actual: Option<InputValue> },
+
+    #[error("Missing return witnesses; expected {expected:?}")]
+    MissingReturn { expected: AbiReturnType },
+
     /// Error related to backend selection/installation.
     #[error(transparent)]
     BackendError(#[from] BackendError),
-
-    /// Error related to communication with backend.
-    #[error(transparent)]
-    BackendCommunicationError(#[from] backend_interface::BackendError),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BackendError {
-    #[error("No backend is installed with the name {0}")]
-    UnknownBackend(String),
-
-    #[error("The backend {0} is already installed")]
-    AlreadyInstalled(String),
-
-    #[error("Backend installation failed: {0}")]
-    InstallationError(#[from] std::io::Error),
-}
-
-/// Errors covering situations where a package cannot be compiled.
-#[derive(Debug, Error)]
-pub(crate) enum CompileError {
-    #[error("Package `{0}` has type `lib` but only `bin` types can be compiled")]
-    LibraryCrate(CrateName),
-
-    #[error("Package `{0}` is expected to have a `main` function but it does not")]
-    MissingMainFunction(CrateName),
-
-    /// Errors encountered while compiling the Noir program.
-    /// These errors are already written to stderr.
-    #[error("Aborting due to {} previous error{}", .0.error_count, if .0.error_count == 1 { "" } else { "s" })]
-    ReportedErrors(ReportedErrors),
-}
-
-impl From<ReportedErrors> for CompileError {
-    fn from(errors: ReportedErrors) -> Self {
-        Self::ReportedErrors(errors)
-    }
+    #[error("Backend does not support {0}.")]
+    UnfitBackend(String),
+    
 }

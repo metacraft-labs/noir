@@ -1,14 +1,22 @@
 use std::borrow::Cow;
 use std::fmt::Display;
 
-use crate::token::{Attributes, Token};
-use crate::{
-    Distinctness, FunctionVisibility, Ident, Path, Pattern, Recoverable, Statement, StatementKind,
-    UnresolvedTraitConstraint, UnresolvedType, UnresolvedTypeData, Visibility,
+use thiserror::Error;
+
+use crate::ast::{
+    Ident, ItemVisibility, Path, Pattern, Statement, StatementKind, UnresolvedTraitConstraint,
+    UnresolvedType, UnresolvedTypeData, Visibility,
 };
-use acvm::FieldElement;
+use crate::node_interner::{
+    ExprId, InternedExpressionKind, InternedStatementKind, QuotedTypeId, TypeId,
+};
+use crate::token::{Attributes, FmtStrFragment, FunctionAttribute, Token, Tokens};
+use crate::{Kind, Type};
+use acvm::{acir::AcirField, FieldElement};
 use iter_extended::vecmap;
 use noirc_errors::{Span, Spanned};
+
+use super::{AsTraitPath, TypePath};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ExpressionKind {
@@ -18,21 +26,128 @@ pub enum ExpressionKind {
     Index(Box<IndexExpression>),
     Call(Box<CallExpression>),
     MethodCall(Box<MethodCallExpression>),
+    Constrain(ConstrainExpression),
     Constructor(Box<ConstructorExpression>),
     MemberAccess(Box<MemberAccessExpression>),
     Cast(Box<CastExpression>),
     Infix(Box<InfixExpression>),
     If(Box<IfExpression>),
+    Match(Box<MatchExpression>),
     Variable(Path),
     Tuple(Vec<Expression>),
     Lambda(Box<Lambda>),
     Parenthesized(Box<Expression>),
+    Quote(Tokens),
+    Unquote(Box<Expression>),
+    Comptime(BlockExpression, Span),
+    Unsafe(BlockExpression, Span),
+    AsTraitPath(AsTraitPath),
+    TypePath(TypePath),
+
+    // This variant is only emitted when inlining the result of comptime
+    // code. It is used to translate function values back into the AST while
+    // guaranteeing they have the same instantiated type and definition id without resolving again.
+    Resolved(ExprId),
+
+    // This is an interned ExpressionKind during comptime code.
+    // The actual ExpressionKind can be retrieved with a NodeInterner.
+    Interned(InternedExpressionKind),
+
+    /// Interned statements are allowed to be parsed as expressions in case they resolve
+    /// to an StatementKind::Expression or StatementKind::Semi.
+    InternedStatement(InternedStatementKind),
+
     Error,
 }
 
 /// A Vec of unresolved names for type variables.
 /// For `fn foo<A, B>(...)` this corresponds to vec!["A", "B"].
-pub type UnresolvedGenerics = Vec<Ident>;
+pub type UnresolvedGenerics = Vec<UnresolvedGeneric>;
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub enum UnresolvedGeneric {
+    Variable(Ident),
+    Numeric {
+        ident: Ident,
+        typ: UnresolvedType,
+    },
+
+    /// Already-resolved generics can be parsed as generics when a macro
+    /// splices existing types into a generic list. In this case we have
+    /// to validate the type refers to a named generic and treat that
+    /// as a ResolvedGeneric when this is resolved.
+    Resolved(QuotedTypeId, Span),
+}
+
+#[derive(Error, PartialEq, Eq, Debug, Clone)]
+#[error("The only supported types of numeric generics are integers, fields, and booleans")]
+pub struct UnsupportedNumericGenericType {
+    pub ident: Ident,
+    pub typ: UnresolvedTypeData,
+}
+
+impl UnresolvedGeneric {
+    pub fn span(&self) -> Span {
+        match self {
+            UnresolvedGeneric::Variable(ident) => ident.0.span(),
+            UnresolvedGeneric::Numeric { ident, typ } => ident.0.span().merge(typ.span),
+            UnresolvedGeneric::Resolved(_, span) => *span,
+        }
+    }
+
+    pub fn kind(&self) -> Result<Kind, UnsupportedNumericGenericType> {
+        match self {
+            UnresolvedGeneric::Variable(_) => Ok(Kind::Normal),
+            UnresolvedGeneric::Numeric { typ, .. } => {
+                let typ = self.resolve_numeric_kind_type(typ)?;
+                Ok(Kind::numeric(typ))
+            }
+            UnresolvedGeneric::Resolved(..) => {
+                panic!("Don't know the kind of a resolved generic here")
+            }
+        }
+    }
+
+    fn resolve_numeric_kind_type(
+        &self,
+        typ: &UnresolvedType,
+    ) -> Result<Type, UnsupportedNumericGenericType> {
+        use crate::ast::UnresolvedTypeData::{FieldElement, Integer};
+
+        match typ.typ {
+            FieldElement => Ok(Type::FieldElement),
+            Integer(sign, bits) => Ok(Type::Integer(sign, bits)),
+            // Only fields and integers are supported for numeric kinds
+            _ => Err(UnsupportedNumericGenericType {
+                ident: self.ident().clone(),
+                typ: typ.typ.clone(),
+            }),
+        }
+    }
+
+    pub(crate) fn ident(&self) -> &Ident {
+        match self {
+            UnresolvedGeneric::Variable(ident) | UnresolvedGeneric::Numeric { ident, .. } => ident,
+            UnresolvedGeneric::Resolved(..) => panic!("UnresolvedGeneric::Resolved no ident"),
+        }
+    }
+}
+
+impl Display for UnresolvedGeneric {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnresolvedGeneric::Variable(ident) => write!(f, "{ident}"),
+            UnresolvedGeneric::Numeric { ident, typ } => write!(f, "let {ident}: {typ}"),
+            UnresolvedGeneric::Resolved(..) => write!(f, "(resolved)"),
+        }
+    }
+}
+
+impl From<Ident> for UnresolvedGeneric {
+    fn from(value: Ident) -> Self {
+        UnresolvedGeneric::Variable(value)
+    }
+}
 
 impl ExpressionKind {
     pub fn into_path(self) -> Option<Path> {
@@ -50,7 +165,13 @@ impl ExpressionKind {
     }
 
     pub fn prefix(operator: UnaryOp, rhs: Expression) -> ExpressionKind {
-        ExpressionKind::Prefix(Box::new(PrefixExpression { operator, rhs }))
+        match (operator, &rhs) {
+            (
+                UnaryOp::Minus,
+                Expression { kind: ExpressionKind::Literal(Literal::Integer(field, sign)), .. },
+            ) => ExpressionKind::Literal(Literal::Integer(*field, !sign)),
+            _ => ExpressionKind::Prefix(Box::new(PrefixExpression { operator, rhs })),
+        }
     }
 
     pub fn array(contents: Vec<Expression>) -> ExpressionKind {
@@ -64,8 +185,19 @@ impl ExpressionKind {
         }))
     }
 
+    pub fn slice(contents: Vec<Expression>) -> ExpressionKind {
+        ExpressionKind::Literal(Literal::Slice(ArrayLiteral::Standard(contents)))
+    }
+
+    pub fn repeated_slice(repeated_element: Expression, length: Expression) -> ExpressionKind {
+        ExpressionKind::Literal(Literal::Slice(ArrayLiteral::Repeated {
+            repeated_element: Box::new(repeated_element),
+            length: Box::new(length),
+        }))
+    }
+
     pub fn integer(contents: FieldElement) -> ExpressionKind {
-        ExpressionKind::Literal(Literal::Integer(contents))
+        ExpressionKind::Literal(Literal::Integer(contents, false))
     }
 
     pub fn boolean(contents: bool) -> ExpressionKind {
@@ -76,47 +208,22 @@ impl ExpressionKind {
         ExpressionKind::Literal(Literal::Str(contents))
     }
 
-    pub fn format_string(contents: String) -> ExpressionKind {
-        ExpressionKind::Literal(Literal::FmtStr(contents))
+    pub fn raw_string(contents: String, hashes: u8) -> ExpressionKind {
+        ExpressionKind::Literal(Literal::RawStr(contents, hashes))
     }
 
-    pub fn constructor((type_name, fields): (Path, Vec<(Ident, Expression)>)) -> ExpressionKind {
-        ExpressionKind::Constructor(Box::new(ConstructorExpression { type_name, fields }))
+    pub fn format_string(fragments: Vec<FmtStrFragment>, length: u32) -> ExpressionKind {
+        ExpressionKind::Literal(Literal::FmtStr(fragments, length))
     }
 
-    /// Returns true if the expression is a literal integer
-    pub fn is_integer(&self) -> bool {
-        self.as_integer().is_some()
-    }
-
-    fn as_integer(&self) -> Option<FieldElement> {
-        let literal = match self {
-            ExpressionKind::Literal(literal) => literal,
-            _ => return None,
-        };
-
-        match literal {
-            Literal::Integer(integer) => Some(*integer),
-            _ => None,
-        }
-    }
-}
-
-impl Recoverable for ExpressionKind {
-    fn error(_: Span) -> Self {
-        ExpressionKind::Error
-    }
-}
-
-impl Recoverable for Expression {
-    fn error(span: Span) -> Self {
-        Expression::new(ExpressionKind::Error, span)
-    }
-}
-
-impl Recoverable for Option<Expression> {
-    fn error(span: Span) -> Self {
-        Some(Expression::new(ExpressionKind::Error, span))
+    pub fn constructor(
+        (typ, fields): (UnresolvedType, Vec<(Ident, Expression)>),
+    ) -> ExpressionKind {
+        ExpressionKind::Constructor(Box::new(ConstructorExpression {
+            typ,
+            fields,
+            struct_type: None,
+        }))
     }
 }
 
@@ -138,58 +245,12 @@ impl Expression {
     pub fn new(kind: ExpressionKind, span: Span) -> Expression {
         Expression { kind, span }
     }
-
-    pub fn member_access_or_method_call(
-        lhs: Expression,
-        (rhs, args): (Ident, Option<Vec<Expression>>),
-        span: Span,
-    ) -> Expression {
-        let kind = match args {
-            None => ExpressionKind::MemberAccess(Box::new(MemberAccessExpression { lhs, rhs })),
-            Some(arguments) => ExpressionKind::MethodCall(Box::new(MethodCallExpression {
-                object: lhs,
-                method_name: rhs,
-                arguments,
-            })),
-        };
-        Expression::new(kind, span)
-    }
-
-    pub fn index(collection: Expression, index: Expression, span: Span) -> Expression {
-        let kind = ExpressionKind::Index(Box::new(IndexExpression { collection, index }));
-        Expression::new(kind, span)
-    }
-
-    pub fn cast(lhs: Expression, r#type: UnresolvedType, span: Span) -> Expression {
-        let kind = ExpressionKind::Cast(Box::new(CastExpression { lhs, r#type }));
-        Expression::new(kind, span)
-    }
-
-    pub fn call(lhs: Expression, arguments: Vec<Expression>, span: Span) -> Expression {
-        // Need to check if lhs is an if expression since users can sequence if expressions
-        // with tuples without calling them. E.g. `if c { t } else { e }(a, b)` is interpreted
-        // as a sequence of { if, tuple } rather than a function call. This behavior matches rust.
-        let kind = if matches!(&lhs.kind, ExpressionKind::If(..)) {
-            ExpressionKind::Block(BlockExpression(vec![
-                Statement { kind: StatementKind::Expression(lhs), span },
-                Statement {
-                    kind: StatementKind::Expression(Expression::new(
-                        ExpressionKind::Tuple(arguments),
-                        span,
-                    )),
-                    span,
-                },
-            ]))
-        } else {
-            ExpressionKind::Call(Box::new(CallExpression { func: Box::new(lhs), arguments }))
-        };
-        Expression::new(kind, span)
-    }
 }
 
 pub type BinaryOp = Spanned<BinaryOpKind>;
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Hash, Debug, Copy, Clone)]
+#[cfg_attr(test, derive(strum_macros::EnumIter))]
 pub enum BinaryOpKind {
     Add,
     Subtract,
@@ -226,7 +287,15 @@ impl BinaryOpKind {
     }
 
     pub fn is_valid_for_field_type(self) -> bool {
-        matches!(self, BinaryOpKind::Equal | BinaryOpKind::NotEqual)
+        matches!(
+            self,
+            BinaryOpKind::Add
+                | BinaryOpKind::Subtract
+                | BinaryOpKind::Multiply
+                | BinaryOpKind::Divide
+                | BinaryOpKind::Equal
+                | BinaryOpKind::NotEqual
+        )
     }
 
     pub fn as_string(self) -> &'static str {
@@ -270,14 +339,6 @@ impl BinaryOpKind {
             BinaryOpKind::Modulo => Token::Percent,
         }
     }
-
-    pub fn is_bit_shift(&self) -> bool {
-        matches!(self, BinaryOpKind::ShiftRight | BinaryOpKind::ShiftLeft)
-    }
-
-    pub fn is_modulo(&self) -> bool {
-        matches!(self, BinaryOpKind::Modulo)
-    }
 }
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Hash, Debug, Copy, Clone)]
@@ -309,10 +370,12 @@ impl UnaryOp {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Literal {
     Array(ArrayLiteral),
+    Slice(ArrayLiteral),
     Bool(bool),
-    Integer(FieldElement),
+    Integer(FieldElement, /*sign*/ bool), // false for positive integer and true for negative
     Str(String),
-    FmtStr(String),
+    RawStr(String, u8),
+    FmtStr(Vec<FmtStrFragment>, u32 /* length */),
     Unit,
 }
 
@@ -344,6 +407,12 @@ pub struct IfExpression {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct MatchExpression {
+    pub expression: Expression,
+    pub rules: Vec<(/*pattern*/ Expression, /*branch*/ Expression)>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Lambda {
     pub parameters: Vec<(Pattern, UnresolvedType)>,
     pub return_type: UnresolvedType,
@@ -358,25 +427,44 @@ pub struct FunctionDefinition {
     // and `secondary` attributes (ones that do not change the function kind)
     pub attributes: Attributes,
 
-    /// True if this function was defined with the 'open' keyword
-    pub is_open: bool,
-
-    pub is_internal: bool,
-
     /// True if this function was defined with the 'unconstrained' keyword
     pub is_unconstrained: bool,
 
+    /// True if this function was defined with the 'comptime' keyword
+    pub is_comptime: bool,
+
     /// Indicate if this function was defined with the 'pub' keyword
-    pub visibility: FunctionVisibility,
+    pub visibility: ItemVisibility,
 
     pub generics: UnresolvedGenerics,
-    pub parameters: Vec<(Pattern, UnresolvedType, Visibility)>,
+    pub parameters: Vec<Param>,
     pub body: BlockExpression,
     pub span: Span,
     pub where_clause: Vec<UnresolvedTraitConstraint>,
     pub return_type: FunctionReturnType,
     pub return_visibility: Visibility,
-    pub return_distinctness: Distinctness,
+}
+
+impl FunctionDefinition {
+    pub fn is_private(&self) -> bool {
+        self.visibility == ItemVisibility::Private
+    }
+
+    pub fn is_test(&self) -> bool {
+        if let Some(attribute) = self.attributes.function() {
+            matches!(attribute, FunctionAttribute::Test(..))
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Param {
+    pub visibility: Visibility,
+    pub pattern: Pattern,
+    pub typ: UnresolvedType,
+    pub span: Span,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -385,18 +473,6 @@ pub enum FunctionReturnType {
     Default(Span),
     /// Everything else.
     Ty(UnresolvedType),
-}
-
-/// Describes the types of smart contract functions that are allowed.
-/// - All Noir programs in the non-contract context can be seen as `Secret`.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ContractFunctionType {
-    /// This function will be executed in a private
-    /// context.
-    Secret,
-    /// This function will be executed in a public
-    /// context.
-    Open,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -409,19 +485,28 @@ pub enum ArrayLiteral {
 pub struct CallExpression {
     pub func: Box<Expression>,
     pub arguments: Vec<Expression>,
+    pub is_macro_call: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct MethodCallExpression {
     pub object: Expression,
     pub method_name: Ident,
+    /// Method calls have an optional list of generics if the turbofish operator was used
+    pub generics: Option<Vec<UnresolvedType>>,
     pub arguments: Vec<Expression>,
+    pub is_macro_call: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ConstructorExpression {
-    pub type_name: Path,
+    pub typ: UnresolvedType,
     pub fields: Vec<(Ident, Expression)>,
+
+    /// This may be filled out during macro expansion
+    /// so that we can skip re-resolving the type name since it
+    /// would be lost at that point.
+    pub struct_type: Option<TypeId>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -437,19 +522,70 @@ pub struct IndexExpression {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct BlockExpression(pub Vec<Statement>);
+pub struct BlockExpression {
+    pub statements: Vec<Statement>,
+}
 
 impl BlockExpression {
     pub fn pop(&mut self) -> Option<StatementKind> {
-        self.0.pop().map(|stmt| stmt.kind)
+        self.statements.pop().map(|stmt| stmt.kind)
     }
 
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.statements.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.statements.is_empty()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ConstrainExpression {
+    pub kind: ConstrainKind,
+    pub arguments: Vec<Expression>,
+    pub span: Span,
+}
+
+impl Display for ConstrainExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            ConstrainKind::Assert | ConstrainKind::AssertEq => write!(
+                f,
+                "{}({})",
+                self.kind,
+                vecmap(&self.arguments, |arg| arg.to_string()).join(", ")
+            ),
+            ConstrainKind::Constrain => {
+                write!(f, "constrain {}", &self.arguments[0])
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ConstrainKind {
+    Assert,
+    AssertEq,
+    Constrain,
+}
+
+impl ConstrainKind {
+    pub fn required_arguments_count(&self) -> usize {
+        match self {
+            ConstrainKind::Assert | ConstrainKind::Constrain => 1,
+            ConstrainKind::AssertEq => 2,
+        }
+    }
+}
+
+impl Display for ConstrainKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConstrainKind::Assert => write!(f, "assert"),
+            ConstrainKind::AssertEq => write!(f, "assert_eq"),
+            ConstrainKind::Constrain => write!(f, "constrain"),
+        }
     }
 }
 
@@ -469,9 +605,11 @@ impl Display for ExpressionKind {
             Index(index) => index.fmt(f),
             Call(call) => call.fmt(f),
             MethodCall(call) => call.fmt(f),
+            Constrain(constrain) => constrain.fmt(f),
             Cast(cast) => cast.fmt(f),
             Infix(infix) => infix.fmt(f),
             If(if_expr) => if_expr.fmt(f),
+            Match(match_expr) => match_expr.fmt(f),
             Variable(path) => path.fmt(f),
             Constructor(constructor) => constructor.fmt(f),
             MemberAccess(access) => access.fmt(f),
@@ -481,7 +619,19 @@ impl Display for ExpressionKind {
             }
             Lambda(lambda) => lambda.fmt(f),
             Parenthesized(sub_expr) => write!(f, "({sub_expr})"),
+            Comptime(block, _) => write!(f, "comptime {block}"),
+            Unsafe(block, _) => write!(f, "unsafe {block}"),
             Error => write!(f, "Error"),
+            Resolved(_) => write!(f, "?Resolved"),
+            Interned(_) => write!(f, "?Interned"),
+            Unquote(expr) => write!(f, "$({expr})"),
+            Quote(tokens) => {
+                let tokens = vecmap(&tokens.0, ToString::to_string);
+                write!(f, "quote {{ {} }}", tokens.join(" "))
+            }
+            AsTraitPath(path) => write!(f, "{path}"),
+            TypePath(path) => write!(f, "{path}"),
+            InternedStatement(_) => write!(f, "?InternedStatement"),
         }
     }
 }
@@ -496,10 +646,34 @@ impl Display for Literal {
             Literal::Array(ArrayLiteral::Repeated { repeated_element, length }) => {
                 write!(f, "[{repeated_element}; {length}]")
             }
+            Literal::Slice(ArrayLiteral::Standard(elements)) => {
+                let contents = vecmap(elements, ToString::to_string);
+                write!(f, "&[{}]", contents.join(", "))
+            }
+            Literal::Slice(ArrayLiteral::Repeated { repeated_element, length }) => {
+                write!(f, "&[{repeated_element}; {length}]")
+            }
             Literal::Bool(boolean) => write!(f, "{}", if *boolean { "true" } else { "false" }),
-            Literal::Integer(integer) => write!(f, "{}", integer.to_u128()),
+            Literal::Integer(integer, sign) => {
+                if *sign {
+                    write!(f, "-{}", integer.to_u128())
+                } else {
+                    write!(f, "{}", integer.to_u128())
+                }
+            }
             Literal::Str(string) => write!(f, "\"{string}\""),
-            Literal::FmtStr(string) => write!(f, "f\"{string}\""),
+            Literal::RawStr(string, num_hashes) => {
+                let hashes: String =
+                    std::iter::once('#').cycle().take(*num_hashes as usize).collect();
+                write!(f, "r{hashes}\"{string}\"{hashes}")
+            }
+            Literal::FmtStr(fragments, _length) => {
+                write!(f, "f\"")?;
+                for fragment in fragments {
+                    fragment.fmt(f)?;
+                }
+                write!(f, "\"")
+            }
             Literal::Unit => write!(f, "()"),
         }
     }
@@ -508,7 +682,7 @@ impl Display for Literal {
 impl Display for BlockExpression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{{")?;
-        for statement in &self.0 {
+        for statement in &self.statements {
             let statement = statement.kind.to_string();
             for line in statement.lines() {
                 writeln!(f, "    {line}")?;
@@ -563,10 +737,9 @@ impl Display for CastExpression {
 
 impl Display for ConstructorExpression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let fields =
-            self.fields.iter().map(|(ident, expr)| format!("{ident}: {expr}")).collect::<Vec<_>>();
+        let fields = vecmap(&self.fields, |(ident, expr)| format!("{ident}: {expr}"));
 
-        write!(f, "({} {{ {} }})", self.type_name, fields.join(", "))
+        write!(f, "({} {{ {} }})", self.typ, fields.join(", "))
     }
 }
 
@@ -615,6 +788,16 @@ impl Display for IfExpression {
     }
 }
 
+impl Display for MatchExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "match {} {{", self.expression)?;
+        for (pattern, branch) in &self.rules {
+            writeln!(f, "    {pattern} -> {branch},")?;
+        }
+        write!(f, "}}")
+    }
+}
+
 impl Display for Lambda {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let parameters = vecmap(&self.parameters, |(name, r#type)| format!("{name}: {type}"));
@@ -623,64 +806,88 @@ impl Display for Lambda {
     }
 }
 
+impl Display for AsTraitPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{} as {}>::{}", self.typ, self.trait_path, self.impl_item)
+    }
+}
+
+impl Display for TypePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}::{}", self.typ, self.item)?;
+        if let Some(turbofish) = &self.turbofish {
+            write!(f, "::{}", turbofish)?;
+        }
+        Ok(())
+    }
+}
+
 impl FunctionDefinition {
     pub fn normal(
         name: &Ident,
+        is_unconstrained: bool,
         generics: &UnresolvedGenerics,
         parameters: &[(Ident, UnresolvedType)],
-        body: &BlockExpression,
-        where_clause: &[UnresolvedTraitConstraint],
+        body: BlockExpression,
+        where_clause: Vec<UnresolvedTraitConstraint>,
         return_type: &FunctionReturnType,
     ) -> FunctionDefinition {
         let p = parameters
             .iter()
-            .map(|(ident, unresolved_type)| {
-                (Pattern::Identifier(ident.clone()), unresolved_type.clone(), Visibility::Private)
+            .map(|(ident, unresolved_type)| Param {
+                visibility: Visibility::Private,
+                pattern: Pattern::Identifier(ident.clone()),
+                typ: unresolved_type.clone(),
+                span: ident.span().merge(unresolved_type.span),
             })
             .collect();
+
         FunctionDefinition {
             name: name.clone(),
             attributes: Attributes::empty(),
-            is_open: false,
-            is_internal: false,
-            is_unconstrained: false,
-            visibility: FunctionVisibility::Private,
+            is_unconstrained,
+            is_comptime: false,
+            visibility: ItemVisibility::Private,
             generics: generics.clone(),
             parameters: p,
-            body: body.clone(),
+            body,
             span: name.span(),
-            where_clause: where_clause.to_vec(),
+            where_clause,
             return_type: return_type.clone(),
             return_visibility: Visibility::Private,
-            return_distinctness: Distinctness::DuplicationAllowed,
         }
+    }
+
+    pub fn signature(&self) -> String {
+        let parameters = vecmap(&self.parameters, |Param { visibility, pattern, typ, span: _ }| {
+            if *visibility == Visibility::Public {
+                format!("{pattern}: {visibility} {typ}")
+            } else {
+                format!("{pattern}: {typ}")
+            }
+        });
+
+        let where_clause = vecmap(&self.where_clause, ToString::to_string);
+        let where_clause_str = if !where_clause.is_empty() {
+            format!(" where {}", where_clause.join(", "))
+        } else {
+            "".to_string()
+        };
+
+        let return_type = if matches!(&self.return_type, FunctionReturnType::Default(_)) {
+            String::new()
+        } else {
+            format!(" -> {}", self.return_type)
+        };
+
+        format!("fn {}({}){}{}", self.name, parameters.join(", "), return_type, where_clause_str)
     }
 }
 
 impl Display for FunctionDefinition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{:?}", self.attributes)?;
-
-        let parameters = vecmap(&self.parameters, |(name, r#type, visibility)| {
-            format!("{name}: {visibility} {type}")
-        });
-
-        let where_clause = vecmap(&self.where_clause, ToString::to_string);
-        let where_clause_str = if !where_clause.is_empty() {
-            format!("where {}", where_clause.join(", "))
-        } else {
-            "".to_string()
-        };
-
-        write!(
-            f,
-            "fn {}({}) -> {} {} {}",
-            self.name,
-            parameters.join(", "),
-            self.return_type,
-            where_clause_str,
-            self.body
-        )
+        write!(f, "{} {}", self.signature(), self.body)
     }
 }
 
@@ -688,7 +895,7 @@ impl FunctionReturnType {
     pub fn get_type(&self) -> Cow<UnresolvedType> {
         match self {
             FunctionReturnType::Default(span) => {
-                Cow::Owned(UnresolvedType { typ: UnresolvedTypeData::Unit, span: Some(*span) })
+                Cow::Owned(UnresolvedType { typ: UnresolvedTypeData::Unit, span: *span })
             }
             FunctionReturnType::Ty(typ) => Cow::Borrowed(typ),
         }

@@ -5,12 +5,12 @@ struct Foo {
 
 struct Pair {
     first: Foo,
-    second: Field,
+    pub second: Field,
 }
 
 impl Foo {
-    fn default(x: Field,y: Field) -> Self {
-        Self { bar: 0, array: [x,y] }
+    fn default(x: Field, y: Field) -> Self {
+        Self { bar: 0, array: [x, y] }
     }
 }
 
@@ -26,14 +26,14 @@ impl Pair {
 
 struct Nested {
     a: Field,
-    b: Field
+    b: Field,
 }
 struct MyStruct {
     my_bool: bool,
     my_int: u32,
     my_nest: Nested,
 }
-fn test_struct_in_tuple(a_bool : bool,x:Field, y:Field) -> (MyStruct, bool) {
+fn test_struct_in_tuple(a_bool: bool, x: Field, y: Field) -> (MyStruct, bool) {
     let my_struct = MyStruct { my_bool: a_bool, my_int: 5, my_nest: Nested { a: x, b: y } };
     (my_struct, a_bool)
 }

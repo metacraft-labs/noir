@@ -3,15 +3,18 @@ name = "fm"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+
+[lints]
+workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 codespan-reporting.workspace = true
-rust-embed = "6.6.0"
+iter-extended.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-tempfile = "3.2.0"
 iter-extended.workspace = true

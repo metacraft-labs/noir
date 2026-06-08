@@ -1,17 +1,16 @@
 use std::collections::BTreeMap;
 
-use acvm::acir::circuit::Circuit;
+use acvm::{acir::circuit::Program, FieldElement};
 use fm::FileId;
 
-use base64::Engine;
 use noirc_errors::debug_info::DebugInfo;
 use noirc_evaluator::errors::SsaReport;
-use serde::{de::Error as DeserializationError, ser::Error as SerializationError};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use noirc_evaluator::ssa::plonky2_gen::Plonky2Circuit;
+use serde::{Deserialize, Serialize};
 
 use super::debug::DebugFile;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub struct CompiledProgram {
     pub noir_version: String,
     /// Hash of the [`Program`][noirc_frontend::monomorphization::ast::Program] from which this [`CompiledProgram`]
@@ -20,32 +19,18 @@ pub struct CompiledProgram {
     /// Used to short-circuit compilation in the case of the source code not changing since the last compilation.
     pub hash: u64,
 
-    #[serde(serialize_with = "serialize_circuit", deserialize_with = "deserialize_circuit")]
-    pub circuit: Circuit,
+    #[serde(
+        serialize_with = "Program::serialize_program_base64",
+        deserialize_with = "Program::deserialize_program_base64"
+    )]
+    pub program: Program<FieldElement>,
+    pub plonky2_circuit: Option<Plonky2Circuit>,
     pub abi: noirc_abi::Abi,
-    pub debug: DebugInfo,
+    pub debug: Vec<DebugInfo>,
     pub file_map: BTreeMap<FileId, DebugFile>,
     pub warnings: Vec<SsaReport>,
-}
-
-pub(crate) fn serialize_circuit<S>(circuit: &Circuit, s: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let mut circuit_bytes: Vec<u8> = Vec::new();
-    circuit.write(&mut circuit_bytes).map_err(S::Error::custom)?;
-
-    let encoded_b64 = base64::engine::general_purpose::STANDARD.encode(circuit_bytes);
-    s.serialize_str(&encoded_b64)
-}
-
-pub(crate) fn deserialize_circuit<'de, D>(deserializer: D) -> Result<Circuit, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let bytecode_b64: String = serde::Deserialize::deserialize(deserializer)?;
-    let circuit_bytes =
-        base64::engine::general_purpose::STANDARD.decode(bytecode_b64).map_err(D::Error::custom)?;
-    let circuit = Circuit::read(&*circuit_bytes).map_err(D::Error::custom)?;
-    Ok(circuit)
+    /// Names of the functions in the program. These are used for more informative debugging and benchmarking.
+    pub names: Vec<String>,
+    /// Names of the unconstrained functions in the program.
+    pub brillig_names: Vec<String>,
 }

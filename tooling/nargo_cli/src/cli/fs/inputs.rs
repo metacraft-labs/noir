@@ -27,7 +27,13 @@ pub(crate) fn read_inputs_from_file<P: AsRef<Path>>(
 
     let file_path = path.as_ref().join(file_name).with_extension(format.ext());
     if !file_path.exists() {
-        return Err(FilesystemError::MissingTomlFile(file_name.to_owned(), file_path));
+        if abi.parameters.is_empty() {
+            // Reading a return value from the `Prover.toml` is optional,
+            // so if the ABI has no parameters we can skip reading the file if it doesn't exist.
+            return Ok((BTreeMap::new(), None));
+        } else {
+            return Err(FilesystemError::MissingTomlFile(file_name.to_owned(), file_path));
+        }
     }
 
     let input_string = std::fs::read_to_string(file_path).unwrap();
@@ -69,11 +75,11 @@ pub(crate) fn write_inputs_to_file<P: AsRef<Path>>(
 mod tests {
     use std::{collections::BTreeMap, vec};
 
-    use acvm::FieldElement;
+    use acvm::AcirField;
     use nargo::constants::VERIFIER_INPUT_FILE;
     use noirc_abi::{
         input_parser::{Format, InputValue},
-        Abi, AbiParameter, AbiType, AbiVisibility,
+        Abi, AbiParameter, AbiReturnType, AbiType, AbiVisibility,
     };
     use tempfile::TempDir;
 
@@ -98,18 +104,20 @@ mod tests {
                     visibility: AbiVisibility::Private,
                 },
             ],
-            return_type: Some(AbiType::Field),
+            return_type: Some(AbiReturnType {
+                abi_type: AbiType::Field,
+                visibility: AbiVisibility::Public,
+            }),
 
             // Input serialization is only dependent on types, not position in witness map.
             // Neither of these should be relevant so we leave them empty.
-            param_witnesses: BTreeMap::new(),
-            return_witnesses: Vec::new(),
+            error_types: BTreeMap::new(),
         };
         let input_map = BTreeMap::from([
             ("foo".to_owned(), InputValue::Field(42u128.into())),
             ("bar".to_owned(), InputValue::String("hello world".to_owned())),
         ]);
-        let return_value = Some(InputValue::Field(FieldElement::zero()));
+        let return_value = Some(InputValue::Field(AcirField::zero()));
 
         write_inputs_to_file(
             &input_map,

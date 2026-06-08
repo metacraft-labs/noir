@@ -1,59 +1,100 @@
+pub mod comptime;
 pub mod def_collector;
 pub mod def_map;
 pub mod resolution;
 pub mod scope;
 pub mod type_check;
 
-#[cfg(feature = "aztec")]
-pub(crate) mod aztec_library;
-
-use crate::graph::{CrateGraph, CrateId, Dependency};
+use crate::ast::UnresolvedGenerics;
+use crate::debug::DebugInstrumenter;
+use crate::graph::{CrateGraph, CrateId};
 use crate::hir_def::function::FuncMeta;
-use crate::node_interner::{FuncId, NodeInterner, StructId};
-use def_map::{Contract, CrateDefMap};
-use fm::FileManager;
+use crate::node_interner::{FuncId, NodeInterner, TypeId};
+use crate::parser::ParserError;
+use crate::usage_tracker::UsageTracker;
+use crate::{Generics, Kind, ParsedModule, ResolvedGeneric, TypeVariable};
+use def_collector::dc_crate::CompilationError;
+use def_map::{fully_qualified_module_path, Contract, CrateDefMap};
+use fm::{FileId, FileManager};
+use iter_extended::vecmap;
 use noirc_errors::Location;
-use std::collections::BTreeMap;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
+use std::rc::Rc;
 
 use self::def_map::TestFunction;
+
+pub type ParsedFiles = HashMap<fm::FileId, (ParsedModule, Vec<ParserError>)>;
 
 /// Helper object which groups together several useful context objects used
 /// during name resolution. Once name resolution is finished, only the
 /// def_interner is required for type inference and monomorphization.
-pub struct Context {
+pub struct Context<'file_manager, 'parsed_files> {
     pub def_interner: NodeInterner,
     pub crate_graph: CrateGraph,
-    pub(crate) def_maps: BTreeMap<CrateId, CrateDefMap>,
-    pub file_manager: FileManager,
+    pub def_maps: BTreeMap<CrateId, CrateDefMap>,
+    pub usage_tracker: UsageTracker,
+    // In the WASM context, we take ownership of the file manager,
+    // which is why this needs to be a Cow. In all use-cases, the file manager
+    // is read-only however, once it has been passed to the Context.
+    pub file_manager: Cow<'file_manager, FileManager>,
+
+    pub debug_instrumenter: DebugInstrumenter,
 
     /// A map of each file that already has been visited from a prior `mod foo;` declaration.
     /// This is used to issue an error if a second `mod foo;` is declared to the same file.
     pub visited_files: BTreeMap<fm::FileId, Location>,
 
-    /// Maps a given (contract) module id to the next available storage slot
-    /// for that contract.
-    pub storage_slots: BTreeMap<def_map::ModuleId, StorageSlot>,
+    // A map of all parsed files.
+    // Same as the file manager, we take ownership of the parsed files in the WASM context.
+    // Parsed files is also read only.
+    pub parsed_files: Cow<'parsed_files, ParsedFiles>,
+
+    pub package_build_path: PathBuf,
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum FunctionNameMatch<'a> {
+#[derive(Debug)]
+pub enum FunctionNameMatch {
     Anything,
-    Exact(&'a str),
-    Contains(&'a str),
+    Exact(Vec<String>),
+    Contains(Vec<String>),
 }
 
-pub type StorageSlot = u32;
-
-impl Context {
-    pub fn new(file_manager: FileManager, crate_graph: CrateGraph) -> Context {
+impl Context<'_, '_> {
+    pub fn new(file_manager: FileManager, parsed_files: ParsedFiles) -> Context<'static, 'static> {
         Context {
             def_interner: NodeInterner::default(),
             def_maps: BTreeMap::new(),
+            usage_tracker: UsageTracker::default(),
             visited_files: BTreeMap::new(),
-            crate_graph,
-            file_manager,
-            storage_slots: BTreeMap::new(),
+            crate_graph: CrateGraph::default(),
+            file_manager: Cow::Owned(file_manager),
+            debug_instrumenter: DebugInstrumenter::default(),
+            parsed_files: Cow::Owned(parsed_files),
+            package_build_path: PathBuf::default(),
         }
+    }
+
+    pub fn from_ref_file_manager<'file_manager, 'parsed_files>(
+        file_manager: &'file_manager FileManager,
+        parsed_files: &'parsed_files ParsedFiles,
+    ) -> Context<'file_manager, 'parsed_files> {
+        Context {
+            def_interner: NodeInterner::default(),
+            def_maps: BTreeMap::new(),
+            usage_tracker: UsageTracker::default(),
+            visited_files: BTreeMap::new(),
+            crate_graph: CrateGraph::default(),
+            file_manager: Cow::Borrowed(file_manager),
+            debug_instrumenter: DebugInstrumenter::default(),
+            parsed_files: Cow::Borrowed(parsed_files),
+            package_build_path: PathBuf::default(),
+        }
+    }
+
+    pub fn parsed_file_results(&self, file_id: FileId) -> (ParsedModule, Vec<ParserError>) {
+        self.parsed_files.get(&file_id).expect("noir file wasn't parsed").clone()
     }
 
     /// Returns the CrateDefMap for a given CrateId.
@@ -62,6 +103,10 @@ impl Context {
     /// This is how the compiler knows to compile a Crate.
     pub fn def_map(&self, crate_id: &CrateId) -> Option<&CrateDefMap> {
         self.def_maps.get(crate_id)
+    }
+
+    pub fn def_map_mut(&mut self, crate_id: &CrateId) -> Option<&mut CrateDefMap> {
+        self.def_maps.get_mut(crate_id)
     }
 
     /// Return the CrateId for each crate that has been compiled
@@ -106,32 +151,11 @@ impl Context {
     ///
     /// For example, if you project contains a `main.nr` and `foo.nr` and you provide the `main_crate_id` and the
     /// `bar_struct_id` where the `Bar` struct is inside `foo.nr`, this function would return `foo::Bar` as a [String].
-    pub fn fully_qualified_struct_path(&self, crate_id: &CrateId, id: StructId) -> String {
-        let module_id = id.module_id();
-        let child_id = module_id.local_id.0;
-        let def_map =
-            self.def_map(&module_id.krate).expect("The local crate should be analyzed already");
-
-        let module = self.module(module_id);
-
-        let module_path = def_map.get_module_path_with_separator(child_id, module.parent, "::");
-
-        if &module_id.krate == crate_id {
-            module_path
-        } else {
-            let crate_name = &self.crate_graph[crate_id]
-                .dependencies
-                .iter()
-                .find_map(|dep| match dep {
-                    Dependency { name, crate_id } if crate_id == &module_id.krate => Some(name),
-                    _ => None,
-                })
-                .expect("The Struct was supposed to be defined in a dependency");
-            format!("{crate_name}::{module_path}")
-        }
+    pub fn fully_qualified_struct_path(&self, crate_id: &CrateId, id: TypeId) -> String {
+        fully_qualified_module_path(&self.def_maps, &self.crate_graph, crate_id, id.module_id())
     }
 
-    pub fn function_meta(&self, func_id: &FuncId) -> FuncMeta {
+    pub fn function_meta(&self, func_id: &FuncId) -> &FuncMeta {
         self.def_interner.function_meta(func_id)
     }
 
@@ -151,7 +175,7 @@ impl Context {
     pub fn get_all_test_functions_in_crate_matching(
         &self,
         crate_id: &CrateId,
-        pattern: FunctionNameMatch,
+        pattern: &FunctionNameMatch,
     ) -> Vec<(String, TestFunction)> {
         let interner = &self.def_interner;
         let def_map = self.def_map(crate_id).expect("The local crate should be analyzed already");
@@ -163,12 +187,28 @@ impl Context {
                     self.fully_qualified_function_name(crate_id, &test_function.get_id());
                 match &pattern {
                     FunctionNameMatch::Anything => Some((fully_qualified_name, test_function)),
-                    FunctionNameMatch::Exact(pattern) => (&fully_qualified_name == pattern)
+                    FunctionNameMatch::Exact(patterns) => patterns
+                        .iter()
+                        .any(|pattern| &fully_qualified_name == pattern)
                         .then_some((fully_qualified_name, test_function)),
-                    FunctionNameMatch::Contains(pattern) => fully_qualified_name
-                        .contains(pattern)
+                    FunctionNameMatch::Contains(patterns) => patterns
+                        .iter()
+                        .any(|pattern| fully_qualified_name.contains(pattern))
                         .then_some((fully_qualified_name, test_function)),
                 }
+            })
+            .collect()
+    }
+
+    pub fn get_all_exported_functions_in_crate(&self, crate_id: &CrateId) -> Vec<(String, FuncId)> {
+        let interner = &self.def_interner;
+        let def_map = self.def_map(crate_id).expect("The local crate should be analyzed already");
+
+        def_map
+            .get_all_exported_functions(interner)
+            .map(|function_id| {
+                let function_name = self.function_name(&function_id).to_owned();
+                (function_name, function_id)
             })
             .collect()
     }
@@ -180,19 +220,47 @@ impl Context {
             .get_all_contracts(&self.def_interner)
     }
 
-    fn module(&self, module_id: def_map::ModuleId) -> &def_map::ModuleData {
+    pub fn module(&self, module_id: def_map::ModuleId) -> &def_map::ModuleData {
         module_id.module(&self.def_maps)
     }
 
-    /// Returns the next available storage slot in the given module.
-    /// Returns None if the given module is not a contract module.
-    fn next_storage_slot(&mut self, module_id: def_map::ModuleId) -> Option<StorageSlot> {
-        let module = self.module(module_id);
+    /// Generics need to be resolved before elaboration to distinguish
+    /// between normal and numeric generics.
+    /// This method is expected to be used during definition collection.
+    /// Each result is returned in a list rather than returned as a single result as to allow
+    /// definition collection to provide an error for each ill-formed numeric generic.
+    pub(crate) fn resolve_generics(
+        interner: &NodeInterner,
+        generics: &UnresolvedGenerics,
+        errors: &mut Vec<(CompilationError, FileId)>,
+        file_id: FileId,
+    ) -> Generics {
+        vecmap(generics, |generic| {
+            // Map the generic to a fresh type variable
+            let id = interner.next_type_variable_id();
 
-        module.is_contract.then(|| {
-            let next_slot = self.storage_slots.entry(module_id).or_insert(0);
-            *next_slot += 1;
-            *next_slot
+            let type_var_kind = generic.kind().unwrap_or_else(|err| {
+                errors.push((err.into(), file_id));
+                // When there's an error, unify with any other kinds
+                Kind::Any
+            });
+            let type_var = TypeVariable::unbound(id, type_var_kind);
+            let ident = generic.ident();
+            let span = ident.0.span();
+
+            // Check for name collisions of this generic
+            let name = Rc::new(ident.0.contents.clone());
+
+            ResolvedGeneric { name, type_var, span }
         })
+    }
+
+    pub fn crate_files(&self, crate_id: &CrateId) -> HashSet<FileId> {
+        self.def_maps.get(crate_id).map(|def_map| def_map.file_ids()).unwrap_or_default()
+    }
+
+    /// Activates LSP mode, which will track references for all definitions.
+    pub fn activate_lsp_mode(&mut self) {
+        self.def_interner.lsp_mode = true;
     }
 }

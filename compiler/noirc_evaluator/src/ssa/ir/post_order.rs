@@ -13,6 +13,7 @@ enum Visit {
     Last,
 }
 
+#[derive(Default)]
 pub(crate) struct PostOrder(Vec<BasicBlockId>);
 
 impl PostOrder {
@@ -22,7 +23,7 @@ impl PostOrder {
 }
 
 impl PostOrder {
-    /// Allocate and compute a function's block post-order. Pos
+    /// Allocate and compute a function's block post-order.
     pub(crate) fn with_function(func: &Function) -> Self {
         PostOrder(Self::compute_post_order(func))
     }
@@ -51,7 +52,7 @@ impl PostOrder {
                         // stack, we push the item that's due for a visit first to the top.
                         for successor_id in func.dfg[block_id].successors().rev() {
                             if !visited.contains(&successor_id) {
-                                // This not visited check would also be cover by the the next
+                                // This not visited check would also be cover by the next
                                 // iteration, but checking here two saves an iteration per successor.
                                 stack.push((Visit::First, successor_id));
                             }
@@ -73,12 +74,7 @@ impl PostOrder {
 mod tests {
     use crate::ssa::{
         function_builder::FunctionBuilder,
-        ir::{
-            function::{Function, RuntimeType},
-            map::Id,
-            post_order::PostOrder,
-            types::Type,
-        },
+        ir::{function::Function, map::Id, post_order::PostOrder, types::Type},
     };
 
     #[test]
@@ -112,7 +108,7 @@ mod tests {
         // D, F, E, B, A, (C dropped as unreachable)
 
         let func_id = Id::test_new(0);
-        let mut builder = FunctionBuilder::new("func".into(), func_id, RuntimeType::Acir);
+        let mut builder = FunctionBuilder::new("func".into(), func_id);
         let block_b_id = builder.insert_block();
         let block_c_id = builder.insert_block();
         let block_d_id = builder.insert_block();

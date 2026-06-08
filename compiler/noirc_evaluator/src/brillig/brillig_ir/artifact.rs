@@ -1,32 +1,41 @@
 use acvm::acir::brillig::Opcode as BrilligOpcode;
+use acvm::acir::circuit::ErrorSelector;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::ssa::ir::dfg::CallStack;
+use crate::ssa::ir::{basic_block::BasicBlockId, call_stack::CallStack, function::FunctionId};
+use crate::ErrorType;
 
-/// Represents a parameter or a return value of a function.
-#[derive(Debug, Clone)]
+use super::procedures::ProcedureId;
+
+/// Represents a parameter or a return value of an entry point function.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub(crate) enum BrilligParameter {
-    Simple,
+    /// A single address parameter or return value. Holds the bit size of the parameter.
+    SingleAddr(u32),
+    /// An array parameter or return value. Holds the type of an array item and its size.
     Array(Vec<BrilligParameter>, usize),
-    Slice(Vec<BrilligParameter>),
+    /// A slice parameter or return value. Holds the type of a slice item.
+    /// Only known-length slices can be passed to brillig entry points, so the size is available as well.
+    Slice(Vec<BrilligParameter>, usize),
 }
 
 /// The result of compiling and linking brillig artifacts.
 /// This is ready to run bytecode with attached metadata.
-#[derive(Debug)]
-pub(crate) struct GeneratedBrillig {
-    pub(crate) byte_code: Vec<BrilligOpcode>,
+#[derive(Debug, Default)]
+pub(crate) struct GeneratedBrillig<F> {
+    pub(crate) byte_code: Vec<BrilligOpcode<F>>,
     pub(crate) locations: BTreeMap<OpcodeLocation, CallStack>,
-    pub(crate) assert_messages: BTreeMap<OpcodeLocation, String>,
+    pub(crate) error_types: BTreeMap<ErrorSelector, ErrorType>,
+    pub(crate) name: String,
+    pub(crate) procedure_locations: BTreeMap<ProcedureId, (OpcodeLocation, OpcodeLocation)>,
 }
 
 #[derive(Default, Debug, Clone)]
 /// Artifacts resulting from the compilation of a function into brillig byte code.
 /// It includes the bytecode of the function and all the metadata that allows linking with other functions.
-pub(crate) struct BrilligArtifact {
-    pub(crate) byte_code: Vec<BrilligOpcode>,
-    /// A map of bytecode positions to assertion messages
-    pub(crate) assert_messages: BTreeMap<OpcodeLocation, String>,
+pub(crate) struct BrilligArtifact<F> {
+    pub(crate) byte_code: Vec<BrilligOpcode<F>>,
+    pub(crate) error_types: BTreeMap<ErrorSelector, ErrorType>,
     /// The set of jumps that need to have their locations
     /// resolved.
     unresolved_jumps: Vec<(JumpInstructionPosition, UnresolvedJumpLocation)>,
@@ -38,20 +47,103 @@ pub(crate) struct BrilligArtifact {
     /// which are defined in other bytecode, that this bytecode has called.
     /// TODO: perhaps we should combine this with the `unresolved_jumps` field
     /// TODO: and have an enum which indicates whether the jump is internal or external
-    unresolved_external_call_labels: Vec<(JumpInstructionPosition, UnresolvedJumpLocation)>,
+    unresolved_external_call_labels: Vec<(JumpInstructionPosition, Label)>,
     /// Maps the opcodes that are associated with a callstack to it.
     locations: BTreeMap<OpcodeLocation, CallStack>,
     /// The current call stack. All opcodes that are pushed will be associated with this call stack.
     call_stack: CallStack,
+    /// Name of the function, only used for debugging purposes.
+    pub(crate) name: String,
+
+    /// This field contains the given procedure id if this artifact originates from as procedure
+    pub(crate) procedure: Option<ProcedureId>,
+    /// Procedure ID mapped to the range of its opcode locations
+    /// This is created as artifacts are linked together and allows us to determine
+    /// which opcodes originate from reusable procedures.s
+    /// The range is inclusive for both start and end opcode locations.
+    pub(crate) procedure_locations: BTreeMap<ProcedureId, (OpcodeLocation, OpcodeLocation)>,
 }
 
 /// A pointer to a location in the opcode.
 pub(crate) type OpcodeLocation = usize;
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(crate) enum LabelType {
+    /// Labels for the entry point bytecode
+    Entrypoint,
+    /// Labels for user defined functions
+    Function(FunctionId, Option<BasicBlockId>),
+    /// Labels for intrinsic procedures
+    Procedure(ProcedureId),
+    /// Label for initialization of globals
+    /// Stores a function ID referencing the entry point
+    GlobalInit(FunctionId),
+}
+
+impl std::fmt::Display for LabelType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            LabelType::Function(function_id, block_id) => {
+                if let Some(block_id) = block_id {
+                    write!(f, "Function({:?}, {:?})", function_id, block_id)
+                } else {
+                    write!(f, "Function({:?})", function_id)
+                }
+            }
+            LabelType::Entrypoint => write!(f, "Entrypoint"),
+            LabelType::Procedure(procedure_id) => write!(f, "Procedure({:?})", procedure_id),
+            LabelType::GlobalInit(function_id) => {
+                write!(f, "Globals Initialization({function_id:?})")
+            }
+        }
+    }
+}
+
 /// An identifier for a location in the code.
 ///
 /// It is assumed that an entity will keep a map
 /// of labels to Opcode locations.
-pub(crate) type Label = String;
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(crate) struct Label {
+    pub(crate) label_type: LabelType,
+    pub(crate) section: Option<usize>,
+}
+
+impl Label {
+    pub(crate) fn add_section(&self, section: usize) -> Self {
+        Label { label_type: self.label_type.clone(), section: Some(section) }
+    }
+
+    pub(crate) fn function(func_id: FunctionId) -> Self {
+        Label { label_type: LabelType::Function(func_id, None), section: None }
+    }
+
+    pub(crate) fn block(func_id: FunctionId, block_id: BasicBlockId) -> Self {
+        Label { label_type: LabelType::Function(func_id, Some(block_id)), section: None }
+    }
+
+    pub(crate) fn entrypoint() -> Self {
+        Label { label_type: LabelType::Entrypoint, section: None }
+    }
+
+    pub(crate) fn procedure(procedure_id: ProcedureId) -> Self {
+        Label { label_type: LabelType::Procedure(procedure_id), section: None }
+    }
+
+    pub(crate) fn globals_init(function_id: FunctionId) -> Self {
+        Label { label_type: LabelType::GlobalInit(function_id), section: None }
+    }
+}
+
+impl std::fmt::Display for Label {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if let Some(section) = self.section {
+            write!(f, "{:?} - {}", self.label_type, section)
+        } else {
+            write!(f, "{:?}", self.label_type)
+        }
+    }
+}
 /// Pointer to a unresolved Jump instruction in
 /// the bytecode.
 pub(crate) type JumpInstructionPosition = OpcodeLocation;
@@ -67,14 +159,16 @@ pub(crate) type JumpInstructionPosition = OpcodeLocation;
 /// to their position in the bytecode.
 pub(crate) type UnresolvedJumpLocation = Label;
 
-impl BrilligArtifact {
+impl<F: Clone + std::fmt::Debug> BrilligArtifact<F> {
     /// Resolves all jumps and generates the final bytecode
-    pub(crate) fn finish(mut self) -> GeneratedBrillig {
+    pub(crate) fn finish(mut self) -> GeneratedBrillig<F> {
         self.resolve_jumps();
         GeneratedBrillig {
             byte_code: self.byte_code,
             locations: self.locations,
-            assert_messages: self.assert_messages,
+            error_types: self.error_types,
+            name: self.name,
+            procedure_locations: self.procedure_locations,
         }
     }
 
@@ -88,24 +182,18 @@ impl BrilligArtifact {
     /// This method will offset the positions in the Brillig artifact to
     /// account for the fact that it is being appended to the end of this
     /// Brillig artifact (self).
-    pub(crate) fn link_with(&mut self, obj: &BrilligArtifact) {
+    pub(crate) fn link_with(&mut self, obj: &BrilligArtifact<F>) {
         // Add the unresolved jumps of the linked function to this artifact.
         self.add_unresolved_jumps_and_calls(obj);
 
-        let mut byte_code = obj.byte_code.clone();
+        for (error_selector, error_type) in &obj.error_types {
+            self.error_types.insert(*error_selector, error_type.clone());
+        }
 
-        // Replace STOP with RETURN because this is not the end of the program now.
-        let stop_position = byte_code
-            .iter()
-            .position(|opcode| matches!(opcode, BrilligOpcode::Stop))
-            .expect("Trying to link with a function that does not have a stop opcode");
-
-        byte_code[stop_position] = BrilligOpcode::Return;
-
-        self.byte_code.append(&mut byte_code);
+        self.byte_code.append(&mut obj.byte_code.clone());
 
         // Remove all resolved external calls and transform them to jumps
-        let is_resolved = |label: &Label| self.labels.get(label).is_some();
+        let is_resolved = |label: &Label| self.labels.contains_key(label);
 
         let resolved_external_calls = self
             .unresolved_external_call_labels
@@ -122,7 +210,7 @@ impl BrilligArtifact {
     }
 
     /// Adds unresolved jumps & function calls from another artifact offset by the current opcode count in the artifact.
-    fn add_unresolved_jumps_and_calls(&mut self, obj: &BrilligArtifact) {
+    fn add_unresolved_jumps_and_calls(&mut self, obj: &BrilligArtifact<F>) {
         let offset = self.index_of_next_opcode();
         for (jump_label, jump_location) in &obj.unresolved_jumps {
             self.unresolved_jumps.push((jump_label + offset, jump_location.clone()));
@@ -138,17 +226,13 @@ impl BrilligArtifact {
                 .push((position_in_bytecode + offset, label_id.clone()));
         }
 
-        for (position_in_bytecode, message) in &obj.assert_messages {
-            self.assert_messages.insert(position_in_bytecode + offset, message.clone());
-        }
-
         for (position_in_bytecode, call_stack) in obj.locations.iter() {
             self.locations.insert(position_in_bytecode + offset, call_stack.clone());
         }
     }
 
     /// Adds a brillig instruction to the brillig byte code
-    pub(crate) fn push_opcode(&mut self, opcode: BrilligOpcode) {
+    pub(crate) fn push_opcode(&mut self, opcode: BrilligOpcode<F>) {
         if !self.call_stack.is_empty() {
             self.locations.insert(self.index_of_next_opcode(), self.call_stack.clone());
         }
@@ -158,7 +242,7 @@ impl BrilligArtifact {
     /// Adds a unresolved jump to be fixed at the end of bytecode processing.
     pub(crate) fn add_unresolved_jump(
         &mut self,
-        jmp_instruction: BrilligOpcode,
+        jmp_instruction: BrilligOpcode<F>,
         destination: UnresolvedJumpLocation,
     ) {
         assert!(
@@ -172,7 +256,7 @@ impl BrilligArtifact {
     /// Adds a unresolved external call that will be fixed once linking has been done.
     pub(crate) fn add_unresolved_external_call(
         &mut self,
-        call_instruction: BrilligOpcode,
+        call_instruction: BrilligOpcode<F>,
         destination: UnresolvedJumpLocation,
     ) {
         // TODO: Add a check to ensure that the opcode is a call instruction
@@ -182,7 +266,7 @@ impl BrilligArtifact {
     }
 
     /// Returns true if the opcode is a jump instruction
-    fn is_jmp_instruction(instruction: &BrilligOpcode) -> bool {
+    fn is_jmp_instruction(instruction: &BrilligOpcode<F>) -> bool {
         matches!(
             instruction,
             BrilligOpcode::JumpIfNot { .. }
@@ -193,7 +277,7 @@ impl BrilligArtifact {
 
     /// Adds a label in the bytecode to specify where this block's
     /// opcodes will start.
-    pub(crate) fn add_label_at_position(&mut self, label: String, position: OpcodeLocation) {
+    pub(crate) fn add_label_at_position(&mut self, label: Label, position: OpcodeLocation) {
         let old_value = self.labels.insert(label.clone(), position);
         assert!(
             old_value.is_none(),
@@ -254,8 +338,8 @@ impl BrilligArtifact {
         self.call_stack = call_stack;
     }
 
-    pub(crate) fn add_assert_message_to_last_opcode(&mut self, message: String) {
-        let position = self.index_of_next_opcode() - 1;
-        self.assert_messages.insert(position, message);
+    #[cfg(test)]
+    pub(crate) fn take_labels(&mut self) -> HashMap<Label, usize> {
+        std::mem::take(&mut self.labels)
     }
 }

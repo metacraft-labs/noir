@@ -1,0 +1,7 @@
+# Format: [ divident, divisor, quotient ]
+x = [
+    # Division without a remainder
+    [ 169, 13, 13 ], [ 169, "-13", "-13" ], [ "-169", 13, "-13" ], [ "-169", "-13", 13 ],
+    # Division with a remainder
+    [ 769, 107, 7 ], [ 769, "-107", "-7" ], [ "-769", 107, "-7" ], [ "-769", "-107", 7 ],
+]

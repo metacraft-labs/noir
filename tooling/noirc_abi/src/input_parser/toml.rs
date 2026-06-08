@@ -1,6 +1,9 @@
-use super::{parse_str_to_field, parse_str_to_signed, InputValue};
+use super::{
+    field_to_signed_hex, parse_integer_to_signed, parse_str_to_field, parse_str_to_signed,
+    InputValue,
+};
 use crate::{errors::InputParserError, Abi, AbiType, MAIN_RETURN_NAME};
-use acvm::FieldElement;
+use acvm::{AcirField, FieldElement};
 use iter_extended::{try_btree_map, try_vecmap};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -28,8 +31,11 @@ pub(crate) fn parse_toml(
     if let (Some(return_type), Some(toml_return_value)) =
         (&abi.return_type, data.get(MAIN_RETURN_NAME))
     {
-        let return_value =
-            InputValue::try_from_toml(toml_return_value.clone(), return_type, MAIN_RETURN_NAME)?;
+        let return_value = InputValue::try_from_toml(
+            toml_return_value.clone(),
+            &return_type.abi_type,
+            MAIN_RETURN_NAME,
+        )?;
         parsed_inputs.insert(MAIN_RETURN_NAME.to_owned(), return_value);
     }
 
@@ -48,7 +54,7 @@ pub(crate) fn serialize_to_toml(
     if let (Some(return_type), Some(return_value)) =
         (&abi.return_type, input_map.get(MAIN_RETURN_NAME))
     {
-        let return_value = TomlTypes::try_from_input_value(return_value, return_type)?;
+        let return_value = TomlTypes::try_from_input_value(return_value, &return_type.abi_type)?;
         toml_map.insert(MAIN_RETURN_NAME.to_owned(), return_value);
     }
 
@@ -57,7 +63,7 @@ pub(crate) fn serialize_to_toml(
     Ok(toml_string)
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 #[serde(untagged)]
 enum TomlTypes {
     // This is most likely going to be a hex string
@@ -65,7 +71,7 @@ enum TomlTypes {
     String(String),
     // Just a regular integer, that can fit in 64 bits
     // Note that the toml spec specifies that all numbers are represented as `i64`s.
-    Integer(u64),
+    Integer(i64),
     // Simple boolean flag
     Bool(bool),
     // Array of TomlTypes
@@ -80,6 +86,9 @@ impl TomlTypes {
         abi_type: &AbiType,
     ) -> Result<TomlTypes, InputParserError> {
         let toml_value = match (value, abi_type) {
+            (InputValue::Field(f), AbiType::Integer { sign: crate::Sign::Signed, width }) => {
+                TomlTypes::String(field_to_signed_hex(*f, *width))
+            }
             (InputValue::Field(f), AbiType::Field | AbiType::Integer { .. }) => {
                 let f_str = format!("0x{}", f.to_hex());
                 TomlTypes::String(f_str)
@@ -123,15 +132,24 @@ impl InputValue {
     ) -> Result<InputValue, InputParserError> {
         let input_value = match (value, param_type) {
             (TomlTypes::String(string), AbiType::String { .. }) => InputValue::String(string),
+
             (
                 TomlTypes::String(string),
                 AbiType::Field
                 | AbiType::Integer { sign: crate::Sign::Unsigned, .. }
                 | AbiType::Boolean,
-            ) => InputValue::Field(parse_str_to_field(&string)?),
+            ) => InputValue::Field(parse_str_to_field(&string, arg_name)?),
             (TomlTypes::String(string), AbiType::Integer { sign: crate::Sign::Signed, width }) => {
-                InputValue::Field(parse_str_to_signed(&string, *width)?)
+                InputValue::Field(parse_str_to_signed(&string, *width, arg_name)?)
             }
+            (
+                TomlTypes::Integer(integer),
+                AbiType::Integer { sign: crate::Sign::Signed, width },
+            ) => {
+                let new_value = parse_integer_to_signed(integer as i128, *width, arg_name)?;
+                InputValue::Field(new_value)
+            }
+
             (
                 TomlTypes::Integer(integer),
                 AbiType::Field | AbiType::Integer { .. } | AbiType::Boolean,
@@ -144,8 +162,13 @@ impl InputValue {
             (TomlTypes::Bool(boolean), AbiType::Boolean) => InputValue::Field(boolean.into()),
 
             (TomlTypes::Array(array), AbiType::Array { typ, .. }) => {
-                let array_elements =
-                    try_vecmap(array, |value| InputValue::try_from_toml(value, typ, arg_name))?;
+                let mut index = 0;
+                let array_elements = try_vecmap(array, |value| {
+                    let sub_name = format!("{arg_name}[{index}]");
+                    let value = InputValue::try_from_toml(value, typ, &sub_name);
+                    index += 1;
+                    value
+                })?;
                 InputValue::Vec(array_elements)
             }
 
@@ -164,8 +187,12 @@ impl InputValue {
             }
 
             (TomlTypes::Array(array), AbiType::Tuple { fields }) => {
+                let mut index = 0;
                 let tuple_fields = try_vecmap(array.into_iter().zip(fields), |(value, typ)| {
-                    InputValue::try_from_toml(value, typ, arg_name)
+                    let sub_name = format!("{arg_name}[{index}]");
+                    let value = InputValue::try_from_toml(value, typ, &sub_name);
+                    index += 1;
+                    value
                 })?;
                 InputValue::Vec(tuple_fields)
             }
@@ -174,5 +201,66 @@ impl InputValue {
         };
 
         Ok(input_value)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use acvm::FieldElement;
+    use proptest::prelude::*;
+
+    use crate::{
+        arbitrary::arb_abi_and_input_map,
+        input_parser::{arbitrary::arb_signed_integer_type_and_value, toml::TomlTypes, InputValue},
+        AbiType,
+    };
+
+    use super::{parse_toml, serialize_to_toml};
+
+    proptest! {
+        #[test]
+        fn serializing_and_parsing_returns_original_input((abi, input_map) in arb_abi_and_input_map()) {
+            let toml = serialize_to_toml(&input_map, &abi).expect("should be serializable");
+            let parsed_input_map = parse_toml(&toml, &abi).expect("should be parsable");
+
+            prop_assert_eq!(parsed_input_map, input_map);
+        }
+
+        #[test]
+        fn signed_integer_serialization_roundtrip((typ, value) in arb_signed_integer_type_and_value()) {
+            let string_input = TomlTypes::String(value.to_string());
+            let input_value = InputValue::try_from_toml(string_input.clone(), &typ, "foo").expect("should be parsable");
+            let TomlTypes::String(output_string) = TomlTypes::try_from_input_value(&input_value, &typ).expect("should be serializable") else {
+                panic!("wrong type output");
+            };
+            let output_number = if let Some(output_string) = output_string.strip_prefix("-0x") {
+                -i64::from_str_radix(output_string, 16).unwrap()
+            } else {
+                i64::from_str_radix(output_string.strip_prefix("0x").unwrap(), 16).unwrap()
+            };
+            prop_assert_eq!(output_number, value);
+        }
+    }
+
+    #[test]
+    fn errors_on_integer_to_signed_integer_overflow() {
+        let typ = AbiType::Integer { sign: crate::Sign::Signed, width: 8 };
+        let input = TomlTypes::Integer(128);
+        assert!(InputValue::try_from_toml(input, &typ, "foo").is_err());
+
+        let typ = AbiType::Integer { sign: crate::Sign::Signed, width: 16 };
+        let input = TomlTypes::Integer(32768);
+        assert!(InputValue::try_from_toml(input, &typ, "foo").is_err());
+    }
+
+    #[test]
+    fn try_from_toml_negative_integer() {
+        let typ = AbiType::Integer { sign: crate::Sign::Signed, width: 8 };
+        let input = TomlTypes::Integer(-1);
+        let InputValue::Field(field) = InputValue::try_from_toml(input, &typ, "foo").unwrap()
+        else {
+            panic!("Expected field");
+        };
+        assert_eq!(field, FieldElement::from(255_u128));
     }
 }

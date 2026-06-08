@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::BTreeMap};
+use std::borrow::Cow;
 
 use crate::ssa::ir::{
     function::Function,
@@ -19,27 +19,30 @@ pub(super) struct Block {
     /// Maps a ValueId to the Expression it represents.
     /// Multiple ValueIds can map to the same Expression, e.g.
     /// dereferences to the same allocation.
-    pub(super) expressions: BTreeMap<ValueId, Expression>,
+    pub(super) expressions: im::OrdMap<ValueId, Expression>,
 
     /// Each expression is tracked as to how many aliases it
     /// may have. If there is only 1, we can attempt to optimize
     /// out any known loads to that alias. Note that "alias" here
     /// includes the original reference as well.
-    pub(super) aliases: BTreeMap<Expression, AliasSet>,
+    pub(super) aliases: im::OrdMap<Expression, AliasSet>,
 
     /// Each allocate instruction result (and some reference block parameters)
     /// will map to a Reference value which tracks whether the last value stored
     /// to the reference is known.
-    pub(super) references: BTreeMap<ValueId, ReferenceValue>,
+    pub(super) references: im::OrdMap<ValueId, ReferenceValue>,
 
     /// The last instance of a `Store` instruction to each address in this block
-    pub(super) last_stores: BTreeMap<ValueId, InstructionId>,
+    pub(super) last_stores: im::OrdMap<ValueId, InstructionId>,
+
+    // The last instance of a `Load` instruction to each address in this block
+    pub(super) last_loads: im::OrdMap<ValueId, InstructionId>,
 }
 
 /// An `Expression` here is used to represent a canonical key
 /// into the aliases map since otherwise two dereferences of the
 /// same address will be given different ValueIds.
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub(super) enum Expression {
     Dereference(Box<Expression>),
     ArrayElement(Box<Expression>),
@@ -111,10 +114,7 @@ impl Block {
     }
 
     fn invalidate_all_references(&mut self) {
-        for reference_value in self.references.values_mut() {
-            *reference_value = ReferenceValue::Unknown;
-        }
-
+        self.references.clear();
         self.last_stores.clear();
     }
 
@@ -128,6 +128,12 @@ impl Block {
         }
 
         for (expression, new_aliases) in &other.aliases {
+            // If nothing would change, then don't call `.entry(...).and_modify(...)` as it involves creating more `Arc`s.
+            if let Some(aliases) = self.aliases.get(expression) {
+                if !aliases.should_unify(new_aliases) {
+                    continue;
+                }
+            }
             let expression = expression.clone();
 
             self.aliases
@@ -137,7 +143,7 @@ impl Block {
         }
 
         // Keep only the references present in both maps.
-        let mut intersection = BTreeMap::new();
+        let mut intersection = im::OrdMap::new();
         for (value_id, reference) in &other.references {
             if let Some(existing) = self.references.get(value_id) {
                 intersection.insert(*value_id, existing.unify(*reference));
@@ -239,5 +245,15 @@ impl Block {
         }
 
         Cow::Owned(AliasSet::unknown())
+    }
+
+    pub(super) fn set_last_load(&mut self, address: ValueId, instruction: InstructionId) {
+        self.last_loads.insert(address, instruction);
+    }
+
+    pub(super) fn keep_last_load_for(&mut self, address: ValueId, function: &Function) {
+        let address = function.dfg.resolve(address);
+        self.last_loads.remove(&address);
+        self.for_each_alias_of(address, |block, alias| block.last_loads.remove(&alias));
     }
 }

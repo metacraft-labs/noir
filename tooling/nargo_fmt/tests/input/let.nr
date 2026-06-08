@@ -1,3 +1,4 @@
+//@error_on_lost_comment=false
 fn let_() {
     let fn_call = my_function(some_function( 10, "arg1", another_function() ),another_func (20, some_function() , 30 ));
     let array = [[[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]], [[13, 14, 15], [16, 17, 18]]];
@@ -19,16 +20,16 @@ fn let_() {
 
     let person = Person { first_name: "John", last_name: "Doe", home_address: Address { street: "123 Main St", city: "Exampleville", zip_code: "12345", master: Person { first_name: "John", last_name: "Doe", home_address: Address { street: "123 Main St", city: "Exampleville", zip_code: "12345" } } } };
 
-    let expr = Expr {// A boolean literal (true, false).
+    let expr = MyExpr {// A boolean literal (true, false).
 kind: ExprKind::Bool(true),
     };
 
-    let expr = Expr {/*A boolean literal (true, false).*/kind: ExprKind::Bool(true),};
+    let expr = MyExpr {/*A boolean literal (true, false).*/kind: ExprKind::Bool(true),};
 
-    let mut V = dep::crate2::MyStruct { Q: x };
-    let mut V = dep::crate2::MyStruct {};
-    let mut V = dep::crate2::MyStruct {/*test*/};
-    let mut V = dep::crate2::MyStruct {
+    let mut V = crate2::MyStruct { Q: x };
+    let mut V = crate2::MyStruct {};
+    let mut V = crate2::MyStruct {/*test*/};
+    let mut V = crate2::MyStruct {
         // sad
     };
 }

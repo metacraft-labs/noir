@@ -2,14 +2,14 @@ use js_sys::JsString;
 use wasm_bindgen::prelude::*;
 
 use crate::js_witness_map::{field_element_to_js_string, js_value_to_field_element};
-use acvm::FieldElement;
+use acvm::{acir::AcirField, FieldElement};
 
 /// Performs a bitwise AND operation between `lhs` and `rhs`
 #[wasm_bindgen]
 pub fn and(lhs: JsString, rhs: JsString) -> JsString {
     let lhs = js_value_to_field_element(lhs.into()).unwrap();
     let rhs = js_value_to_field_element(rhs.into()).unwrap();
-    let result = lhs.and(&rhs, FieldElement::max_num_bits());
+    let result = acvm::blackbox_solver::bit_and(lhs, rhs, FieldElement::max_num_bits());
     field_element_to_js_string(&result)
 }
 
@@ -18,14 +18,17 @@ pub fn and(lhs: JsString, rhs: JsString) -> JsString {
 pub fn xor(lhs: JsString, rhs: JsString) -> JsString {
     let lhs = js_value_to_field_element(lhs.into()).unwrap();
     let rhs = js_value_to_field_element(rhs.into()).unwrap();
-    let result = lhs.xor(&rhs, FieldElement::max_num_bits());
+    let result = acvm::blackbox_solver::bit_xor(lhs, rhs, FieldElement::max_num_bits());
     field_element_to_js_string(&result)
 }
 
-/// Calculates the SHA256 hash of the input bytes
+/// Sha256 compression function
 #[wasm_bindgen]
-pub fn sha256(inputs: &[u8]) -> Vec<u8> {
-    acvm::blackbox_solver::sha256(inputs).unwrap().into()
+pub fn sha256_compression(inputs: &[u32], state: &[u32]) -> Vec<u32> {
+    let mut state: [u32; 8] = state.try_into().unwrap();
+    let inputs: [u32; 16] = inputs.try_into().unwrap();
+    acvm::blackbox_solver::sha256_compression(&mut state, &inputs);
+    state.to_vec()
 }
 
 /// Calculates the Blake2s256 hash of the input bytes
@@ -33,27 +36,6 @@ pub fn sha256(inputs: &[u8]) -> Vec<u8> {
 pub fn blake2s256(inputs: &[u8]) -> Vec<u8> {
     acvm::blackbox_solver::blake2s(inputs).unwrap().into()
 }
-
-/// Calculates the Keccak256 hash of the input bytes
-#[wasm_bindgen]
-pub fn keccak256(inputs: &[u8]) -> Vec<u8> {
-    acvm::blackbox_solver::keccak256(inputs).unwrap().into()
-}
-
-/// Calculates the Blake2s256 hash of the input bytes and represents these as a single field element.
-// #[wasm_bindgen]
-// pub fn hash_to_field_128_security(inputs: Vec<JsString>) -> JsString {
-//     let input_bytes: Vec<u8> = inputs
-//         .into_iter()
-//         .flat_map(|field_string| {
-//             let field_element = js_value_to_field_element(field_string.into()).unwrap();
-//             witness_assignment.fetch_nearest_bytes(FieldElement::max_num_bits());
-//         })
-//         .collect();
-//     field_element_to_js_string(
-//         &acvm::blackbox_solver::hash_to_field_128_security(&input_bytes).unwrap(),
-//     )
-// }
 
 /// Verifies a ECDSA signature over the secp256k1 curve.
 #[wasm_bindgen]
@@ -74,7 +56,6 @@ pub fn ecdsa_secp256k1_verify(
         signature,
     )
     .unwrap()
-    .into()
 }
 
 /// Verifies a ECDSA signature over the secp256r1 curve.
@@ -96,5 +77,4 @@ pub fn ecdsa_secp256r1_verify(
         signature,
     )
     .unwrap()
-    .into()
 }

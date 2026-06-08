@@ -1,11 +1,22 @@
-use acvm::acir::circuit::OpcodeLocation;
+use acvm::{
+    acir::circuit::{brillig::BrilligFunctionId, OpcodeLocation, RawAssertionPayload},
+    FieldElement,
+};
+use gloo_utils::format::JsValueSerdeExt;
 use js_sys::{Array, Error, JsString, Reflect};
 use wasm_bindgen::prelude::{wasm_bindgen, JsValue};
 
 #[wasm_bindgen(typescript_custom_section)]
 const EXECUTION_ERROR: &'static str = r#"
+export type RawAssertionPayload = {
+    selector: string;
+    data: string[];
+};
+
 export type ExecutionError = Error & {
     callStack?: string[];
+    rawAssertionPayload?: RawAssertionPayload;
+    brilligFunctionId?: number;
 };
 "#;
 
@@ -25,7 +36,12 @@ extern "C" {
 impl JsExecutionError {
     /// Creates a new execution error with the given call stack.
     /// Call stacks won't be optional in the future, after removing ErrorLocation in ACVM.
-    pub fn new(message: String, call_stack: Option<Vec<OpcodeLocation>>) -> Self {
+    pub fn new(
+        message: String,
+        call_stack: Option<Vec<OpcodeLocation>>,
+        assertion_payload: Option<RawAssertionPayload<FieldElement>>,
+        brillig_function_id: Option<BrilligFunctionId>,
+    ) -> Self {
         let mut error = JsExecutionError::constructor(JsString::from(message));
         let js_call_stack = match call_stack {
             Some(call_stack) => {
@@ -37,8 +53,21 @@ impl JsExecutionError {
             }
             None => JsValue::UNDEFINED,
         };
+        let assertion_payload = match assertion_payload {
+            Some(raw) => <JsValue as JsValueSerdeExt>::from_serde(&raw)
+                .expect("Cannot serialize assertion payload"),
+            None => JsValue::UNDEFINED,
+        };
+
+        let brillig_function_id = match brillig_function_id {
+            Some(function_id) => <JsValue as JsValueSerdeExt>::from_serde(&function_id)
+                .expect("Cannot serialize Brillig function id"),
+            None => JsValue::UNDEFINED,
+        };
 
         error.set_property("callStack", js_call_stack);
+        error.set_property("rawAssertionPayload", assertion_payload);
+        error.set_property("brilligFunctionId", brillig_function_id);
 
         error
     }

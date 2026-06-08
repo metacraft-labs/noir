@@ -1,0 +1,4468 @@
+v0 = add_virtual_bool_target_safe
+v2 = add_virtual_bool_target_safe
+v3 = add_virtual_bool_target_safe
+v4 = add_virtual_bool_target_safe
+v5 = add_virtual_bool_target_safe
+v6 = add_virtual_bool_target_safe
+v7 = add_virtual_bool_target_safe
+v8 = add_virtual_bool_target_safe
+v9 = add_virtual_bool_target_safe
+v10 = add_virtual_bool_target_safe
+v11 = add_virtual_bool_target_safe
+v12 = add_virtual_bool_target_safe
+v13 = add_virtual_bool_target_safe
+v14 = add_virtual_bool_target_safe
+v15 = add_virtual_bool_target_safe
+v16 = add_virtual_bool_target_safe
+v17 = add_virtual_bool_target_safe
+v18 = add_virtual_bool_target_safe
+v19 = add_virtual_bool_target_safe
+v20 = add_virtual_bool_target_safe
+v21 = add_virtual_bool_target_safe
+v22 = add_virtual_bool_target_safe
+v23 = add_virtual_bool_target_safe
+v24 = add_virtual_bool_target_safe
+v25 = add_virtual_bool_target_safe
+v26 = add_virtual_bool_target_safe
+v27 = add_virtual_bool_target_safe
+v28 = add_virtual_bool_target_safe
+v29 = add_virtual_bool_target_safe
+v30 = add_virtual_bool_target_safe
+v31 = add_virtual_bool_target_safe
+v32 = add_virtual_bool_target_safe
+v33 = add_virtual_bool_target_safe
+v34 = add_virtual_bool_target_safe
+v35 = add_virtual_bool_target_safe
+v36 = add_virtual_bool_target_safe
+v37 = add_virtual_bool_target_safe
+v38 = add_virtual_bool_target_safe
+v39 = add_virtual_bool_target_safe
+v40 = add_virtual_bool_target_safe
+v41 = add_virtual_bool_target_safe
+v42 = add_virtual_bool_target_safe
+v43 = add_virtual_bool_target_safe
+v44 = add_virtual_bool_target_safe
+v45 = add_virtual_bool_target_safe
+v46 = add_virtual_bool_target_safe
+v47 = add_virtual_bool_target_safe
+v48 = add_virtual_bool_target_safe
+v49 = add_virtual_bool_target_safe
+v50 = add_virtual_bool_target_safe
+v51 = add_virtual_bool_target_safe
+v52 = add_virtual_bool_target_safe
+v53 = add_virtual_bool_target_safe
+v54 = add_virtual_bool_target_safe
+v55 = add_virtual_bool_target_safe
+v56 = add_virtual_bool_target_safe
+v57 = add_virtual_bool_target_safe
+v58 = add_virtual_bool_target_safe
+v59 = add_virtual_bool_target_safe
+v60 = add_virtual_bool_target_safe
+v61 = add_virtual_bool_target_safe
+v62 = add_virtual_bool_target_safe
+v63 = add_virtual_bool_target_safe
+v64 = add_virtual_bool_target_safe
+v65 = add_virtual_target
+v66 = add_virtual_target
+v67 = add_virtual_target
+v68 = add_virtual_target
+v69 = add_virtual_target
+v70 = add_virtual_target
+v71 = add_virtual_target
+v72 = add_virtual_target
+v73 = add_virtual_target
+v74 = add_virtual_target
+v75 = add_virtual_target
+v76 = add_virtual_target
+v77 = add_virtual_target
+v78 = add_virtual_target
+v79 = add_virtual_target
+v80 = add_virtual_target
+v81 = add_virtual_target
+v82 = add_virtual_target
+# [src/dungeon.nr]
+# [22] assert(path[0].x == 0);
+v1 = constant 0
+connect v67,v1
+# [23] assert(path[0].y == 0);
+v1 = constant 0
+connect v68,v1
+# [24] assert(path[7].x == dagger.x);
+connect v81,v65
+# [25] assert(path[7].y == dagger.y);
+connect v82,v66
+# [27] assert(is_within_bounds(path[i]));
+# [18] (square.x as u8 >= 0) & (square.x as u8 < 8) & (square.y as u8 >= 0) & (square.y as u8 < 8)
+(r4c1,r4c2,r4c3,r4c4,r4c5,r4c6,r4c7,r4c8,r4c9,r4c10,r4c11,r4c12,r4c13,r4c14,r4c15,r4c16,r4c17,r4c18,r4c19,r4c20,r4c21,r4c22,r4c23,r4c24,r4c25,r4c26,r4c27,r4c28,r4c29,r4c30,r4c31,r4c32,r4c33,r4c34,r4c35,r4c36,r4c37,r4c38,r4c39,r4c40,r4c41,r4c42,r4c43,r4c44,r4c45,r4c46,r4c47,r4c48,r4c49,r4c50,r4c51,r4c52,r4c53,r4c54,r4c55,r4c56,r4c57,r4c58,r4c59,r4c60,r4c61,r4c62,r4c63,r5c1,r5c2,r5c3,r5c4,r5c5,r5c6,r5c7,r5c8,r5c9,r5c10,r5c11,r5c12,r5c13,r5c14,r5c15,r5c16,r5c17,r5c18,r5c19,r5c20,r5c21,r5c22,r5c23,r5c24,r5c25,r5c26,r5c27,r5c28,r5c29,r5c30,r5c31,r5c32,r5c33,r5c34,r5c35,r5c36,r5c37,r5c38,r5c39,r5c40,r5c41,r5c42,r5c43,r5c44,r5c45,r5c46,r5c47,r5c48,r5c49,r5c50,r5c51,r5c52,r5c53,r5c54,r5c55,r5c56,r5c57,r5c58,r5c59,r5c60,r5c61,r5c62,r5c63,r6c1,r6c2,r6c3,r6c4,r6c5,r6c6,r6c7,r6c8,r6c9,r6c10,r6c11,r6c12,r6c13,r6c14,r6c15,r6c16,r6c17,r6c18,r6c19,r6c20,r6c21,r6c22,r6c23,r6c24,r6c25,r6c26,r6c27,r6c28,r6c29,r6c30,r6c31,r6c32,r6c33,r6c34,r6c35,r6c36,r6c37,r6c38,r6c39,r6c40,r6c41,r6c42,r6c43,r6c44,r6c45,r6c46,r6c47,r6c48,r6c49,r6c50,r6c51,r6c52,r6c53,r6c54,r6c55,r6c56,r6c57,r6c58,r6c59,r6c60,r6c61,r6c62,r6c63,r7c1,r7c2,r7c3,r7c4,r7c5,r7c6,r7c7,r7c8,r7c9,r7c10,r7c11,r7c12,r7c13,r7c14,r7c15,r7c16,r7c17,r7c18,r7c19,r7c20,r7c21,r7c22,r7c23,r7c24,r7c25,r7c26,r7c27,r7c28,r7c29,r7c30,r7c31,r7c32,r7c33,r7c34,r7c35,r7c36,r7c37,r7c38,r7c39,r7c40,r7c41,r7c42,r7c43,r7c44,r7c45,r7c46,r7c47,r7c48,r7c49,r7c50,r7c51,r7c52,r7c53,r7c54,r7c55,r7c56,r7c57,r7c58,r7c59,r7c60,r7c61,r7c62,r7c63,r8c1,r8c2) = split_le v69,254
+r9c43 = le_sum (r4c1,r4c2,r4c3,r4c4,r4c5,r4c6,r4c7,r4c8)
+v85 = add_virtual_target
+connect r9c43,v85
+v86 = constant 8
+# lessthan begin (a = v85, b = v86, signed = false)
+(r10c1,r10c2,r10c3,r10c4,r10c5,r10c6,r10c7,r10c8) = split_le v85,8
+(r11c1,r11c2,r11c3,r11c4,r11c5,r11c6,r11c7,r11c8) = split_le v86,8
+r3c19 = not r10c8
+r12c3 = and r3c19,r11c8
+v88 = is_equal r10c8,r11c8
+r3c35 = not r10c7
+r12c15 = and r3c35,r11c7
+r12c19 = and r12c15,v88
+r9c47 = or r12c3,r12c19
+v90 = is_equal r10c7,r11c7
+r12c31 = and v88,v90
+r3c51 = not r10c6
+r12c35 = and r3c51,r11c6
+r12c39 = and r12c35,r12c31
+r9c51 = or r9c47,r12c39
+v92 = is_equal r10c6,r11c6
+r12c51 = and r12c31,v92
+r3c67 = not r10c5
+r12c55 = and r3c67,r11c5
+r12c59 = and r12c55,r12c51
+r9c55 = or r9c51,r12c59
+v94 = is_equal r10c5,r11c5
+r12c71 = and r12c51,v94
+r14c3 = not r10c4
+r12c75 = and r14c3,r11c4
+r12c79 = and r12c75,r12c71
+r9c59 = or r9c55,r12c79
+v96 = is_equal r10c4,r11c4
+r15c11 = and r12c71,v96
+r14c19 = not r10c3
+r15c15 = and r14c19,r11c3
+r15c19 = and r15c15,r15c11
+r9c63 = or r9c59,r15c19
+v98 = is_equal r10c3,r11c3
+r15c31 = and r15c11,v98
+r14c35 = not r10c2
+r15c35 = and r14c35,r11c2
+r15c39 = and r15c35,r15c31
+r9c67 = or r9c63,r15c39
+v100 = is_equal r10c2,r11c2
+r15c51 = and r15c31,v100
+r14c51 = not r10c1
+r15c55 = and r14c51,r11c1
+r15c59 = and r15c55,r15c51
+r9c71 = or r9c67,r15c59
+# lessthan end (result = r9c71)
+(r16c1,r16c2,r16c3,r16c4,r16c5,r16c6,r16c7,r16c8,r16c9,r16c10,r16c11,r16c12,r16c13,r16c14,r16c15,r16c16,r16c17,r16c18,r16c19,r16c20,r16c21,r16c22,r16c23,r16c24,r16c25,r16c26,r16c27,r16c28,r16c29,r16c30,r16c31,r16c32,r16c33,r16c34,r16c35,r16c36,r16c37,r16c38,r16c39,r16c40,r16c41,r16c42,r16c43,r16c44,r16c45,r16c46,r16c47,r16c48,r16c49,r16c50,r16c51,r16c52,r16c53,r16c54,r16c55,r16c56,r16c57,r16c58,r16c59,r16c60,r16c61,r16c62,r16c63,r17c1,r17c2,r17c3,r17c4,r17c5,r17c6,r17c7,r17c8,r17c9,r17c10,r17c11,r17c12,r17c13,r17c14,r17c15,r17c16,r17c17,r17c18,r17c19,r17c20,r17c21,r17c22,r17c23,r17c24,r17c25,r17c26,r17c27,r17c28,r17c29,r17c30,r17c31,r17c32,r17c33,r17c34,r17c35,r17c36,r17c37,r17c38,r17c39,r17c40,r17c41,r17c42,r17c43,r17c44,r17c45,r17c46,r17c47,r17c48,r17c49,r17c50,r17c51,r17c52,r17c53,r17c54,r17c55,r17c56,r17c57,r17c58,r17c59,r17c60,r17c61,r17c62,r17c63,r18c1,r18c2,r18c3,r18c4,r18c5,r18c6,r18c7,r18c8,r18c9,r18c10,r18c11,r18c12,r18c13,r18c14,r18c15,r18c16,r18c17,r18c18,r18c19,r18c20,r18c21,r18c22,r18c23,r18c24,r18c25,r18c26,r18c27,r18c28,r18c29,r18c30,r18c31,r18c32,r18c33,r18c34,r18c35,r18c36,r18c37,r18c38,r18c39,r18c40,r18c41,r18c42,r18c43,r18c44,r18c45,r18c46,r18c47,r18c48,r18c49,r18c50,r18c51,r18c52,r18c53,r18c54,r18c55,r18c56,r18c57,r18c58,r18c59,r18c60,r18c61,r18c62,r18c63,r19c1,r19c2,r19c3,r19c4,r19c5,r19c6,r19c7,r19c8,r19c9,r19c10,r19c11,r19c12,r19c13,r19c14,r19c15,r19c16,r19c17,r19c18,r19c19,r19c20,r19c21,r19c22,r19c23,r19c24,r19c25,r19c26,r19c27,r19c28,r19c29,r19c30,r19c31,r19c32,r19c33,r19c34,r19c35,r19c36,r19c37,r19c38,r19c39,r19c40,r19c41,r19c42,r19c43,r19c44,r19c45,r19c46,r19c47,r19c48,r19c49,r19c50,r19c51,r19c52,r19c53,r19c54,r19c55,r19c56,r19c57,r19c58,r19c59,r19c60,r19c61,r19c62,r19c63,r20c1,r20c2) = split_le v70,254
+r21c35 = le_sum (r16c1,r16c2,r16c3,r16c4,r16c5,r16c6,r16c7,r16c8)
+v102 = add_virtual_target
+connect r21c35,v102
+v86 = constant 8
+# lessthan begin (a = v102, b = v86, signed = false)
+(r22c1,r22c2,r22c3,r22c4,r22c5,r22c6,r22c7,r22c8) = split_le v102,8
+(r23c1,r23c2,r23c3,r23c4,r23c5,r23c6,r23c7,r23c8) = split_le v86,8
+r14c55 = not r22c8
+r15c63 = and r14c55,r23c8
+v103 = is_equal r22c8,r23c8
+r14c71 = not r22c7
+r15c75 = and r14c71,r23c7
+r15c79 = and r15c75,v103
+r21c39 = or r15c63,r15c79
+v105 = is_equal r22c7,r23c7
+r24c11 = and v103,v105
+r25c7 = not r22c6
+r24c15 = and r25c7,r23c6
+r24c19 = and r24c15,r24c11
+r21c43 = or r21c39,r24c19
+v107 = is_equal r22c6,r23c6
+r24c31 = and r24c11,v107
+r25c23 = not r22c5
+r24c35 = and r25c23,r23c5
+r24c39 = and r24c35,r24c31
+r21c47 = or r21c43,r24c39
+v109 = is_equal r22c5,r23c5
+r24c51 = and r24c31,v109
+r25c39 = not r22c4
+r24c55 = and r25c39,r23c4
+r24c59 = and r24c55,r24c51
+r21c51 = or r21c47,r24c59
+v111 = is_equal r22c4,r23c4
+r24c71 = and r24c51,v111
+r25c55 = not r22c3
+r24c75 = and r25c55,r23c3
+r24c79 = and r24c75,r24c71
+r21c55 = or r21c51,r24c79
+v113 = is_equal r22c3,r23c3
+r26c11 = and r24c71,v113
+r25c71 = not r22c2
+r26c15 = and r25c71,r23c2
+r26c19 = and r26c15,r26c11
+r21c59 = or r21c55,r26c19
+v115 = is_equal r22c2,r23c2
+r26c31 = and r26c11,v115
+r27c7 = not r22c1
+r26c35 = and r27c7,r23c1
+r26c39 = and r26c35,r26c31
+r21c63 = or r21c59,r26c39
+# lessthan end (result = r21c63)
+# [27] assert(is_within_bounds(path[i]));
+v87 = constant_bool true
+connect r9c71,v87
+v87 = constant_bool true
+connect r21c63,v87
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+v117 = is_equal v84,v69
+v87 = constant 1
+v119 = is_equal v87,v70
+r26c59 = and v117,v119
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+v121 = constant 18446744069414584319
+v122 = is_equal v121,v69
+r26c71 = and v122,v119
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+r21c67 = or r26c59,r26c71
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+v124 = constant 18446744069414584320
+v125 = is_equal v124,v70
+r28c3 = and v117,v125
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+r21c71 = or r21c67,r28c3
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r28c7 = and v122,v125
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r21c75 = or r21c71,r28c7
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+v127 = is_equal v87,v69
+v84 = constant 2
+v129 = is_equal v84,v70
+r28c27 = and v127,v129
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+r21c79 = or r21c75,r28c27
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+v124 = constant 18446744069414584320
+v131 = is_equal v124,v69
+r28c39 = and v131,v129
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+r30c3 = or r21c79,r28c39
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+v121 = constant 18446744069414584319
+v133 = is_equal v121,v70
+r28c51 = and v127,v133
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+r30c7 = or r30c3,r28c51
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r28c55 = and v131,v133
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r30c11 = or r30c7,r28c55
+# [28] assert(is_valid_step(path[i - 1], path[i]));
+v87 = constant_bool true
+connect r30c11,v87
+# [27] assert(is_within_bounds(path[i]));
+# [18] (square.x as u8 >= 0) & (square.x as u8 < 8) & (square.y as u8 >= 0) & (square.y as u8 < 8)
+(r32c1,r32c2,r32c3,r32c4,r32c5,r32c6,r32c7,r32c8,r32c9,r32c10,r32c11,r32c12,r32c13,r32c14,r32c15,r32c16,r32c17,r32c18,r32c19,r32c20,r32c21,r32c22,r32c23,r32c24,r32c25,r32c26,r32c27,r32c28,r32c29,r32c30,r32c31,r32c32,r32c33,r32c34,r32c35,r32c36,r32c37,r32c38,r32c39,r32c40,r32c41,r32c42,r32c43,r32c44,r32c45,r32c46,r32c47,r32c48,r32c49,r32c50,r32c51,r32c52,r32c53,r32c54,r32c55,r32c56,r32c57,r32c58,r32c59,r32c60,r32c61,r32c62,r32c63,r33c1,r33c2,r33c3,r33c4,r33c5,r33c6,r33c7,r33c8,r33c9,r33c10,r33c11,r33c12,r33c13,r33c14,r33c15,r33c16,r33c17,r33c18,r33c19,r33c20,r33c21,r33c22,r33c23,r33c24,r33c25,r33c26,r33c27,r33c28,r33c29,r33c30,r33c31,r33c32,r33c33,r33c34,r33c35,r33c36,r33c37,r33c38,r33c39,r33c40,r33c41,r33c42,r33c43,r33c44,r33c45,r33c46,r33c47,r33c48,r33c49,r33c50,r33c51,r33c52,r33c53,r33c54,r33c55,r33c56,r33c57,r33c58,r33c59,r33c60,r33c61,r33c62,r33c63,r34c1,r34c2,r34c3,r34c4,r34c5,r34c6,r34c7,r34c8,r34c9,r34c10,r34c11,r34c12,r34c13,r34c14,r34c15,r34c16,r34c17,r34c18,r34c19,r34c20,r34c21,r34c22,r34c23,r34c24,r34c25,r34c26,r34c27,r34c28,r34c29,r34c30,r34c31,r34c32,r34c33,r34c34,r34c35,r34c36,r34c37,r34c38,r34c39,r34c40,r34c41,r34c42,r34c43,r34c44,r34c45,r34c46,r34c47,r34c48,r34c49,r34c50,r34c51,r34c52,r34c53,r34c54,r34c55,r34c56,r34c57,r34c58,r34c59,r34c60,r34c61,r34c62,r34c63,r35c1,r35c2,r35c3,r35c4,r35c5,r35c6,r35c7,r35c8,r35c9,r35c10,r35c11,r35c12,r35c13,r35c14,r35c15,r35c16,r35c17,r35c18,r35c19,r35c20,r35c21,r35c22,r35c23,r35c24,r35c25,r35c26,r35c27,r35c28,r35c29,r35c30,r35c31,r35c32,r35c33,r35c34,r35c35,r35c36,r35c37,r35c38,r35c39,r35c40,r35c41,r35c42,r35c43,r35c44,r35c45,r35c46,r35c47,r35c48,r35c49,r35c50,r35c51,r35c52,r35c53,r35c54,r35c55,r35c56,r35c57,r35c58,r35c59,r35c60,r35c61,r35c62,r35c63,r36c1,r36c2) = split_le v71,254
+r30c55 = le_sum (r32c1,r32c2,r32c3,r32c4,r32c5,r32c6,r32c7,r32c8)
+v135 = add_virtual_target
+connect r30c55,v135
+v86 = constant 8
+# lessthan begin (a = v135, b = v86, signed = false)
+(r37c1,r37c2,r37c3,r37c4,r37c5,r37c6,r37c7,r37c8) = split_le v135,8
+(r38c1,r38c2,r38c3,r38c4,r38c5,r38c6,r38c7,r38c8) = split_le v86,8
+r29c27 = not r37c8
+r28c59 = and r29c27,r38c8
+v136 = is_equal r37c8,r38c8
+r29c43 = not r37c7
+r28c71 = and r29c43,r38c7
+r28c75 = and r28c71,v136
+r30c59 = or r28c59,r28c75
+v138 = is_equal r37c7,r38c7
+r39c7 = and v136,v138
+r29c59 = not r37c6
+r39c11 = and r29c59,r38c6
+r39c15 = and r39c11,r39c7
+r30c63 = or r30c59,r39c15
+v140 = is_equal r37c6,r38c6
+r39c27 = and r39c7,v140
+r29c75 = not r37c5
+r39c31 = and r29c75,r38c5
+r39c35 = and r39c31,r39c27
+r30c67 = or r30c63,r39c35
+v142 = is_equal r37c5,r38c5
+r39c47 = and r39c27,v142
+r40c11 = not r37c4
+r39c51 = and r40c11,r38c4
+r39c55 = and r39c51,r39c47
+r30c71 = or r30c67,r39c55
+v144 = is_equal r37c4,r38c4
+r39c67 = and r39c47,v144
+r40c27 = not r37c3
+r39c71 = and r40c27,r38c3
+r39c75 = and r39c71,r39c67
+r30c75 = or r30c71,r39c75
+v146 = is_equal r37c3,r38c3
+r41c7 = and r39c67,v146
+r40c43 = not r37c2
+r41c11 = and r40c43,r38c2
+r41c15 = and r41c11,r41c7
+r30c79 = or r30c75,r41c15
+v148 = is_equal r37c2,r38c2
+r41c27 = and r41c7,v148
+r40c59 = not r37c1
+r41c31 = and r40c59,r38c1
+r41c35 = and r41c31,r41c27
+r42c3 = or r30c79,r41c35
+# lessthan end (result = r42c3)
+(r43c1,r43c2,r43c3,r43c4,r43c5,r43c6,r43c7,r43c8,r43c9,r43c10,r43c11,r43c12,r43c13,r43c14,r43c15,r43c16,r43c17,r43c18,r43c19,r43c20,r43c21,r43c22,r43c23,r43c24,r43c25,r43c26,r43c27,r43c28,r43c29,r43c30,r43c31,r43c32,r43c33,r43c34,r43c35,r43c36,r43c37,r43c38,r43c39,r43c40,r43c41,r43c42,r43c43,r43c44,r43c45,r43c46,r43c47,r43c48,r43c49,r43c50,r43c51,r43c52,r43c53,r43c54,r43c55,r43c56,r43c57,r43c58,r43c59,r43c60,r43c61,r43c62,r43c63,r44c1,r44c2,r44c3,r44c4,r44c5,r44c6,r44c7,r44c8,r44c9,r44c10,r44c11,r44c12,r44c13,r44c14,r44c15,r44c16,r44c17,r44c18,r44c19,r44c20,r44c21,r44c22,r44c23,r44c24,r44c25,r44c26,r44c27,r44c28,r44c29,r44c30,r44c31,r44c32,r44c33,r44c34,r44c35,r44c36,r44c37,r44c38,r44c39,r44c40,r44c41,r44c42,r44c43,r44c44,r44c45,r44c46,r44c47,r44c48,r44c49,r44c50,r44c51,r44c52,r44c53,r44c54,r44c55,r44c56,r44c57,r44c58,r44c59,r44c60,r44c61,r44c62,r44c63,r45c1,r45c2,r45c3,r45c4,r45c5,r45c6,r45c7,r45c8,r45c9,r45c10,r45c11,r45c12,r45c13,r45c14,r45c15,r45c16,r45c17,r45c18,r45c19,r45c20,r45c21,r45c22,r45c23,r45c24,r45c25,r45c26,r45c27,r45c28,r45c29,r45c30,r45c31,r45c32,r45c33,r45c34,r45c35,r45c36,r45c37,r45c38,r45c39,r45c40,r45c41,r45c42,r45c43,r45c44,r45c45,r45c46,r45c47,r45c48,r45c49,r45c50,r45c51,r45c52,r45c53,r45c54,r45c55,r45c56,r45c57,r45c58,r45c59,r45c60,r45c61,r45c62,r45c63,r46c1,r46c2,r46c3,r46c4,r46c5,r46c6,r46c7,r46c8,r46c9,r46c10,r46c11,r46c12,r46c13,r46c14,r46c15,r46c16,r46c17,r46c18,r46c19,r46c20,r46c21,r46c22,r46c23,r46c24,r46c25,r46c26,r46c27,r46c28,r46c29,r46c30,r46c31,r46c32,r46c33,r46c34,r46c35,r46c36,r46c37,r46c38,r46c39,r46c40,r46c41,r46c42,r46c43,r46c44,r46c45,r46c46,r46c47,r46c48,r46c49,r46c50,r46c51,r46c52,r46c53,r46c54,r46c55,r46c56,r46c57,r46c58,r46c59,r46c60,r46c61,r46c62,r46c63,r47c1,r47c2) = split_le v72,254
+r42c47 = le_sum (r43c1,r43c2,r43c3,r43c4,r43c5,r43c6,r43c7,r43c8)
+v150 = add_virtual_target
+connect r42c47,v150
+v86 = constant 8
+# lessthan begin (a = v150, b = v86, signed = false)
+(r48c1,r48c2,r48c3,r48c4,r48c5,r48c6,r48c7,r48c8) = split_le v150,8
+(r49c1,r49c2,r49c3,r49c4,r49c5,r49c6,r49c7,r49c8) = split_le v86,8
+r40c63 = not r48c8
+r41c39 = and r40c63,r49c8
+v151 = is_equal r48c8,r49c8
+r40c79 = not r48c7
+r41c51 = and r40c79,r49c7
+r41c55 = and r41c51,v151
+r42c51 = or r41c39,r41c55
+v153 = is_equal r48c7,r49c7
+r41c67 = and v151,v153
+r50c15 = not r48c6
+r41c71 = and r50c15,r49c6
+r41c75 = and r41c71,r41c67
+r42c55 = or r42c51,r41c75
+v155 = is_equal r48c6,r49c6
+r51c7 = and r41c67,v155
+r50c31 = not r48c5
+r51c11 = and r50c31,r49c5
+r51c15 = and r51c11,r51c7
+r42c59 = or r42c55,r51c15
+v157 = is_equal r48c5,r49c5
+r51c27 = and r51c7,v157
+r50c47 = not r48c4
+r51c31 = and r50c47,r49c4
+r51c35 = and r51c31,r51c27
+r42c63 = or r42c59,r51c35
+v159 = is_equal r48c4,r49c4
+r51c47 = and r51c27,v159
+r50c63 = not r48c3
+r51c51 = and r50c63,r49c3
+r51c55 = and r51c51,r51c47
+r42c67 = or r42c63,r51c55
+v161 = is_equal r48c3,r49c3
+r51c67 = and r51c47,v161
+r50c79 = not r48c2
+r51c71 = and r50c79,r49c2
+r51c75 = and r51c71,r51c67
+r42c71 = or r42c67,r51c75
+v163 = is_equal r48c2,r49c2
+r53c7 = and r51c67,v163
+r52c15 = not r48c1
+r53c11 = and r52c15,r49c1
+r53c15 = and r53c11,r53c7
+r42c75 = or r42c71,r53c15
+# lessthan end (result = r42c75)
+# [27] assert(is_within_bounds(path[i]));
+v87 = constant_bool true
+connect r42c3,v87
+v87 = constant_bool true
+connect r42c75,v87
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r42c79 = add v69,v84
+v165 = is_equal r42c79,v71
+v87 = constant 1
+r54c3 = add v70,v87
+v167 = is_equal r54c3,v72
+r53c35 = and v165,v167
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r52c43 = sub v69,v84
+v169 = is_equal r52c43,v71
+r53c47 = and v169,v167
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+r54c7 = or r53c35,r53c47
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+v87 = constant 1
+r52c59 = sub v70,v87
+v171 = is_equal r52c59,v72
+r53c59 = and v165,v171
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+r54c11 = or r54c7,r53c59
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r53c63 = and v169,v171
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r54c15 = or r54c11,r53c63
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r54c19 = add v69,v87
+v173 = is_equal r54c19,v71
+v84 = constant 2
+r54c23 = add v70,v84
+v175 = is_equal r54c23,v72
+r56c3 = and v173,v175
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+r54c27 = or r54c15,r56c3
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r55c19 = sub v69,v87
+v177 = is_equal r55c19,v71
+r56c15 = and v177,v175
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+r54c31 = or r54c27,r56c15
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+v84 = constant 2
+r55c35 = sub v70,v84
+v179 = is_equal r55c35,v72
+r56c27 = and v173,v179
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+r54c35 = or r54c31,r56c27
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r56c31 = and v177,v179
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r54c39 = or r54c35,r56c31
+# [28] assert(is_valid_step(path[i - 1], path[i]));
+v87 = constant_bool true
+connect r54c39,v87
+# [27] assert(is_within_bounds(path[i]));
+# [18] (square.x as u8 >= 0) & (square.x as u8 < 8) & (square.y as u8 >= 0) & (square.y as u8 < 8)
+(r58c1,r58c2,r58c3,r58c4,r58c5,r58c6,r58c7,r58c8,r58c9,r58c10,r58c11,r58c12,r58c13,r58c14,r58c15,r58c16,r58c17,r58c18,r58c19,r58c20,r58c21,r58c22,r58c23,r58c24,r58c25,r58c26,r58c27,r58c28,r58c29,r58c30,r58c31,r58c32,r58c33,r58c34,r58c35,r58c36,r58c37,r58c38,r58c39,r58c40,r58c41,r58c42,r58c43,r58c44,r58c45,r58c46,r58c47,r58c48,r58c49,r58c50,r58c51,r58c52,r58c53,r58c54,r58c55,r58c56,r58c57,r58c58,r58c59,r58c60,r58c61,r58c62,r58c63,r59c1,r59c2,r59c3,r59c4,r59c5,r59c6,r59c7,r59c8,r59c9,r59c10,r59c11,r59c12,r59c13,r59c14,r59c15,r59c16,r59c17,r59c18,r59c19,r59c20,r59c21,r59c22,r59c23,r59c24,r59c25,r59c26,r59c27,r59c28,r59c29,r59c30,r59c31,r59c32,r59c33,r59c34,r59c35,r59c36,r59c37,r59c38,r59c39,r59c40,r59c41,r59c42,r59c43,r59c44,r59c45,r59c46,r59c47,r59c48,r59c49,r59c50,r59c51,r59c52,r59c53,r59c54,r59c55,r59c56,r59c57,r59c58,r59c59,r59c60,r59c61,r59c62,r59c63,r60c1,r60c2,r60c3,r60c4,r60c5,r60c6,r60c7,r60c8,r60c9,r60c10,r60c11,r60c12,r60c13,r60c14,r60c15,r60c16,r60c17,r60c18,r60c19,r60c20,r60c21,r60c22,r60c23,r60c24,r60c25,r60c26,r60c27,r60c28,r60c29,r60c30,r60c31,r60c32,r60c33,r60c34,r60c35,r60c36,r60c37,r60c38,r60c39,r60c40,r60c41,r60c42,r60c43,r60c44,r60c45,r60c46,r60c47,r60c48,r60c49,r60c50,r60c51,r60c52,r60c53,r60c54,r60c55,r60c56,r60c57,r60c58,r60c59,r60c60,r60c61,r60c62,r60c63,r61c1,r61c2,r61c3,r61c4,r61c5,r61c6,r61c7,r61c8,r61c9,r61c10,r61c11,r61c12,r61c13,r61c14,r61c15,r61c16,r61c17,r61c18,r61c19,r61c20,r61c21,r61c22,r61c23,r61c24,r61c25,r61c26,r61c27,r61c28,r61c29,r61c30,r61c31,r61c32,r61c33,r61c34,r61c35,r61c36,r61c37,r61c38,r61c39,r61c40,r61c41,r61c42,r61c43,r61c44,r61c45,r61c46,r61c47,r61c48,r61c49,r61c50,r61c51,r61c52,r61c53,r61c54,r61c55,r61c56,r61c57,r61c58,r61c59,r61c60,r61c61,r61c62,r61c63,r62c1,r62c2) = split_le v73,254
+r63c3 = le_sum (r58c1,r58c2,r58c3,r58c4,r58c5,r58c6,r58c7,r58c8)
+v181 = add_virtual_target
+connect r63c3,v181
+v86 = constant 8
+# lessthan begin (a = v181, b = v86, signed = false)
+(r64c1,r64c2,r64c3,r64c4,r64c5,r64c6,r64c7,r64c8) = split_le v181,8
+(r65c1,r65c2,r65c3,r65c4,r65c5,r65c6,r65c7,r65c8) = split_le v86,8
+r55c51 = not r64c8
+r56c35 = and r55c51,r65c8
+v182 = is_equal r64c8,r65c8
+r55c67 = not r64c7
+r56c47 = and r55c67,r65c7
+r56c51 = and r56c47,v182
+r63c7 = or r56c35,r56c51
+v184 = is_equal r64c7,r65c7
+r56c63 = and v182,v184
+r66c3 = not r64c6
+r56c67 = and r66c3,r65c6
+r56c71 = and r56c67,r56c63
+r63c11 = or r63c7,r56c71
+v186 = is_equal r64c6,r65c6
+r67c3 = and r56c63,v186
+r66c19 = not r64c5
+r67c7 = and r66c19,r65c5
+r67c11 = and r67c7,r67c3
+r63c15 = or r63c11,r67c11
+v188 = is_equal r64c5,r65c5
+r67c23 = and r67c3,v188
+r66c35 = not r64c4
+r67c27 = and r66c35,r65c4
+r67c31 = and r67c27,r67c23
+r63c19 = or r63c15,r67c31
+v190 = is_equal r64c4,r65c4
+r67c43 = and r67c23,v190
+r66c51 = not r64c3
+r67c47 = and r66c51,r65c3
+r67c51 = and r67c47,r67c43
+r63c23 = or r63c19,r67c51
+v192 = is_equal r64c3,r65c3
+r67c63 = and r67c43,v192
+r66c67 = not r64c2
+r67c67 = and r66c67,r65c2
+r67c71 = and r67c67,r67c63
+r63c27 = or r63c23,r67c71
+v194 = is_equal r64c2,r65c2
+r68c3 = and r67c63,v194
+r69c3 = not r64c1
+r68c7 = and r69c3,r65c1
+r68c11 = and r68c7,r68c3
+r63c31 = or r63c27,r68c11
+# lessthan end (result = r63c31)
+(r70c1,r70c2,r70c3,r70c4,r70c5,r70c6,r70c7,r70c8,r70c9,r70c10,r70c11,r70c12,r70c13,r70c14,r70c15,r70c16,r70c17,r70c18,r70c19,r70c20,r70c21,r70c22,r70c23,r70c24,r70c25,r70c26,r70c27,r70c28,r70c29,r70c30,r70c31,r70c32,r70c33,r70c34,r70c35,r70c36,r70c37,r70c38,r70c39,r70c40,r70c41,r70c42,r70c43,r70c44,r70c45,r70c46,r70c47,r70c48,r70c49,r70c50,r70c51,r70c52,r70c53,r70c54,r70c55,r70c56,r70c57,r70c58,r70c59,r70c60,r70c61,r70c62,r70c63,r71c1,r71c2,r71c3,r71c4,r71c5,r71c6,r71c7,r71c8,r71c9,r71c10,r71c11,r71c12,r71c13,r71c14,r71c15,r71c16,r71c17,r71c18,r71c19,r71c20,r71c21,r71c22,r71c23,r71c24,r71c25,r71c26,r71c27,r71c28,r71c29,r71c30,r71c31,r71c32,r71c33,r71c34,r71c35,r71c36,r71c37,r71c38,r71c39,r71c40,r71c41,r71c42,r71c43,r71c44,r71c45,r71c46,r71c47,r71c48,r71c49,r71c50,r71c51,r71c52,r71c53,r71c54,r71c55,r71c56,r71c57,r71c58,r71c59,r71c60,r71c61,r71c62,r71c63,r72c1,r72c2,r72c3,r72c4,r72c5,r72c6,r72c7,r72c8,r72c9,r72c10,r72c11,r72c12,r72c13,r72c14,r72c15,r72c16,r72c17,r72c18,r72c19,r72c20,r72c21,r72c22,r72c23,r72c24,r72c25,r72c26,r72c27,r72c28,r72c29,r72c30,r72c31,r72c32,r72c33,r72c34,r72c35,r72c36,r72c37,r72c38,r72c39,r72c40,r72c41,r72c42,r72c43,r72c44,r72c45,r72c46,r72c47,r72c48,r72c49,r72c50,r72c51,r72c52,r72c53,r72c54,r72c55,r72c56,r72c57,r72c58,r72c59,r72c60,r72c61,r72c62,r72c63,r73c1,r73c2,r73c3,r73c4,r73c5,r73c6,r73c7,r73c8,r73c9,r73c10,r73c11,r73c12,r73c13,r73c14,r73c15,r73c16,r73c17,r73c18,r73c19,r73c20,r73c21,r73c22,r73c23,r73c24,r73c25,r73c26,r73c27,r73c28,r73c29,r73c30,r73c31,r73c32,r73c33,r73c34,r73c35,r73c36,r73c37,r73c38,r73c39,r73c40,r73c41,r73c42,r73c43,r73c44,r73c45,r73c46,r73c47,r73c48,r73c49,r73c50,r73c51,r73c52,r73c53,r73c54,r73c55,r73c56,r73c57,r73c58,r73c59,r73c60,r73c61,r73c62,r73c63,r74c1,r74c2) = split_le v74,254
+r63c75 = le_sum (r70c1,r70c2,r70c3,r70c4,r70c5,r70c6,r70c7,r70c8)
+v196 = add_virtual_target
+connect r63c75,v196
+v86 = constant 8
+# lessthan begin (a = v196, b = v86, signed = false)
+(r75c1,r75c2,r75c3,r75c4,r75c5,r75c6,r75c7,r75c8) = split_le v196,8
+(r76c1,r76c2,r76c3,r76c4,r76c5,r76c6,r76c7,r76c8) = split_le v86,8
+r69c7 = not r75c8
+r68c15 = and r69c7,r76c8
+v197 = is_equal r75c8,r76c8
+r69c23 = not r75c7
+r68c27 = and r69c23,r76c7
+r68c31 = and r68c27,v197
+r63c79 = or r68c15,r68c31
+v199 = is_equal r75c7,r76c7
+r68c43 = and v197,v199
+r69c39 = not r75c6
+r68c47 = and r69c39,r76c6
+r68c51 = and r68c47,r68c43
+r77c3 = or r63c79,r68c51
+v201 = is_equal r75c6,r76c6
+r68c63 = and r68c43,v201
+r69c55 = not r75c5
+r68c67 = and r69c55,r76c5
+r68c71 = and r68c67,r68c63
+r77c7 = or r77c3,r68c71
+v203 = is_equal r75c5,r76c5
+r78c3 = and r68c63,v203
+r69c71 = not r75c4
+r78c7 = and r69c71,r76c4
+r78c11 = and r78c7,r78c3
+r77c11 = or r77c7,r78c11
+v205 = is_equal r75c4,r76c4
+r78c23 = and r78c3,v205
+r79c7 = not r75c3
+r78c27 = and r79c7,r76c3
+r78c31 = and r78c27,r78c23
+r77c15 = or r77c11,r78c31
+v207 = is_equal r75c3,r76c3
+r78c43 = and r78c23,v207
+r79c23 = not r75c2
+r78c47 = and r79c23,r76c2
+r78c51 = and r78c47,r78c43
+r77c19 = or r77c15,r78c51
+v209 = is_equal r75c2,r76c2
+r78c63 = and r78c43,v209
+r79c39 = not r75c1
+r78c67 = and r79c39,r76c1
+r78c71 = and r78c67,r78c63
+r77c23 = or r77c19,r78c71
+# lessthan end (result = r77c23)
+# [27] assert(is_within_bounds(path[i]));
+v87 = constant_bool true
+connect r63c31,v87
+v87 = constant_bool true
+connect r77c23,v87
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r77c27 = add v71,v84
+v211 = is_equal r77c27,v73
+v87 = constant 1
+r77c31 = add v72,v87
+v213 = is_equal r77c31,v74
+r80c11 = and v211,v213
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r79c67 = sub v71,v84
+v215 = is_equal r79c67,v73
+r80c23 = and v215,v213
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+r77c35 = or r80c11,r80c23
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+v87 = constant 1
+r81c3 = sub v72,v87
+v217 = is_equal r81c3,v74
+r80c35 = and v211,v217
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+r77c39 = or r77c35,r80c35
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r80c39 = and v215,v217
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r77c43 = or r77c39,r80c39
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r77c47 = add v71,v87
+v219 = is_equal r77c47,v73
+v84 = constant 2
+r77c51 = add v72,v84
+v221 = is_equal r77c51,v74
+r80c59 = and v219,v221
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+r77c55 = or r77c43,r80c59
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r81c43 = sub v71,v87
+v223 = is_equal r81c43,v73
+r80c71 = and v223,v221
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+r77c59 = or r77c55,r80c71
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+v84 = constant 2
+r81c59 = sub v72,v84
+v225 = is_equal r81c59,v74
+r83c3 = and v219,v225
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+r77c63 = or r77c59,r83c3
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r83c7 = and v223,v225
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r77c67 = or r77c63,r83c7
+# [28] assert(is_valid_step(path[i - 1], path[i]));
+v87 = constant_bool true
+connect r77c67,v87
+# [27] assert(is_within_bounds(path[i]));
+# [18] (square.x as u8 >= 0) & (square.x as u8 < 8) & (square.y as u8 >= 0) & (square.y as u8 < 8)
+(r84c1,r84c2,r84c3,r84c4,r84c5,r84c6,r84c7,r84c8,r84c9,r84c10,r84c11,r84c12,r84c13,r84c14,r84c15,r84c16,r84c17,r84c18,r84c19,r84c20,r84c21,r84c22,r84c23,r84c24,r84c25,r84c26,r84c27,r84c28,r84c29,r84c30,r84c31,r84c32,r84c33,r84c34,r84c35,r84c36,r84c37,r84c38,r84c39,r84c40,r84c41,r84c42,r84c43,r84c44,r84c45,r84c46,r84c47,r84c48,r84c49,r84c50,r84c51,r84c52,r84c53,r84c54,r84c55,r84c56,r84c57,r84c58,r84c59,r84c60,r84c61,r84c62,r84c63,r85c1,r85c2,r85c3,r85c4,r85c5,r85c6,r85c7,r85c8,r85c9,r85c10,r85c11,r85c12,r85c13,r85c14,r85c15,r85c16,r85c17,r85c18,r85c19,r85c20,r85c21,r85c22,r85c23,r85c24,r85c25,r85c26,r85c27,r85c28,r85c29,r85c30,r85c31,r85c32,r85c33,r85c34,r85c35,r85c36,r85c37,r85c38,r85c39,r85c40,r85c41,r85c42,r85c43,r85c44,r85c45,r85c46,r85c47,r85c48,r85c49,r85c50,r85c51,r85c52,r85c53,r85c54,r85c55,r85c56,r85c57,r85c58,r85c59,r85c60,r85c61,r85c62,r85c63,r86c1,r86c2,r86c3,r86c4,r86c5,r86c6,r86c7,r86c8,r86c9,r86c10,r86c11,r86c12,r86c13,r86c14,r86c15,r86c16,r86c17,r86c18,r86c19,r86c20,r86c21,r86c22,r86c23,r86c24,r86c25,r86c26,r86c27,r86c28,r86c29,r86c30,r86c31,r86c32,r86c33,r86c34,r86c35,r86c36,r86c37,r86c38,r86c39,r86c40,r86c41,r86c42,r86c43,r86c44,r86c45,r86c46,r86c47,r86c48,r86c49,r86c50,r86c51,r86c52,r86c53,r86c54,r86c55,r86c56,r86c57,r86c58,r86c59,r86c60,r86c61,r86c62,r86c63,r87c1,r87c2,r87c3,r87c4,r87c5,r87c6,r87c7,r87c8,r87c9,r87c10,r87c11,r87c12,r87c13,r87c14,r87c15,r87c16,r87c17,r87c18,r87c19,r87c20,r87c21,r87c22,r87c23,r87c24,r87c25,r87c26,r87c27,r87c28,r87c29,r87c30,r87c31,r87c32,r87c33,r87c34,r87c35,r87c36,r87c37,r87c38,r87c39,r87c40,r87c41,r87c42,r87c43,r87c44,r87c45,r87c46,r87c47,r87c48,r87c49,r87c50,r87c51,r87c52,r87c53,r87c54,r87c55,r87c56,r87c57,r87c58,r87c59,r87c60,r87c61,r87c62,r87c63,r88c1,r88c2) = split_le v75,254
+r89c31 = le_sum (r84c1,r84c2,r84c3,r84c4,r84c5,r84c6,r84c7,r84c8)
+v227 = add_virtual_target
+connect r89c31,v227
+v86 = constant 8
+# lessthan begin (a = v227, b = v86, signed = false)
+(r90c1,r90c2,r90c3,r90c4,r90c5,r90c6,r90c7,r90c8) = split_le v227,8
+(r91c1,r91c2,r91c3,r91c4,r91c5,r91c6,r91c7,r91c8) = split_le v86,8
+r81c75 = not r90c8
+r83c11 = and r81c75,r91c8
+v228 = is_equal r90c8,r91c8
+r92c11 = not r90c7
+r83c23 = and r92c11,r91c7
+r83c27 = and r83c23,v228
+r89c35 = or r83c11,r83c27
+v230 = is_equal r90c7,r91c7
+r83c39 = and v228,v230
+r92c27 = not r90c6
+r83c43 = and r92c27,r91c6
+r83c47 = and r83c43,r83c39
+r89c39 = or r89c35,r83c47
+v232 = is_equal r90c6,r91c6
+r83c59 = and r83c39,v232
+r92c43 = not r90c5
+r83c63 = and r92c43,r91c5
+r83c67 = and r83c63,r83c59
+r89c43 = or r89c39,r83c67
+v234 = is_equal r90c5,r91c5
+r83c79 = and r83c59,v234
+r92c59 = not r90c4
+r93c3 = and r92c59,r91c4
+r93c7 = and r93c3,r83c79
+r89c47 = or r89c43,r93c7
+v236 = is_equal r90c4,r91c4
+r93c19 = and r83c79,v236
+r92c75 = not r90c3
+r93c23 = and r92c75,r91c3
+r93c27 = and r93c23,r93c19
+r89c51 = or r89c47,r93c27
+v238 = is_equal r90c3,r91c3
+r93c39 = and r93c19,v238
+r94c11 = not r90c2
+r93c43 = and r94c11,r91c2
+r93c47 = and r93c43,r93c39
+r89c55 = or r89c51,r93c47
+v240 = is_equal r90c2,r91c2
+r93c59 = and r93c39,v240
+r94c27 = not r90c1
+r93c63 = and r94c27,r91c1
+r93c67 = and r93c63,r93c59
+r89c59 = or r89c55,r93c67
+# lessthan end (result = r89c59)
+(r95c1,r95c2,r95c3,r95c4,r95c5,r95c6,r95c7,r95c8,r95c9,r95c10,r95c11,r95c12,r95c13,r95c14,r95c15,r95c16,r95c17,r95c18,r95c19,r95c20,r95c21,r95c22,r95c23,r95c24,r95c25,r95c26,r95c27,r95c28,r95c29,r95c30,r95c31,r95c32,r95c33,r95c34,r95c35,r95c36,r95c37,r95c38,r95c39,r95c40,r95c41,r95c42,r95c43,r95c44,r95c45,r95c46,r95c47,r95c48,r95c49,r95c50,r95c51,r95c52,r95c53,r95c54,r95c55,r95c56,r95c57,r95c58,r95c59,r95c60,r95c61,r95c62,r95c63,r96c1,r96c2,r96c3,r96c4,r96c5,r96c6,r96c7,r96c8,r96c9,r96c10,r96c11,r96c12,r96c13,r96c14,r96c15,r96c16,r96c17,r96c18,r96c19,r96c20,r96c21,r96c22,r96c23,r96c24,r96c25,r96c26,r96c27,r96c28,r96c29,r96c30,r96c31,r96c32,r96c33,r96c34,r96c35,r96c36,r96c37,r96c38,r96c39,r96c40,r96c41,r96c42,r96c43,r96c44,r96c45,r96c46,r96c47,r96c48,r96c49,r96c50,r96c51,r96c52,r96c53,r96c54,r96c55,r96c56,r96c57,r96c58,r96c59,r96c60,r96c61,r96c62,r96c63,r97c1,r97c2,r97c3,r97c4,r97c5,r97c6,r97c7,r97c8,r97c9,r97c10,r97c11,r97c12,r97c13,r97c14,r97c15,r97c16,r97c17,r97c18,r97c19,r97c20,r97c21,r97c22,r97c23,r97c24,r97c25,r97c26,r97c27,r97c28,r97c29,r97c30,r97c31,r97c32,r97c33,r97c34,r97c35,r97c36,r97c37,r97c38,r97c39,r97c40,r97c41,r97c42,r97c43,r97c44,r97c45,r97c46,r97c47,r97c48,r97c49,r97c50,r97c51,r97c52,r97c53,r97c54,r97c55,r97c56,r97c57,r97c58,r97c59,r97c60,r97c61,r97c62,r97c63,r98c1,r98c2,r98c3,r98c4,r98c5,r98c6,r98c7,r98c8,r98c9,r98c10,r98c11,r98c12,r98c13,r98c14,r98c15,r98c16,r98c17,r98c18,r98c19,r98c20,r98c21,r98c22,r98c23,r98c24,r98c25,r98c26,r98c27,r98c28,r98c29,r98c30,r98c31,r98c32,r98c33,r98c34,r98c35,r98c36,r98c37,r98c38,r98c39,r98c40,r98c41,r98c42,r98c43,r98c44,r98c45,r98c46,r98c47,r98c48,r98c49,r98c50,r98c51,r98c52,r98c53,r98c54,r98c55,r98c56,r98c57,r98c58,r98c59,r98c60,r98c61,r98c62,r98c63,r99c1,r99c2) = split_le v76,254
+r100c23 = le_sum (r95c1,r95c2,r95c3,r95c4,r95c5,r95c6,r95c7,r95c8)
+v242 = add_virtual_target
+connect r100c23,v242
+v86 = constant 8
+# lessthan begin (a = v242, b = v86, signed = false)
+(r101c1,r101c2,r101c3,r101c4,r101c5,r101c6,r101c7,r101c8) = split_le v242,8
+(r102c1,r102c2,r102c3,r102c4,r102c5,r102c6,r102c7,r102c8) = split_le v86,8
+r94c31 = not r101c8
+r93c71 = and r94c31,r102c8
+v243 = is_equal r101c8,r102c8
+r94c47 = not r101c7
+r103c3 = and r94c47,r102c7
+r103c7 = and r103c3,v243
+r100c27 = or r93c71,r103c7
+v245 = is_equal r101c7,r102c7
+r103c19 = and v243,v245
+r94c63 = not r101c6
+r103c23 = and r94c63,r102c6
+r103c27 = and r103c23,r103c19
+r100c31 = or r100c27,r103c27
+v247 = is_equal r101c6,r102c6
+r103c39 = and r103c19,v247
+r94c79 = not r101c5
+r103c43 = and r94c79,r102c5
+r103c47 = and r103c43,r103c39
+r100c35 = or r100c31,r103c47
+v249 = is_equal r101c5,r102c5
+r103c59 = and r103c39,v249
+r104c15 = not r101c4
+r103c63 = and r104c15,r102c4
+r103c67 = and r103c63,r103c59
+r100c39 = or r100c35,r103c67
+v251 = is_equal r101c4,r102c4
+r103c79 = and r103c59,v251
+r104c31 = not r101c3
+r105c3 = and r104c31,r102c3
+r105c7 = and r105c3,r103c79
+r100c43 = or r100c39,r105c7
+v253 = is_equal r101c3,r102c3
+r105c19 = and r103c79,v253
+r104c47 = not r101c2
+r105c23 = and r104c47,r102c2
+r105c27 = and r105c23,r105c19
+r100c47 = or r100c43,r105c27
+v255 = is_equal r101c2,r102c2
+r105c39 = and r105c19,v255
+r104c63 = not r101c1
+r105c43 = and r104c63,r102c1
+r105c47 = and r105c43,r105c39
+r100c51 = or r100c47,r105c47
+# lessthan end (result = r100c51)
+# [27] assert(is_within_bounds(path[i]));
+v87 = constant_bool true
+connect r89c59,v87
+v87 = constant_bool true
+connect r100c51,v87
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r100c55 = add v73,v84
+v257 = is_equal r100c55,v75
+v87 = constant 1
+r100c59 = add v74,v87
+v259 = is_equal r100c59,v76
+r105c67 = and v257,v259
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r106c11 = sub v73,v84
+v261 = is_equal r106c11,v75
+r105c79 = and v261,v259
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+r100c63 = or r105c67,r105c79
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+v87 = constant 1
+r106c27 = sub v74,v87
+v263 = is_equal r106c27,v76
+r107c11 = and v257,v263
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+r100c67 = or r100c63,r107c11
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r107c15 = and v261,v263
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r100c71 = or r100c67,r107c15
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r100c75 = add v73,v87
+v265 = is_equal r100c75,v75
+v84 = constant 2
+r100c79 = add v74,v84
+v267 = is_equal r100c79,v76
+r107c35 = and v265,v267
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+r109c3 = or r100c71,r107c35
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r106c67 = sub v73,v87
+v269 = is_equal r106c67,v75
+r107c47 = and v269,v267
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+r109c7 = or r109c3,r107c47
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+v84 = constant 2
+r110c3 = sub v74,v84
+v271 = is_equal r110c3,v76
+r107c59 = and v265,v271
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+r109c11 = or r109c7,r107c59
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r107c63 = and v269,v271
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r109c15 = or r109c11,r107c63
+# [28] assert(is_valid_step(path[i - 1], path[i]));
+v87 = constant_bool true
+connect r109c15,v87
+# [27] assert(is_within_bounds(path[i]));
+# [18] (square.x as u8 >= 0) & (square.x as u8 < 8) & (square.y as u8 >= 0) & (square.y as u8 < 8)
+(r111c1,r111c2,r111c3,r111c4,r111c5,r111c6,r111c7,r111c8,r111c9,r111c10,r111c11,r111c12,r111c13,r111c14,r111c15,r111c16,r111c17,r111c18,r111c19,r111c20,r111c21,r111c22,r111c23,r111c24,r111c25,r111c26,r111c27,r111c28,r111c29,r111c30,r111c31,r111c32,r111c33,r111c34,r111c35,r111c36,r111c37,r111c38,r111c39,r111c40,r111c41,r111c42,r111c43,r111c44,r111c45,r111c46,r111c47,r111c48,r111c49,r111c50,r111c51,r111c52,r111c53,r111c54,r111c55,r111c56,r111c57,r111c58,r111c59,r111c60,r111c61,r111c62,r111c63,r112c1,r112c2,r112c3,r112c4,r112c5,r112c6,r112c7,r112c8,r112c9,r112c10,r112c11,r112c12,r112c13,r112c14,r112c15,r112c16,r112c17,r112c18,r112c19,r112c20,r112c21,r112c22,r112c23,r112c24,r112c25,r112c26,r112c27,r112c28,r112c29,r112c30,r112c31,r112c32,r112c33,r112c34,r112c35,r112c36,r112c37,r112c38,r112c39,r112c40,r112c41,r112c42,r112c43,r112c44,r112c45,r112c46,r112c47,r112c48,r112c49,r112c50,r112c51,r112c52,r112c53,r112c54,r112c55,r112c56,r112c57,r112c58,r112c59,r112c60,r112c61,r112c62,r112c63,r113c1,r113c2,r113c3,r113c4,r113c5,r113c6,r113c7,r113c8,r113c9,r113c10,r113c11,r113c12,r113c13,r113c14,r113c15,r113c16,r113c17,r113c18,r113c19,r113c20,r113c21,r113c22,r113c23,r113c24,r113c25,r113c26,r113c27,r113c28,r113c29,r113c30,r113c31,r113c32,r113c33,r113c34,r113c35,r113c36,r113c37,r113c38,r113c39,r113c40,r113c41,r113c42,r113c43,r113c44,r113c45,r113c46,r113c47,r113c48,r113c49,r113c50,r113c51,r113c52,r113c53,r113c54,r113c55,r113c56,r113c57,r113c58,r113c59,r113c60,r113c61,r113c62,r113c63,r114c1,r114c2,r114c3,r114c4,r114c5,r114c6,r114c7,r114c8,r114c9,r114c10,r114c11,r114c12,r114c13,r114c14,r114c15,r114c16,r114c17,r114c18,r114c19,r114c20,r114c21,r114c22,r114c23,r114c24,r114c25,r114c26,r114c27,r114c28,r114c29,r114c30,r114c31,r114c32,r114c33,r114c34,r114c35,r114c36,r114c37,r114c38,r114c39,r114c40,r114c41,r114c42,r114c43,r114c44,r114c45,r114c46,r114c47,r114c48,r114c49,r114c50,r114c51,r114c52,r114c53,r114c54,r114c55,r114c56,r114c57,r114c58,r114c59,r114c60,r114c61,r114c62,r114c63,r115c1,r115c2) = split_le v77,254
+r109c59 = le_sum (r111c1,r111c2,r111c3,r111c4,r111c5,r111c6,r111c7,r111c8)
+v273 = add_virtual_target
+connect r109c59,v273
+v86 = constant 8
+# lessthan begin (a = v273, b = v86, signed = false)
+(r116c1,r116c2,r116c3,r116c4,r116c5,r116c6,r116c7,r116c8) = split_le v273,8
+(r117c1,r117c2,r117c3,r117c4,r117c5,r117c6,r117c7,r117c8) = split_le v86,8
+r110c19 = not r116c8
+r107c67 = and r110c19,r117c8
+v274 = is_equal r116c8,r117c8
+r110c35 = not r116c7
+r107c79 = and r110c35,r117c7
+r118c3 = and r107c79,v274
+r109c63 = or r107c67,r118c3
+v276 = is_equal r116c7,r117c7
+r118c15 = and v274,v276
+r110c51 = not r116c6
+r118c19 = and r110c51,r117c6
+r118c23 = and r118c19,r118c15
+r109c67 = or r109c63,r118c23
+v278 = is_equal r116c6,r117c6
+r118c35 = and r118c15,v278
+r110c67 = not r116c5
+r118c39 = and r110c67,r117c5
+r118c43 = and r118c39,r118c35
+r109c71 = or r109c67,r118c43
+v280 = is_equal r116c5,r117c5
+r118c55 = and r118c35,v280
+r119c3 = not r116c4
+r118c59 = and r119c3,r117c4
+r118c63 = and r118c59,r118c55
+r109c75 = or r109c71,r118c63
+v282 = is_equal r116c4,r117c4
+r118c75 = and r118c55,v282
+r119c19 = not r116c3
+r118c79 = and r119c19,r117c3
+r120c3 = and r118c79,r118c75
+r109c79 = or r109c75,r120c3
+v284 = is_equal r116c3,r117c3
+r120c15 = and r118c75,v284
+r119c35 = not r116c2
+r120c19 = and r119c35,r117c2
+r120c23 = and r120c19,r120c15
+r121c3 = or r109c79,r120c23
+v286 = is_equal r116c2,r117c2
+r120c35 = and r120c15,v286
+r119c51 = not r116c1
+r120c39 = and r119c51,r117c1
+r120c43 = and r120c39,r120c35
+r121c7 = or r121c3,r120c43
+# lessthan end (result = r121c7)
+(r122c1,r122c2,r122c3,r122c4,r122c5,r122c6,r122c7,r122c8,r122c9,r122c10,r122c11,r122c12,r122c13,r122c14,r122c15,r122c16,r122c17,r122c18,r122c19,r122c20,r122c21,r122c22,r122c23,r122c24,r122c25,r122c26,r122c27,r122c28,r122c29,r122c30,r122c31,r122c32,r122c33,r122c34,r122c35,r122c36,r122c37,r122c38,r122c39,r122c40,r122c41,r122c42,r122c43,r122c44,r122c45,r122c46,r122c47,r122c48,r122c49,r122c50,r122c51,r122c52,r122c53,r122c54,r122c55,r122c56,r122c57,r122c58,r122c59,r122c60,r122c61,r122c62,r122c63,r123c1,r123c2,r123c3,r123c4,r123c5,r123c6,r123c7,r123c8,r123c9,r123c10,r123c11,r123c12,r123c13,r123c14,r123c15,r123c16,r123c17,r123c18,r123c19,r123c20,r123c21,r123c22,r123c23,r123c24,r123c25,r123c26,r123c27,r123c28,r123c29,r123c30,r123c31,r123c32,r123c33,r123c34,r123c35,r123c36,r123c37,r123c38,r123c39,r123c40,r123c41,r123c42,r123c43,r123c44,r123c45,r123c46,r123c47,r123c48,r123c49,r123c50,r123c51,r123c52,r123c53,r123c54,r123c55,r123c56,r123c57,r123c58,r123c59,r123c60,r123c61,r123c62,r123c63,r124c1,r124c2,r124c3,r124c4,r124c5,r124c6,r124c7,r124c8,r124c9,r124c10,r124c11,r124c12,r124c13,r124c14,r124c15,r124c16,r124c17,r124c18,r124c19,r124c20,r124c21,r124c22,r124c23,r124c24,r124c25,r124c26,r124c27,r124c28,r124c29,r124c30,r124c31,r124c32,r124c33,r124c34,r124c35,r124c36,r124c37,r124c38,r124c39,r124c40,r124c41,r124c42,r124c43,r124c44,r124c45,r124c46,r124c47,r124c48,r124c49,r124c50,r124c51,r124c52,r124c53,r124c54,r124c55,r124c56,r124c57,r124c58,r124c59,r124c60,r124c61,r124c62,r124c63,r125c1,r125c2,r125c3,r125c4,r125c5,r125c6,r125c7,r125c8,r125c9,r125c10,r125c11,r125c12,r125c13,r125c14,r125c15,r125c16,r125c17,r125c18,r125c19,r125c20,r125c21,r125c22,r125c23,r125c24,r125c25,r125c26,r125c27,r125c28,r125c29,r125c30,r125c31,r125c32,r125c33,r125c34,r125c35,r125c36,r125c37,r125c38,r125c39,r125c40,r125c41,r125c42,r125c43,r125c44,r125c45,r125c46,r125c47,r125c48,r125c49,r125c50,r125c51,r125c52,r125c53,r125c54,r125c55,r125c56,r125c57,r125c58,r125c59,r125c60,r125c61,r125c62,r125c63,r126c1,r126c2) = split_le v78,254
+r121c51 = le_sum (r122c1,r122c2,r122c3,r122c4,r122c5,r122c6,r122c7,r122c8)
+v288 = add_virtual_target
+connect r121c51,v288
+v86 = constant 8
+# lessthan begin (a = v288, b = v86, signed = false)
+(r127c1,r127c2,r127c3,r127c4,r127c5,r127c6,r127c7,r127c8) = split_le v288,8
+(r128c1,r128c2,r128c3,r128c4,r128c5,r128c6,r128c7,r128c8) = split_le v86,8
+r119c55 = not r127c8
+r120c47 = and r119c55,r128c8
+v289 = is_equal r127c8,r128c8
+r119c71 = not r127c7
+r120c59 = and r119c71,r128c7
+r120c63 = and r120c59,v289
+r121c55 = or r120c47,r120c63
+v291 = is_equal r127c7,r128c7
+r120c75 = and v289,v291
+r129c7 = not r127c6
+r120c79 = and r129c7,r128c6
+r130c3 = and r120c79,r120c75
+r121c59 = or r121c55,r130c3
+v293 = is_equal r127c6,r128c6
+r130c15 = and r120c75,v293
+r129c23 = not r127c5
+r130c19 = and r129c23,r128c5
+r130c23 = and r130c19,r130c15
+r121c63 = or r121c59,r130c23
+v295 = is_equal r127c5,r128c5
+r130c35 = and r130c15,v295
+r129c39 = not r127c4
+r130c39 = and r129c39,r128c4
+r130c43 = and r130c39,r130c35
+r121c67 = or r121c63,r130c43
+v297 = is_equal r127c4,r128c4
+r130c55 = and r130c35,v297
+r129c55 = not r127c3
+r130c59 = and r129c55,r128c3
+r130c63 = and r130c59,r130c55
+r121c71 = or r121c67,r130c63
+v299 = is_equal r127c3,r128c3
+r130c75 = and r130c55,v299
+r129c71 = not r127c2
+r130c79 = and r129c71,r128c2
+r131c3 = and r130c79,r130c75
+r121c75 = or r121c71,r131c3
+v301 = is_equal r127c2,r128c2
+r131c15 = and r130c75,v301
+r132c7 = not r127c1
+r131c19 = and r132c7,r128c1
+r131c23 = and r131c19,r131c15
+r121c79 = or r121c75,r131c23
+# lessthan end (result = r121c79)
+# [27] assert(is_within_bounds(path[i]));
+v87 = constant_bool true
+connect r121c7,v87
+v87 = constant_bool true
+connect r121c79,v87
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r133c3 = add v75,v84
+v303 = is_equal r133c3,v77
+v87 = constant 1
+r133c7 = add v76,v87
+v305 = is_equal r133c7,v78
+r131c43 = and v303,v305
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r132c35 = sub v75,v84
+v307 = is_equal r132c35,v77
+r131c55 = and v307,v305
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+r133c11 = or r131c43,r131c55
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+v87 = constant 1
+r132c51 = sub v76,v87
+v309 = is_equal r132c51,v78
+r131c67 = and v303,v309
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+r133c15 = or r133c11,r131c67
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r131c71 = and v307,v309
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r133c19 = or r133c15,r131c71
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r133c23 = add v75,v87
+v311 = is_equal r133c23,v77
+v84 = constant 2
+r133c27 = add v76,v84
+v313 = is_equal r133c27,v78
+r136c11 = and v311,v313
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+r133c31 = or r133c19,r136c11
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r135c11 = sub v75,v87
+v315 = is_equal r135c11,v77
+r136c23 = and v315,v313
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+r133c35 = or r133c31,r136c23
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+v84 = constant 2
+r135c27 = sub v76,v84
+v317 = is_equal r135c27,v78
+r136c35 = and v311,v317
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+r133c39 = or r133c35,r136c35
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r136c39 = and v315,v317
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r133c43 = or r133c39,r136c39
+# [28] assert(is_valid_step(path[i - 1], path[i]));
+v87 = constant_bool true
+connect r133c43,v87
+# [27] assert(is_within_bounds(path[i]));
+# [18] (square.x as u8 >= 0) & (square.x as u8 < 8) & (square.y as u8 >= 0) & (square.y as u8 < 8)
+(r137c1,r137c2,r137c3,r137c4,r137c5,r137c6,r137c7,r137c8,r137c9,r137c10,r137c11,r137c12,r137c13,r137c14,r137c15,r137c16,r137c17,r137c18,r137c19,r137c20,r137c21,r137c22,r137c23,r137c24,r137c25,r137c26,r137c27,r137c28,r137c29,r137c30,r137c31,r137c32,r137c33,r137c34,r137c35,r137c36,r137c37,r137c38,r137c39,r137c40,r137c41,r137c42,r137c43,r137c44,r137c45,r137c46,r137c47,r137c48,r137c49,r137c50,r137c51,r137c52,r137c53,r137c54,r137c55,r137c56,r137c57,r137c58,r137c59,r137c60,r137c61,r137c62,r137c63,r138c1,r138c2,r138c3,r138c4,r138c5,r138c6,r138c7,r138c8,r138c9,r138c10,r138c11,r138c12,r138c13,r138c14,r138c15,r138c16,r138c17,r138c18,r138c19,r138c20,r138c21,r138c22,r138c23,r138c24,r138c25,r138c26,r138c27,r138c28,r138c29,r138c30,r138c31,r138c32,r138c33,r138c34,r138c35,r138c36,r138c37,r138c38,r138c39,r138c40,r138c41,r138c42,r138c43,r138c44,r138c45,r138c46,r138c47,r138c48,r138c49,r138c50,r138c51,r138c52,r138c53,r138c54,r138c55,r138c56,r138c57,r138c58,r138c59,r138c60,r138c61,r138c62,r138c63,r139c1,r139c2,r139c3,r139c4,r139c5,r139c6,r139c7,r139c8,r139c9,r139c10,r139c11,r139c12,r139c13,r139c14,r139c15,r139c16,r139c17,r139c18,r139c19,r139c20,r139c21,r139c22,r139c23,r139c24,r139c25,r139c26,r139c27,r139c28,r139c29,r139c30,r139c31,r139c32,r139c33,r139c34,r139c35,r139c36,r139c37,r139c38,r139c39,r139c40,r139c41,r139c42,r139c43,r139c44,r139c45,r139c46,r139c47,r139c48,r139c49,r139c50,r139c51,r139c52,r139c53,r139c54,r139c55,r139c56,r139c57,r139c58,r139c59,r139c60,r139c61,r139c62,r139c63,r140c1,r140c2,r140c3,r140c4,r140c5,r140c6,r140c7,r140c8,r140c9,r140c10,r140c11,r140c12,r140c13,r140c14,r140c15,r140c16,r140c17,r140c18,r140c19,r140c20,r140c21,r140c22,r140c23,r140c24,r140c25,r140c26,r140c27,r140c28,r140c29,r140c30,r140c31,r140c32,r140c33,r140c34,r140c35,r140c36,r140c37,r140c38,r140c39,r140c40,r140c41,r140c42,r140c43,r140c44,r140c45,r140c46,r140c47,r140c48,r140c49,r140c50,r140c51,r140c52,r140c53,r140c54,r140c55,r140c56,r140c57,r140c58,r140c59,r140c60,r140c61,r140c62,r140c63,r141c1,r141c2) = split_le v79,254
+r142c7 = le_sum (r137c1,r137c2,r137c3,r137c4,r137c5,r137c6,r137c7,r137c8)
+v319 = add_virtual_target
+connect r142c7,v319
+v86 = constant 8
+# lessthan begin (a = v319, b = v86, signed = false)
+(r143c1,r143c2,r143c3,r143c4,r143c5,r143c6,r143c7,r143c8) = split_le v319,8
+(r144c1,r144c2,r144c3,r144c4,r144c5,r144c6,r144c7,r144c8) = split_le v86,8
+r135c43 = not r143c8
+r136c43 = and r135c43,r144c8
+v320 = is_equal r143c8,r144c8
+r135c59 = not r143c7
+r136c55 = and r135c59,r144c7
+r136c59 = and r136c55,v320
+r142c11 = or r136c43,r136c59
+v322 = is_equal r143c7,r144c7
+r136c71 = and v320,v322
+r135c75 = not r143c6
+r136c75 = and r135c75,r144c6
+r136c79 = and r136c75,r136c71
+r142c15 = or r142c11,r136c79
+v324 = is_equal r143c6,r144c6
+r146c11 = and r136c71,v324
+r145c11 = not r143c5
+r146c15 = and r145c11,r144c5
+r146c19 = and r146c15,r146c11
+r142c19 = or r142c15,r146c19
+v326 = is_equal r143c5,r144c5
+r146c31 = and r146c11,v326
+r145c27 = not r143c4
+r146c35 = and r145c27,r144c4
+r146c39 = and r146c35,r146c31
+r142c23 = or r142c19,r146c39
+v328 = is_equal r143c4,r144c4
+r146c51 = and r146c31,v328
+r145c43 = not r143c3
+r146c55 = and r145c43,r144c3
+r146c59 = and r146c55,r146c51
+r142c27 = or r142c23,r146c59
+v330 = is_equal r143c3,r144c3
+r146c71 = and r146c51,v330
+r145c59 = not r143c2
+r146c75 = and r145c59,r144c2
+r146c79 = and r146c75,r146c71
+r142c31 = or r142c27,r146c79
+v332 = is_equal r143c2,r144c2
+r147c11 = and r146c71,v332
+r145c75 = not r143c1
+r147c15 = and r145c75,r144c1
+r147c19 = and r147c15,r147c11
+r142c35 = or r142c31,r147c19
+# lessthan end (result = r142c35)
+(r148c1,r148c2,r148c3,r148c4,r148c5,r148c6,r148c7,r148c8,r148c9,r148c10,r148c11,r148c12,r148c13,r148c14,r148c15,r148c16,r148c17,r148c18,r148c19,r148c20,r148c21,r148c22,r148c23,r148c24,r148c25,r148c26,r148c27,r148c28,r148c29,r148c30,r148c31,r148c32,r148c33,r148c34,r148c35,r148c36,r148c37,r148c38,r148c39,r148c40,r148c41,r148c42,r148c43,r148c44,r148c45,r148c46,r148c47,r148c48,r148c49,r148c50,r148c51,r148c52,r148c53,r148c54,r148c55,r148c56,r148c57,r148c58,r148c59,r148c60,r148c61,r148c62,r148c63,r149c1,r149c2,r149c3,r149c4,r149c5,r149c6,r149c7,r149c8,r149c9,r149c10,r149c11,r149c12,r149c13,r149c14,r149c15,r149c16,r149c17,r149c18,r149c19,r149c20,r149c21,r149c22,r149c23,r149c24,r149c25,r149c26,r149c27,r149c28,r149c29,r149c30,r149c31,r149c32,r149c33,r149c34,r149c35,r149c36,r149c37,r149c38,r149c39,r149c40,r149c41,r149c42,r149c43,r149c44,r149c45,r149c46,r149c47,r149c48,r149c49,r149c50,r149c51,r149c52,r149c53,r149c54,r149c55,r149c56,r149c57,r149c58,r149c59,r149c60,r149c61,r149c62,r149c63,r150c1,r150c2,r150c3,r150c4,r150c5,r150c6,r150c7,r150c8,r150c9,r150c10,r150c11,r150c12,r150c13,r150c14,r150c15,r150c16,r150c17,r150c18,r150c19,r150c20,r150c21,r150c22,r150c23,r150c24,r150c25,r150c26,r150c27,r150c28,r150c29,r150c30,r150c31,r150c32,r150c33,r150c34,r150c35,r150c36,r150c37,r150c38,r150c39,r150c40,r150c41,r150c42,r150c43,r150c44,r150c45,r150c46,r150c47,r150c48,r150c49,r150c50,r150c51,r150c52,r150c53,r150c54,r150c55,r150c56,r150c57,r150c58,r150c59,r150c60,r150c61,r150c62,r150c63,r151c1,r151c2,r151c3,r151c4,r151c5,r151c6,r151c7,r151c8,r151c9,r151c10,r151c11,r151c12,r151c13,r151c14,r151c15,r151c16,r151c17,r151c18,r151c19,r151c20,r151c21,r151c22,r151c23,r151c24,r151c25,r151c26,r151c27,r151c28,r151c29,r151c30,r151c31,r151c32,r151c33,r151c34,r151c35,r151c36,r151c37,r151c38,r151c39,r151c40,r151c41,r151c42,r151c43,r151c44,r151c45,r151c46,r151c47,r151c48,r151c49,r151c50,r151c51,r151c52,r151c53,r151c54,r151c55,r151c56,r151c57,r151c58,r151c59,r151c60,r151c61,r151c62,r151c63,r152c1,r152c2) = split_le v80,254
+r142c79 = le_sum (r148c1,r148c2,r148c3,r148c4,r148c5,r148c6,r148c7,r148c8)
+v334 = add_virtual_target
+connect r142c79,v334
+v86 = constant 8
+# lessthan begin (a = v334, b = v86, signed = false)
+(r153c1,r153c2,r153c3,r153c4,r153c5,r153c6,r153c7,r153c8) = split_le v334,8
+(r154c1,r154c2,r154c3,r154c4,r154c5,r154c6,r154c7,r154c8) = split_le v86,8
+r145c79 = not r153c8
+r147c23 = and r145c79,r154c8
+v335 = is_equal r153c8,r154c8
+r155c15 = not r153c7
+r147c35 = and r155c15,r154c7
+r147c39 = and r147c35,v335
+r156c3 = or r147c23,r147c39
+v337 = is_equal r153c7,r154c7
+r147c51 = and v335,v337
+r155c31 = not r153c6
+r147c55 = and r155c31,r154c6
+r147c59 = and r147c55,r147c51
+r156c7 = or r156c3,r147c59
+v339 = is_equal r153c6,r154c6
+r147c71 = and r147c51,v339
+r155c47 = not r153c5
+r147c75 = and r155c47,r154c5
+r147c79 = and r147c75,r147c71
+r156c11 = or r156c7,r147c79
+v341 = is_equal r153c5,r154c5
+r157c11 = and r147c71,v341
+r155c63 = not r153c4
+r157c15 = and r155c63,r154c4
+r157c19 = and r157c15,r157c11
+r156c15 = or r156c11,r157c19
+v343 = is_equal r153c4,r154c4
+r157c31 = and r157c11,v343
+r155c79 = not r153c3
+r157c35 = and r155c79,r154c3
+r157c39 = and r157c35,r157c31
+r156c19 = or r156c15,r157c39
+v345 = is_equal r153c3,r154c3
+r157c51 = and r157c31,v345
+r158c15 = not r153c2
+r157c55 = and r158c15,r154c2
+r157c59 = and r157c55,r157c51
+r156c23 = or r156c19,r157c59
+v347 = is_equal r153c2,r154c2
+r157c71 = and r157c51,v347
+r158c31 = not r153c1
+r157c75 = and r158c31,r154c1
+r157c79 = and r157c75,r157c71
+r156c27 = or r156c23,r157c79
+# lessthan end (result = r156c27)
+# [27] assert(is_within_bounds(path[i]));
+v87 = constant_bool true
+connect r142c35,v87
+v87 = constant_bool true
+connect r156c27,v87
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r156c31 = add v77,v84
+v349 = is_equal r156c31,v79
+v87 = constant 1
+r156c35 = add v78,v87
+v351 = is_equal r156c35,v80
+r159c19 = and v349,v351
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r158c59 = sub v77,v84
+v353 = is_equal r158c59,v79
+r159c31 = and v353,v351
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+r156c39 = or r159c19,r159c31
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+v87 = constant 1
+r158c75 = sub v78,v87
+v355 = is_equal r158c75,v80
+r159c43 = and v349,v355
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+r156c43 = or r156c39,r159c43
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r159c47 = and v353,v355
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r156c47 = or r156c43,r159c47
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r156c51 = add v77,v87
+v357 = is_equal r156c51,v79
+v84 = constant 2
+r156c55 = add v78,v84
+v359 = is_equal r156c55,v80
+r159c67 = and v357,v359
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+r156c59 = or r156c47,r159c67
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r160c35 = sub v77,v87
+v361 = is_equal r160c35,v79
+r159c79 = and v361,v359
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+r156c63 = or r156c59,r159c79
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+v84 = constant 2
+r160c51 = sub v78,v84
+v363 = is_equal r160c51,v80
+r162c11 = and v357,v363
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+r156c67 = or r156c63,r162c11
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r162c15 = and v361,v363
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r156c71 = or r156c67,r162c15
+# [28] assert(is_valid_step(path[i - 1], path[i]));
+v87 = constant_bool true
+connect r156c71,v87
+# [18] (square.x as u8 >= 0) & (square.x as u8 < 8) & (square.y as u8 >= 0) & (square.y as u8 < 8)
+(r163c1,r163c2,r163c3,r163c4,r163c5,r163c6,r163c7,r163c8,r163c9,r163c10,r163c11,r163c12,r163c13,r163c14,r163c15,r163c16,r163c17,r163c18,r163c19,r163c20,r163c21,r163c22,r163c23,r163c24,r163c25,r163c26,r163c27,r163c28,r163c29,r163c30,r163c31,r163c32,r163c33,r163c34,r163c35,r163c36,r163c37,r163c38,r163c39,r163c40,r163c41,r163c42,r163c43,r163c44,r163c45,r163c46,r163c47,r163c48,r163c49,r163c50,r163c51,r163c52,r163c53,r163c54,r163c55,r163c56,r163c57,r163c58,r163c59,r163c60,r163c61,r163c62,r163c63,r164c1,r164c2,r164c3,r164c4,r164c5,r164c6,r164c7,r164c8,r164c9,r164c10,r164c11,r164c12,r164c13,r164c14,r164c15,r164c16,r164c17,r164c18,r164c19,r164c20,r164c21,r164c22,r164c23,r164c24,r164c25,r164c26,r164c27,r164c28,r164c29,r164c30,r164c31,r164c32,r164c33,r164c34,r164c35,r164c36,r164c37,r164c38,r164c39,r164c40,r164c41,r164c42,r164c43,r164c44,r164c45,r164c46,r164c47,r164c48,r164c49,r164c50,r164c51,r164c52,r164c53,r164c54,r164c55,r164c56,r164c57,r164c58,r164c59,r164c60,r164c61,r164c62,r164c63,r165c1,r165c2,r165c3,r165c4,r165c5,r165c6,r165c7,r165c8,r165c9,r165c10,r165c11,r165c12,r165c13,r165c14,r165c15,r165c16,r165c17,r165c18,r165c19,r165c20,r165c21,r165c22,r165c23,r165c24,r165c25,r165c26,r165c27,r165c28,r165c29,r165c30,r165c31,r165c32,r165c33,r165c34,r165c35,r165c36,r165c37,r165c38,r165c39,r165c40,r165c41,r165c42,r165c43,r165c44,r165c45,r165c46,r165c47,r165c48,r165c49,r165c50,r165c51,r165c52,r165c53,r165c54,r165c55,r165c56,r165c57,r165c58,r165c59,r165c60,r165c61,r165c62,r165c63,r166c1,r166c2,r166c3,r166c4,r166c5,r166c6,r166c7,r166c8,r166c9,r166c10,r166c11,r166c12,r166c13,r166c14,r166c15,r166c16,r166c17,r166c18,r166c19,r166c20,r166c21,r166c22,r166c23,r166c24,r166c25,r166c26,r166c27,r166c28,r166c29,r166c30,r166c31,r166c32,r166c33,r166c34,r166c35,r166c36,r166c37,r166c38,r166c39,r166c40,r166c41,r166c42,r166c43,r166c44,r166c45,r166c46,r166c47,r166c48,r166c49,r166c50,r166c51,r166c52,r166c53,r166c54,r166c55,r166c56,r166c57,r166c58,r166c59,r166c60,r166c61,r166c62,r166c63,r167c1,r167c2) = split_le v65,254
+r168c35 = le_sum (r163c1,r163c2,r163c3,r163c4,r163c5,r163c6,r163c7,r163c8)
+v365 = add_virtual_target
+connect r168c35,v365
+v86 = constant 8
+# lessthan begin (a = v365, b = v86, signed = false)
+(r169c1,r169c2,r169c3,r169c4,r169c5,r169c6,r169c7,r169c8) = split_le v365,8
+(r170c1,r170c2,r170c3,r170c4,r170c5,r170c6,r170c7,r170c8) = split_le v86,8
+r160c67 = not r169c8
+r162c19 = and r160c67,r170c8
+v366 = is_equal r169c8,r170c8
+r171c3 = not r169c7
+r162c31 = and r171c3,r170c7
+r162c35 = and r162c31,v366
+r168c39 = or r162c19,r162c35
+v368 = is_equal r169c7,r170c7
+r162c47 = and v366,v368
+r171c19 = not r169c6
+r162c51 = and r171c19,r170c6
+r162c55 = and r162c51,r162c47
+r168c43 = or r168c39,r162c55
+v370 = is_equal r169c6,r170c6
+r162c67 = and r162c47,v370
+r171c35 = not r169c5
+r162c71 = and r171c35,r170c5
+r162c75 = and r162c71,r162c67
+r168c47 = or r168c43,r162c75
+v372 = is_equal r169c5,r170c5
+r172c7 = and r162c67,v372
+r171c51 = not r169c4
+r172c11 = and r171c51,r170c4
+r172c15 = and r172c11,r172c7
+r168c51 = or r168c47,r172c15
+v374 = is_equal r169c4,r170c4
+r172c27 = and r172c7,v374
+r171c67 = not r169c3
+r172c31 = and r171c67,r170c3
+r172c35 = and r172c31,r172c27
+r168c55 = or r168c51,r172c35
+v376 = is_equal r169c3,r170c3
+r172c47 = and r172c27,v376
+r173c3 = not r169c2
+r172c51 = and r173c3,r170c2
+r172c55 = and r172c51,r172c47
+r168c59 = or r168c55,r172c55
+v378 = is_equal r169c2,r170c2
+r172c67 = and r172c47,v378
+r173c19 = not r169c1
+r172c71 = and r173c19,r170c1
+r172c75 = and r172c71,r172c67
+r168c63 = or r168c59,r172c75
+# lessthan end (result = r168c63)
+(r174c1,r174c2,r174c3,r174c4,r174c5,r174c6,r174c7,r174c8,r174c9,r174c10,r174c11,r174c12,r174c13,r174c14,r174c15,r174c16,r174c17,r174c18,r174c19,r174c20,r174c21,r174c22,r174c23,r174c24,r174c25,r174c26,r174c27,r174c28,r174c29,r174c30,r174c31,r174c32,r174c33,r174c34,r174c35,r174c36,r174c37,r174c38,r174c39,r174c40,r174c41,r174c42,r174c43,r174c44,r174c45,r174c46,r174c47,r174c48,r174c49,r174c50,r174c51,r174c52,r174c53,r174c54,r174c55,r174c56,r174c57,r174c58,r174c59,r174c60,r174c61,r174c62,r174c63,r175c1,r175c2,r175c3,r175c4,r175c5,r175c6,r175c7,r175c8,r175c9,r175c10,r175c11,r175c12,r175c13,r175c14,r175c15,r175c16,r175c17,r175c18,r175c19,r175c20,r175c21,r175c22,r175c23,r175c24,r175c25,r175c26,r175c27,r175c28,r175c29,r175c30,r175c31,r175c32,r175c33,r175c34,r175c35,r175c36,r175c37,r175c38,r175c39,r175c40,r175c41,r175c42,r175c43,r175c44,r175c45,r175c46,r175c47,r175c48,r175c49,r175c50,r175c51,r175c52,r175c53,r175c54,r175c55,r175c56,r175c57,r175c58,r175c59,r175c60,r175c61,r175c62,r175c63,r176c1,r176c2,r176c3,r176c4,r176c5,r176c6,r176c7,r176c8,r176c9,r176c10,r176c11,r176c12,r176c13,r176c14,r176c15,r176c16,r176c17,r176c18,r176c19,r176c20,r176c21,r176c22,r176c23,r176c24,r176c25,r176c26,r176c27,r176c28,r176c29,r176c30,r176c31,r176c32,r176c33,r176c34,r176c35,r176c36,r176c37,r176c38,r176c39,r176c40,r176c41,r176c42,r176c43,r176c44,r176c45,r176c46,r176c47,r176c48,r176c49,r176c50,r176c51,r176c52,r176c53,r176c54,r176c55,r176c56,r176c57,r176c58,r176c59,r176c60,r176c61,r176c62,r176c63,r177c1,r177c2,r177c3,r177c4,r177c5,r177c6,r177c7,r177c8,r177c9,r177c10,r177c11,r177c12,r177c13,r177c14,r177c15,r177c16,r177c17,r177c18,r177c19,r177c20,r177c21,r177c22,r177c23,r177c24,r177c25,r177c26,r177c27,r177c28,r177c29,r177c30,r177c31,r177c32,r177c33,r177c34,r177c35,r177c36,r177c37,r177c38,r177c39,r177c40,r177c41,r177c42,r177c43,r177c44,r177c45,r177c46,r177c47,r177c48,r177c49,r177c50,r177c51,r177c52,r177c53,r177c54,r177c55,r177c56,r177c57,r177c58,r177c59,r177c60,r177c61,r177c62,r177c63,r178c1,r178c2) = split_le v66,254
+r179c27 = le_sum (r174c1,r174c2,r174c3,r174c4,r174c5,r174c6,r174c7,r174c8)
+v380 = add_virtual_target
+connect r179c27,v380
+v86 = constant 8
+# lessthan begin (a = v380, b = v86, signed = false)
+(r180c1,r180c2,r180c3,r180c4,r180c5,r180c6,r180c7,r180c8) = split_le v380,8
+(r181c1,r181c2,r181c3,r181c4,r181c5,r181c6,r181c7,r181c8) = split_le v86,8
+r173c23 = not r180c8
+r172c79 = and r173c23,r181c8
+v381 = is_equal r180c8,r181c8
+r173c39 = not r180c7
+r182c11 = and r173c39,r181c7
+r182c15 = and r182c11,v381
+r179c31 = or r172c79,r182c15
+v383 = is_equal r180c7,r181c7
+r182c27 = and v381,v383
+r173c55 = not r180c6
+r182c31 = and r173c55,r181c6
+r182c35 = and r182c31,r182c27
+r179c35 = or r179c31,r182c35
+v385 = is_equal r180c6,r181c6
+r182c47 = and r182c27,v385
+r173c71 = not r180c5
+r182c51 = and r173c71,r181c5
+r182c55 = and r182c51,r182c47
+r179c39 = or r179c35,r182c55
+v387 = is_equal r180c5,r181c5
+r182c67 = and r182c47,v387
+r183c7 = not r180c4
+r182c71 = and r183c7,r181c4
+r182c75 = and r182c71,r182c67
+r179c43 = or r179c39,r182c75
+v389 = is_equal r180c4,r181c4
+r184c7 = and r182c67,v389
+r183c23 = not r180c3
+r184c11 = and r183c23,r181c3
+r184c15 = and r184c11,r184c7
+r179c47 = or r179c43,r184c15
+v391 = is_equal r180c3,r181c3
+r184c27 = and r184c7,v391
+r183c39 = not r180c2
+r184c31 = and r183c39,r181c2
+r184c35 = and r184c31,r184c27
+r179c51 = or r179c47,r184c35
+v393 = is_equal r180c2,r181c2
+r184c47 = and r184c27,v393
+r183c55 = not r180c1
+r184c51 = and r183c55,r181c1
+r184c55 = and r184c51,r184c47
+r179c55 = or r179c51,r184c55
+# lessthan end (result = r179c55)
+# [27] assert(is_within_bounds(path[i]));
+v87 = constant_bool true
+connect r168c63,v87
+v87 = constant_bool true
+connect r179c55,v87
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r179c59 = add v79,v84
+v395 = is_equal r179c59,v65
+v87 = constant 1
+r179c63 = add v80,v87
+v397 = is_equal r179c63,v66
+r184c75 = and v395,v397
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+v84 = constant 2
+r185c3 = sub v79,v84
+v399 = is_equal r185c3,v65
+r186c7 = and v399,v397
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+r179c67 = or r184c75,r186c7
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+v87 = constant 1
+r185c19 = sub v80,v87
+v401 = is_equal r185c19,v66
+r186c19 = and v395,v401
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+r179c71 = or r179c67,r186c19
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r186c23 = and v399,v401
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+r179c75 = or r179c71,r186c23
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r179c79 = add v79,v87
+v403 = is_equal r179c79,v65
+v84 = constant 2
+r188c3 = add v80,v84
+v405 = is_equal r188c3,v66
+r186c43 = and v403,v405
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+r188c7 = or r179c75,r186c43
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+v87 = constant 1
+r185c59 = sub v79,v87
+v407 = is_equal r185c59,v65
+r186c55 = and v407,v405
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+r188c11 = or r188c7,r186c55
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+v84 = constant 2
+r185c75 = sub v80,v84
+v409 = is_equal r185c75,v66
+r186c67 = and v403,v409
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+r188c15 = or r188c11,r186c67
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r186c71 = and v407,v409
+# [7] ((prev.x + 2 == curr.x) & (prev.y + 1 == curr.y))
+# [8] | ((prev.x - 2 == curr.x) & (prev.y + 1 == curr.y))
+# [9] | ((prev.x + 2 == curr.x) & (prev.y - 1 == curr.y))
+# [10] | ((prev.x - 2 == curr.x) & (prev.y - 1 == curr.y))
+# [11] | ((prev.x + 1 == curr.x) & (prev.y + 2 == curr.y))
+# [12] | ((prev.x - 1 == curr.x) & (prev.y + 2 == curr.y))
+# [13] | ((prev.x + 1 == curr.x) & (prev.y - 2 == curr.y))
+# [14] | ((prev.x - 1 == curr.x) & (prev.y - 2 == curr.y))
+r188c19 = or r188c15,r186c71
+# [28] assert(is_valid_step(path[i - 1], path[i]));
+v87 = constant_bool true
+connect r188c19,v87
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+# [36] if watcher_map[x][y] {
+# [50] assert(is_safe_step(path[i], watcher_map));
+v1 = constant_bool false
+connect v64,v1
+v1 = constant_bool false
+connect v55,v1
+v1 = constant_bool false
+connect v46,v1
+v1 = constant_bool false
+connect v37,v1
+v1 = constant_bool false
+connect v28,v1
+v1 = constant_bool false
+connect v19,v1
+v1 = constant_bool false
+connect v10,v1
+v1 = constant_bool false
+connect v0,v1
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+v411 = is_equal v69,v70
+v1 = constant 0
+r189c23 = sub v1,v70
+v413 = is_equal v69,r189c23
+r188c23 = or v411,v413
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+r190c11 = and v0,r188c23
+v415 = is_equal v69,r52c59
+v87 = constant 1
+r27c27 = sub v87,v70
+v417 = is_equal v69,r27c27
+r188c27 = or v415,v417
+r190c31 = and v2,r188c27
+v419 = is_equal v69,r55c35
+v84 = constant 2
+r27c75 = sub v84,v70
+v421 = is_equal v69,r27c75
+r188c31 = or v419,v421
+r190c51 = and v3,r188c31
+v423 = constant 3
+r191c7 = sub v70,v423
+v424 = is_equal v69,r191c7
+v423 = constant 3
+r191c23 = sub v423,v70
+v426 = is_equal v69,r191c23
+r188c35 = or v424,v426
+r190c71 = and v4,r188c35
+v428 = constant 4
+r191c39 = sub v70,v428
+v429 = is_equal v69,r191c39
+v428 = constant 4
+r191c55 = sub v428,v70
+v431 = is_equal v69,r191c55
+r188c39 = or v429,v431
+r192c11 = and v5,r188c39
+v433 = constant 5
+r191c71 = sub v70,v433
+v434 = is_equal v69,r191c71
+v433 = constant 5
+r193c7 = sub v433,v70
+v436 = is_equal v69,r193c7
+r188c43 = or v434,v436
+r192c31 = and v6,r188c43
+v438 = constant 6
+r193c23 = sub v70,v438
+v439 = is_equal v69,r193c23
+v438 = constant 6
+r193c39 = sub v438,v70
+v441 = is_equal v69,r193c39
+r188c47 = or v439,v441
+r192c51 = and v7,r188c47
+v443 = constant 7
+r193c55 = sub v70,v443
+v444 = is_equal v69,r193c55
+v443 = constant 7
+r193c71 = sub v443,v70
+v446 = is_equal v69,r193c71
+r188c51 = or v444,v446
+r192c71 = and v8,r188c51
+v448 = is_equal r55c19,v70
+v450 = is_equal r55c19,r189c23
+r188c55 = or v448,v450
+r195c11 = and v9,r188c55
+v452 = is_equal r55c19,r52c59
+v454 = is_equal r55c19,r27c27
+r188c59 = or v452,v454
+r195c31 = and v10,r188c59
+v456 = is_equal r55c19,r55c35
+v458 = is_equal r55c19,r27c75
+r188c63 = or v456,v458
+r195c51 = and v11,r188c63
+v460 = is_equal r55c19,r191c7
+v462 = is_equal r55c19,r191c23
+r188c67 = or v460,v462
+r195c71 = and v12,r188c67
+v464 = is_equal r55c19,r191c39
+v466 = is_equal r55c19,r191c55
+r188c71 = or v464,v466
+r197c11 = and v13,r188c71
+v468 = is_equal r55c19,r191c71
+v470 = is_equal r55c19,r193c7
+r188c75 = or v468,v470
+r197c31 = and v14,r188c75
+v472 = is_equal r55c19,r193c23
+v474 = is_equal r55c19,r193c39
+r188c79 = or v472,v474
+r197c51 = and v15,r188c79
+v476 = is_equal r55c19,r193c55
+v478 = is_equal r55c19,r193c71
+r200c3 = or v476,v478
+r197c71 = and v16,r200c3
+v480 = is_equal r52c43,v70
+v482 = is_equal r52c43,r189c23
+r200c7 = or v480,v482
+r201c11 = and v17,r200c7
+v484 = is_equal r52c43,r52c59
+v486 = is_equal r52c43,r27c27
+r200c11 = or v484,v486
+r201c31 = and v18,r200c11
+v488 = is_equal r52c43,r55c35
+v490 = is_equal r52c43,r27c75
+r200c15 = or v488,v490
+r201c51 = and v19,r200c15
+v492 = is_equal r52c43,r191c7
+v494 = is_equal r52c43,r191c23
+r200c19 = or v492,v494
+r201c71 = and v20,r200c19
+v496 = is_equal r52c43,r191c39
+v498 = is_equal r52c43,r191c55
+r200c23 = or v496,v498
+r203c11 = and v21,r200c23
+v500 = is_equal r52c43,r191c71
+v502 = is_equal r52c43,r193c7
+r200c27 = or v500,v502
+r203c31 = and v22,r200c27
+v504 = is_equal r52c43,r193c23
+v506 = is_equal r52c43,r193c39
+r200c31 = or v504,v506
+r203c51 = and v23,r200c31
+v508 = is_equal r52c43,r193c55
+v510 = is_equal r52c43,r193c71
+r200c35 = or v508,v510
+r203c71 = and v24,r200c35
+v423 = constant 3
+r204c71 = sub v69,v423
+v512 = is_equal r204c71,v70
+v514 = is_equal r204c71,r189c23
+r200c39 = or v512,v514
+r206c11 = and v25,r200c39
+v516 = is_equal r204c71,r52c59
+v518 = is_equal r204c71,r27c27
+r200c43 = or v516,v518
+r206c31 = and v26,r200c43
+v520 = is_equal r204c71,r55c35
+v522 = is_equal r204c71,r27c75
+r200c47 = or v520,v522
+r206c51 = and v27,r200c47
+v524 = is_equal r204c71,r191c7
+v526 = is_equal r204c71,r191c23
+r200c51 = or v524,v526
+r206c71 = and v28,r200c51
+v528 = is_equal r204c71,r191c39
+v530 = is_equal r204c71,r191c55
+r200c55 = or v528,v530
+r208c11 = and v29,r200c55
+v532 = is_equal r204c71,r191c71
+v534 = is_equal r204c71,r193c7
+r200c59 = or v532,v534
+r208c31 = and v30,r200c59
+v536 = is_equal r204c71,r193c23
+v538 = is_equal r204c71,r193c39
+r200c63 = or v536,v538
+r208c51 = and v31,r200c63
+v540 = is_equal r204c71,r193c55
+v542 = is_equal r204c71,r193c71
+r200c67 = or v540,v542
+r208c71 = and v32,r200c67
+v428 = constant 4
+r209c27 = sub v69,v428
+v544 = is_equal r209c27,v70
+v546 = is_equal r209c27,r189c23
+r200c71 = or v544,v546
+r210c11 = and v33,r200c71
+v548 = is_equal r209c27,r52c59
+v550 = is_equal r209c27,r27c27
+r200c75 = or v548,v550
+r210c31 = and v34,r200c75
+v552 = is_equal r209c27,r55c35
+v554 = is_equal r209c27,r27c75
+r200c79 = or v552,v554
+r210c51 = and v35,r200c79
+v556 = is_equal r209c27,r191c7
+v558 = is_equal r209c27,r191c23
+r213c3 = or v556,v558
+r210c71 = and v36,r213c3
+v560 = is_equal r209c27,r191c39
+v562 = is_equal r209c27,r191c55
+r213c7 = or v560,v562
+r214c11 = and v37,r213c7
+v564 = is_equal r209c27,r191c71
+v566 = is_equal r209c27,r193c7
+r213c11 = or v564,v566
+r214c31 = and v38,r213c11
+v568 = is_equal r209c27,r193c23
+v570 = is_equal r209c27,r193c39
+r213c15 = or v568,v570
+r214c51 = and v39,r213c15
+v572 = is_equal r209c27,r193c55
+v574 = is_equal r209c27,r193c71
+r213c19 = or v572,v574
+r214c71 = and v40,r213c19
+v433 = constant 5
+r215c63 = sub v69,v433
+v576 = is_equal r215c63,v70
+v578 = is_equal r215c63,r189c23
+r213c23 = or v576,v578
+r217c11 = and v41,r213c23
+v580 = is_equal r215c63,r52c59
+v582 = is_equal r215c63,r27c27
+r213c27 = or v580,v582
+r217c31 = and v42,r213c27
+v584 = is_equal r215c63,r55c35
+v586 = is_equal r215c63,r27c75
+r213c31 = or v584,v586
+r217c51 = and v43,r213c31
+v588 = is_equal r215c63,r191c7
+v590 = is_equal r215c63,r191c23
+r213c35 = or v588,v590
+r217c71 = and v44,r213c35
+v592 = is_equal r215c63,r191c39
+v594 = is_equal r215c63,r191c55
+r213c39 = or v592,v594
+r219c11 = and v45,r213c39
+v596 = is_equal r215c63,r191c71
+v598 = is_equal r215c63,r193c7
+r213c43 = or v596,v598
+r219c31 = and v46,r213c43
+v600 = is_equal r215c63,r193c23
+v602 = is_equal r215c63,r193c39
+r213c47 = or v600,v602
+r219c51 = and v47,r213c47
+v604 = is_equal r215c63,r193c55
+v606 = is_equal r215c63,r193c71
+r213c51 = or v604,v606
+r219c71 = and v48,r213c51
+v438 = constant 6
+r220c19 = sub v69,v438
+v608 = is_equal r220c19,v70
+v610 = is_equal r220c19,r189c23
+r213c55 = or v608,v610
+r221c11 = and v49,r213c55
+v612 = is_equal r220c19,r52c59
+v614 = is_equal r220c19,r27c27
+r213c59 = or v612,v614
+r221c31 = and v50,r213c59
+v616 = is_equal r220c19,r55c35
+v618 = is_equal r220c19,r27c75
+r213c63 = or v616,v618
+r221c51 = and v51,r213c63
+v620 = is_equal r220c19,r191c7
+v622 = is_equal r220c19,r191c23
+r213c67 = or v620,v622
+r221c71 = and v52,r213c67
+v624 = is_equal r220c19,r191c39
+v626 = is_equal r220c19,r191c55
+r213c71 = or v624,v626
+r223c11 = and v53,r213c71
+v628 = is_equal r220c19,r191c71
+v630 = is_equal r220c19,r193c7
+r213c75 = or v628,v630
+r223c31 = and v54,r213c75
+v632 = is_equal r220c19,r193c23
+v634 = is_equal r220c19,r193c39
+r213c79 = or v632,v634
+r223c51 = and v55,r213c79
+v636 = is_equal r220c19,r193c55
+v638 = is_equal r220c19,r193c71
+r226c3 = or v636,v638
+r223c71 = and v56,r226c3
+v443 = constant 7
+r224c55 = sub v69,v443
+v640 = is_equal r224c55,v70
+v642 = is_equal r224c55,r189c23
+r226c7 = or v640,v642
+r227c11 = and v57,r226c7
+v644 = is_equal r224c55,r52c59
+v646 = is_equal r224c55,r27c27
+r226c11 = or v644,v646
+r227c31 = and v58,r226c11
+v648 = is_equal r224c55,r55c35
+v650 = is_equal r224c55,r27c75
+r226c15 = or v648,v650
+r227c51 = and v59,r226c15
+v652 = is_equal r224c55,r191c7
+v654 = is_equal r224c55,r191c23
+r226c19 = or v652,v654
+r227c71 = and v60,r226c19
+v656 = is_equal r224c55,r191c39
+v658 = is_equal r224c55,r191c55
+r226c23 = or v656,v658
+r230c11 = and v61,r226c23
+v660 = is_equal r224c55,r191c71
+v662 = is_equal r224c55,r193c7
+r226c27 = or v660,v662
+r230c31 = and v62,r226c27
+v664 = is_equal r224c55,r193c23
+v666 = is_equal r224c55,r193c39
+r226c31 = or v664,v666
+r230c51 = and v63,r226c31
+v668 = is_equal r224c55,r193c55
+v670 = is_equal r224c55,r193c71
+r226c35 = or v668,v670
+r230c71 = and v64,r226c35
+# [50] assert(is_safe_step(path[i], watcher_map));
+v1 = constant_bool false
+connect r230c71,v1
+v1 = constant_bool false
+connect r230c51,v1
+v1 = constant_bool false
+connect r230c31,v1
+v1 = constant_bool false
+connect r230c11,v1
+v1 = constant_bool false
+connect r227c71,v1
+v1 = constant_bool false
+connect r227c51,v1
+v1 = constant_bool false
+connect r227c31,v1
+v1 = constant_bool false
+connect r227c11,v1
+v1 = constant_bool false
+connect r223c71,v1
+v1 = constant_bool false
+connect r223c51,v1
+v1 = constant_bool false
+connect r223c31,v1
+v1 = constant_bool false
+connect r223c11,v1
+v1 = constant_bool false
+connect r221c71,v1
+v1 = constant_bool false
+connect r221c51,v1
+v1 = constant_bool false
+connect r221c31,v1
+v1 = constant_bool false
+connect r221c11,v1
+v1 = constant_bool false
+connect r219c71,v1
+v1 = constant_bool false
+connect r219c51,v1
+v1 = constant_bool false
+connect r219c31,v1
+v1 = constant_bool false
+connect r219c11,v1
+v1 = constant_bool false
+connect r217c71,v1
+v1 = constant_bool false
+connect r217c51,v1
+v1 = constant_bool false
+connect r217c31,v1
+v1 = constant_bool false
+connect r217c11,v1
+v1 = constant_bool false
+connect r214c71,v1
+v1 = constant_bool false
+connect r214c51,v1
+v1 = constant_bool false
+connect r214c31,v1
+v1 = constant_bool false
+connect r214c11,v1
+v1 = constant_bool false
+connect r210c71,v1
+v1 = constant_bool false
+connect r210c51,v1
+v1 = constant_bool false
+connect r210c31,v1
+v1 = constant_bool false
+connect r210c11,v1
+v1 = constant_bool false
+connect r208c71,v1
+v1 = constant_bool false
+connect r208c51,v1
+v1 = constant_bool false
+connect r208c31,v1
+v1 = constant_bool false
+connect r208c11,v1
+v1 = constant_bool false
+connect r206c71,v1
+v1 = constant_bool false
+connect r206c51,v1
+v1 = constant_bool false
+connect r206c31,v1
+v1 = constant_bool false
+connect r206c11,v1
+v1 = constant_bool false
+connect r203c71,v1
+v1 = constant_bool false
+connect r203c51,v1
+v1 = constant_bool false
+connect r203c31,v1
+v1 = constant_bool false
+connect r203c11,v1
+v1 = constant_bool false
+connect r201c71,v1
+v1 = constant_bool false
+connect r201c51,v1
+v1 = constant_bool false
+connect r201c31,v1
+v1 = constant_bool false
+connect r201c11,v1
+v1 = constant_bool false
+connect r197c71,v1
+v1 = constant_bool false
+connect r197c51,v1
+v1 = constant_bool false
+connect r197c31,v1
+v1 = constant_bool false
+connect r197c11,v1
+v1 = constant_bool false
+connect r195c71,v1
+v1 = constant_bool false
+connect r195c51,v1
+v1 = constant_bool false
+connect r195c31,v1
+v1 = constant_bool false
+connect r195c11,v1
+v1 = constant_bool false
+connect r192c71,v1
+v1 = constant_bool false
+connect r192c51,v1
+v1 = constant_bool false
+connect r192c31,v1
+v1 = constant_bool false
+connect r192c11,v1
+v1 = constant_bool false
+connect r190c71,v1
+v1 = constant_bool false
+connect r190c51,v1
+v1 = constant_bool false
+connect r190c31,v1
+v1 = constant_bool false
+connect r190c11,v1
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+v672 = is_equal v71,v72
+v1 = constant 0
+r231c23 = sub v1,v72
+v674 = is_equal v71,r231c23
+r226c39 = or v672,v674
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+r232c11 = and v0,r226c39
+v676 = is_equal v71,r81c3
+v87 = constant 1
+r231c51 = sub v87,v72
+v678 = is_equal v71,r231c51
+r226c43 = or v676,v678
+r232c31 = and v2,r226c43
+v680 = is_equal v71,r81c59
+v84 = constant 2
+r231c79 = sub v84,v72
+v682 = is_equal v71,r231c79
+r226c47 = or v680,v682
+r232c51 = and v3,r226c47
+v423 = constant 3
+r233c15 = sub v72,v423
+v684 = is_equal v71,r233c15
+v423 = constant 3
+r233c31 = sub v423,v72
+v686 = is_equal v71,r233c31
+r226c51 = or v684,v686
+r232c71 = and v4,r226c51
+v428 = constant 4
+r233c47 = sub v72,v428
+v688 = is_equal v71,r233c47
+v428 = constant 4
+r233c63 = sub v428,v72
+v690 = is_equal v71,r233c63
+r226c55 = or v688,v690
+r234c11 = and v5,r226c55
+v433 = constant 5
+r233c79 = sub v72,v433
+v692 = is_equal v71,r233c79
+v433 = constant 5
+r235c15 = sub v433,v72
+v694 = is_equal v71,r235c15
+r226c59 = or v692,v694
+r234c31 = and v6,r226c59
+v438 = constant 6
+r235c31 = sub v72,v438
+v696 = is_equal v71,r235c31
+v438 = constant 6
+r235c47 = sub v438,v72
+v698 = is_equal v71,r235c47
+r226c63 = or v696,v698
+r234c51 = and v7,r226c63
+v443 = constant 7
+r235c63 = sub v72,v443
+v700 = is_equal v71,r235c63
+v443 = constant 7
+r235c79 = sub v443,v72
+v702 = is_equal v71,r235c79
+r226c67 = or v700,v702
+r234c71 = and v8,r226c67
+v704 = is_equal r81c43,v72
+v706 = is_equal r81c43,r231c23
+r226c71 = or v704,v706
+r237c11 = and v9,r226c71
+v708 = is_equal r81c43,r81c3
+v710 = is_equal r81c43,r231c51
+r226c75 = or v708,v710
+r237c31 = and v10,r226c75
+v712 = is_equal r81c43,r81c59
+v714 = is_equal r81c43,r231c79
+r226c79 = or v712,v714
+r237c51 = and v11,r226c79
+v716 = is_equal r81c43,r233c15
+v718 = is_equal r81c43,r233c31
+r240c3 = or v716,v718
+r237c71 = and v12,r240c3
+v720 = is_equal r81c43,r233c47
+v722 = is_equal r81c43,r233c63
+r240c7 = or v720,v722
+r241c11 = and v13,r240c7
+v724 = is_equal r81c43,r233c79
+v726 = is_equal r81c43,r235c15
+r240c11 = or v724,v726
+r241c31 = and v14,r240c11
+v728 = is_equal r81c43,r235c31
+v730 = is_equal r81c43,r235c47
+r240c15 = or v728,v730
+r241c51 = and v15,r240c15
+v732 = is_equal r81c43,r235c63
+v734 = is_equal r81c43,r235c79
+r240c19 = or v732,v734
+r241c71 = and v16,r240c19
+v736 = is_equal r79c67,v72
+v738 = is_equal r79c67,r231c23
+r240c23 = or v736,v738
+r243c11 = and v17,r240c23
+v740 = is_equal r79c67,r81c3
+v742 = is_equal r79c67,r231c51
+r240c27 = or v740,v742
+r243c31 = and v18,r240c27
+v744 = is_equal r79c67,r81c59
+v746 = is_equal r79c67,r231c79
+r240c31 = or v744,v746
+r243c51 = and v19,r240c31
+v748 = is_equal r79c67,r233c15
+v750 = is_equal r79c67,r233c31
+r240c35 = or v748,v750
+r243c71 = and v20,r240c35
+v752 = is_equal r79c67,r233c47
+v754 = is_equal r79c67,r233c63
+r240c39 = or v752,v754
+r245c11 = and v21,r240c39
+v756 = is_equal r79c67,r233c79
+v758 = is_equal r79c67,r235c15
+r240c43 = or v756,v758
+r245c31 = and v22,r240c43
+v760 = is_equal r79c67,r235c31
+v762 = is_equal r79c67,r235c47
+r240c47 = or v760,v762
+r245c51 = and v23,r240c47
+v764 = is_equal r79c67,r235c63
+v766 = is_equal r79c67,r235c79
+r240c51 = or v764,v766
+r245c71 = and v24,r240c51
+v423 = constant 3
+r246c79 = sub v71,v423
+v768 = is_equal r246c79,v72
+v770 = is_equal r246c79,r231c23
+r240c55 = or v768,v770
+r248c11 = and v25,r240c55
+v772 = is_equal r246c79,r81c3
+v774 = is_equal r246c79,r231c51
+r240c59 = or v772,v774
+r248c31 = and v26,r240c59
+v776 = is_equal r246c79,r81c59
+v778 = is_equal r246c79,r231c79
+r240c63 = or v776,v778
+r248c51 = and v27,r240c63
+v780 = is_equal r246c79,r233c15
+v782 = is_equal r246c79,r233c31
+r240c67 = or v780,v782
+r248c71 = and v28,r240c67
+v784 = is_equal r246c79,r233c47
+v786 = is_equal r246c79,r233c63
+r240c71 = or v784,v786
+r250c11 = and v29,r240c71
+v788 = is_equal r246c79,r233c79
+v790 = is_equal r246c79,r235c15
+r240c75 = or v788,v790
+r250c31 = and v30,r240c75
+v792 = is_equal r246c79,r235c31
+v794 = is_equal r246c79,r235c47
+r240c79 = or v792,v794
+r250c51 = and v31,r240c79
+v796 = is_equal r246c79,r235c63
+v798 = is_equal r246c79,r235c79
+r253c3 = or v796,v798
+r250c71 = and v32,r253c3
+v428 = constant 4
+r252c35 = sub v71,v428
+v800 = is_equal r252c35,v72
+v802 = is_equal r252c35,r231c23
+r253c7 = or v800,v802
+r254c11 = and v33,r253c7
+v804 = is_equal r252c35,r81c3
+v806 = is_equal r252c35,r231c51
+r253c11 = or v804,v806
+r254c31 = and v34,r253c11
+v808 = is_equal r252c35,r81c59
+v810 = is_equal r252c35,r231c79
+r253c15 = or v808,v810
+r254c51 = and v35,r253c15
+v812 = is_equal r252c35,r233c15
+v814 = is_equal r252c35,r233c31
+r253c19 = or v812,v814
+r254c71 = and v36,r253c19
+v816 = is_equal r252c35,r233c47
+v818 = is_equal r252c35,r233c63
+r253c23 = or v816,v818
+r256c11 = and v37,r253c23
+v820 = is_equal r252c35,r233c79
+v822 = is_equal r252c35,r235c15
+r253c27 = or v820,v822
+r256c31 = and v38,r253c27
+v824 = is_equal r252c35,r235c31
+v826 = is_equal r252c35,r235c47
+r253c31 = or v824,v826
+r256c51 = and v39,r253c31
+v828 = is_equal r252c35,r235c63
+v830 = is_equal r252c35,r235c79
+r253c35 = or v828,v830
+r256c71 = and v40,r253c35
+v433 = constant 5
+r257c71 = sub v71,v433
+v832 = is_equal r257c71,v72
+v834 = is_equal r257c71,r231c23
+r253c39 = or v832,v834
+r259c11 = and v41,r253c39
+v836 = is_equal r257c71,r81c3
+v838 = is_equal r257c71,r231c51
+r253c43 = or v836,v838
+r259c31 = and v42,r253c43
+v840 = is_equal r257c71,r81c59
+v842 = is_equal r257c71,r231c79
+r253c47 = or v840,v842
+r259c51 = and v43,r253c47
+v844 = is_equal r257c71,r233c15
+v846 = is_equal r257c71,r233c31
+r253c51 = or v844,v846
+r259c71 = and v44,r253c51
+v848 = is_equal r257c71,r233c47
+v850 = is_equal r257c71,r233c63
+r253c55 = or v848,v850
+r261c11 = and v45,r253c55
+v852 = is_equal r257c71,r233c79
+v854 = is_equal r257c71,r235c15
+r253c59 = or v852,v854
+r261c31 = and v46,r253c59
+v856 = is_equal r257c71,r235c31
+v858 = is_equal r257c71,r235c47
+r253c63 = or v856,v858
+r261c51 = and v47,r253c63
+v860 = is_equal r257c71,r235c63
+v862 = is_equal r257c71,r235c79
+r253c67 = or v860,v862
+r261c71 = and v48,r253c67
+v438 = constant 6
+r262c27 = sub v71,v438
+v864 = is_equal r262c27,v72
+v866 = is_equal r262c27,r231c23
+r253c71 = or v864,v866
+r263c11 = and v49,r253c71
+v868 = is_equal r262c27,r81c3
+v870 = is_equal r262c27,r231c51
+r253c75 = or v868,v870
+r263c31 = and v50,r253c75
+v872 = is_equal r262c27,r81c59
+v874 = is_equal r262c27,r231c79
+r253c79 = or v872,v874
+r263c51 = and v51,r253c79
+v876 = is_equal r262c27,r233c15
+v878 = is_equal r262c27,r233c31
+r266c3 = or v876,v878
+r263c71 = and v52,r266c3
+v880 = is_equal r262c27,r233c47
+v882 = is_equal r262c27,r233c63
+r266c7 = or v880,v882
+r267c11 = and v53,r266c7
+v884 = is_equal r262c27,r233c79
+v886 = is_equal r262c27,r235c15
+r266c11 = or v884,v886
+r267c31 = and v54,r266c11
+v888 = is_equal r262c27,r235c31
+v890 = is_equal r262c27,r235c47
+r266c15 = or v888,v890
+r267c51 = and v55,r266c15
+v892 = is_equal r262c27,r235c63
+v894 = is_equal r262c27,r235c79
+r266c19 = or v892,v894
+r267c71 = and v56,r266c19
+v443 = constant 7
+r268c63 = sub v71,v443
+v896 = is_equal r268c63,v72
+v898 = is_equal r268c63,r231c23
+r266c23 = or v896,v898
+r270c11 = and v57,r266c23
+v900 = is_equal r268c63,r81c3
+v902 = is_equal r268c63,r231c51
+r266c27 = or v900,v902
+r270c31 = and v58,r266c27
+v904 = is_equal r268c63,r81c59
+v906 = is_equal r268c63,r231c79
+r266c31 = or v904,v906
+r270c51 = and v59,r266c31
+v908 = is_equal r268c63,r233c15
+v910 = is_equal r268c63,r233c31
+r266c35 = or v908,v910
+r270c71 = and v60,r266c35
+v912 = is_equal r268c63,r233c47
+v914 = is_equal r268c63,r233c63
+r266c39 = or v912,v914
+r272c11 = and v61,r266c39
+v916 = is_equal r268c63,r233c79
+v918 = is_equal r268c63,r235c15
+r266c43 = or v916,v918
+r272c31 = and v62,r266c43
+v920 = is_equal r268c63,r235c31
+v922 = is_equal r268c63,r235c47
+r266c47 = or v920,v922
+r272c51 = and v63,r266c47
+v924 = is_equal r268c63,r235c63
+v926 = is_equal r268c63,r235c79
+r266c51 = or v924,v926
+r272c71 = and v64,r266c51
+# [50] assert(is_safe_step(path[i], watcher_map));
+v1 = constant_bool false
+connect r272c71,v1
+v1 = constant_bool false
+connect r272c51,v1
+v1 = constant_bool false
+connect r272c31,v1
+v1 = constant_bool false
+connect r272c11,v1
+v1 = constant_bool false
+connect r270c71,v1
+v1 = constant_bool false
+connect r270c51,v1
+v1 = constant_bool false
+connect r270c31,v1
+v1 = constant_bool false
+connect r270c11,v1
+v1 = constant_bool false
+connect r267c71,v1
+v1 = constant_bool false
+connect r267c51,v1
+v1 = constant_bool false
+connect r267c31,v1
+v1 = constant_bool false
+connect r267c11,v1
+v1 = constant_bool false
+connect r263c71,v1
+v1 = constant_bool false
+connect r263c51,v1
+v1 = constant_bool false
+connect r263c31,v1
+v1 = constant_bool false
+connect r263c11,v1
+v1 = constant_bool false
+connect r261c71,v1
+v1 = constant_bool false
+connect r261c51,v1
+v1 = constant_bool false
+connect r261c31,v1
+v1 = constant_bool false
+connect r261c11,v1
+v1 = constant_bool false
+connect r259c71,v1
+v1 = constant_bool false
+connect r259c51,v1
+v1 = constant_bool false
+connect r259c31,v1
+v1 = constant_bool false
+connect r259c11,v1
+v1 = constant_bool false
+connect r256c71,v1
+v1 = constant_bool false
+connect r256c51,v1
+v1 = constant_bool false
+connect r256c31,v1
+v1 = constant_bool false
+connect r256c11,v1
+v1 = constant_bool false
+connect r254c71,v1
+v1 = constant_bool false
+connect r254c51,v1
+v1 = constant_bool false
+connect r254c31,v1
+v1 = constant_bool false
+connect r254c11,v1
+v1 = constant_bool false
+connect r250c71,v1
+v1 = constant_bool false
+connect r250c51,v1
+v1 = constant_bool false
+connect r250c31,v1
+v1 = constant_bool false
+connect r250c11,v1
+v1 = constant_bool false
+connect r248c71,v1
+v1 = constant_bool false
+connect r248c51,v1
+v1 = constant_bool false
+connect r248c31,v1
+v1 = constant_bool false
+connect r248c11,v1
+v1 = constant_bool false
+connect r245c71,v1
+v1 = constant_bool false
+connect r245c51,v1
+v1 = constant_bool false
+connect r245c31,v1
+v1 = constant_bool false
+connect r245c11,v1
+v1 = constant_bool false
+connect r243c71,v1
+v1 = constant_bool false
+connect r243c51,v1
+v1 = constant_bool false
+connect r243c31,v1
+v1 = constant_bool false
+connect r243c11,v1
+v1 = constant_bool false
+connect r241c71,v1
+v1 = constant_bool false
+connect r241c51,v1
+v1 = constant_bool false
+connect r241c31,v1
+v1 = constant_bool false
+connect r241c11,v1
+v1 = constant_bool false
+connect r237c71,v1
+v1 = constant_bool false
+connect r237c51,v1
+v1 = constant_bool false
+connect r237c31,v1
+v1 = constant_bool false
+connect r237c11,v1
+v1 = constant_bool false
+connect r234c71,v1
+v1 = constant_bool false
+connect r234c51,v1
+v1 = constant_bool false
+connect r234c31,v1
+v1 = constant_bool false
+connect r234c11,v1
+v1 = constant_bool false
+connect r232c71,v1
+v1 = constant_bool false
+connect r232c51,v1
+v1 = constant_bool false
+connect r232c31,v1
+v1 = constant_bool false
+connect r232c11,v1
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+v928 = is_equal v73,v74
+v1 = constant 0
+r273c31 = sub v1,v74
+v930 = is_equal v73,r273c31
+r266c55 = or v928,v930
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+r274c11 = and v0,r266c55
+v932 = is_equal v73,r106c27
+v87 = constant 1
+r273c59 = sub v87,v74
+v934 = is_equal v73,r273c59
+r266c59 = or v932,v934
+r274c31 = and v2,r266c59
+v936 = is_equal v73,r110c3
+v84 = constant 2
+r275c7 = sub v84,v74
+v938 = is_equal v73,r275c7
+r266c63 = or v936,v938
+r274c51 = and v3,r266c63
+v423 = constant 3
+r275c23 = sub v74,v423
+v940 = is_equal v73,r275c23
+v423 = constant 3
+r275c39 = sub v423,v74
+v942 = is_equal v73,r275c39
+r266c67 = or v940,v942
+r274c71 = and v4,r266c67
+v428 = constant 4
+r275c55 = sub v74,v428
+v944 = is_equal v73,r275c55
+v428 = constant 4
+r275c71 = sub v428,v74
+v946 = is_equal v73,r275c71
+r266c71 = or v944,v946
+r276c11 = and v5,r266c71
+v433 = constant 5
+r277c7 = sub v74,v433
+v948 = is_equal v73,r277c7
+v433 = constant 5
+r277c23 = sub v433,v74
+v950 = is_equal v73,r277c23
+r266c75 = or v948,v950
+r276c31 = and v6,r266c75
+v438 = constant 6
+r277c39 = sub v74,v438
+v952 = is_equal v73,r277c39
+v438 = constant 6
+r277c55 = sub v438,v74
+v954 = is_equal v73,r277c55
+r266c79 = or v952,v954
+r276c51 = and v7,r266c79
+v443 = constant 7
+r277c71 = sub v74,v443
+v956 = is_equal v73,r277c71
+v443 = constant 7
+r279c7 = sub v443,v74
+v958 = is_equal v73,r279c7
+r280c3 = or v956,v958
+r276c71 = and v8,r280c3
+v960 = is_equal r106c67,v74
+v962 = is_equal r106c67,r273c31
+r280c7 = or v960,v962
+r281c11 = and v9,r280c7
+v964 = is_equal r106c67,r106c27
+v966 = is_equal r106c67,r273c59
+r280c11 = or v964,v966
+r281c31 = and v10,r280c11
+v968 = is_equal r106c67,r110c3
+v970 = is_equal r106c67,r275c7
+r280c15 = or v968,v970
+r281c51 = and v11,r280c15
+v972 = is_equal r106c67,r275c23
+v974 = is_equal r106c67,r275c39
+r280c19 = or v972,v974
+r281c71 = and v12,r280c19
+v976 = is_equal r106c67,r275c55
+v978 = is_equal r106c67,r275c71
+r280c23 = or v976,v978
+r283c11 = and v13,r280c23
+v980 = is_equal r106c67,r277c7
+v982 = is_equal r106c67,r277c23
+r280c27 = or v980,v982
+r283c31 = and v14,r280c27
+v984 = is_equal r106c67,r277c39
+v986 = is_equal r106c67,r277c55
+r280c31 = or v984,v986
+r283c51 = and v15,r280c31
+v988 = is_equal r106c67,r277c71
+v990 = is_equal r106c67,r279c7
+r280c35 = or v988,v990
+r283c71 = and v16,r280c35
+v992 = is_equal r106c11,v74
+v994 = is_equal r106c11,r273c31
+r280c39 = or v992,v994
+r285c11 = and v17,r280c39
+v996 = is_equal r106c11,r106c27
+v998 = is_equal r106c11,r273c59
+r280c43 = or v996,v998
+r285c31 = and v18,r280c43
+v1000 = is_equal r106c11,r110c3
+v1002 = is_equal r106c11,r275c7
+r280c47 = or v1000,v1002
+r285c51 = and v19,r280c47
+v1004 = is_equal r106c11,r275c23
+v1006 = is_equal r106c11,r275c39
+r280c51 = or v1004,v1006
+r285c71 = and v20,r280c51
+v1008 = is_equal r106c11,r275c55
+v1010 = is_equal r106c11,r275c71
+r280c55 = or v1008,v1010
+r288c11 = and v21,r280c55
+v1012 = is_equal r106c11,r277c7
+v1014 = is_equal r106c11,r277c23
+r280c59 = or v1012,v1014
+r288c31 = and v22,r280c59
+v1016 = is_equal r106c11,r277c39
+v1018 = is_equal r106c11,r277c55
+r280c63 = or v1016,v1018
+r288c51 = and v23,r280c63
+v1020 = is_equal r106c11,r277c71
+v1022 = is_equal r106c11,r279c7
+r280c67 = or v1020,v1022
+r288c71 = and v24,r280c67
+v423 = constant 3
+r289c7 = sub v73,v423
+v1024 = is_equal r289c7,v74
+v1026 = is_equal r289c7,r273c31
+r280c71 = or v1024,v1026
+r290c11 = and v25,r280c71
+v1028 = is_equal r289c7,r106c27
+v1030 = is_equal r289c7,r273c59
+r280c75 = or v1028,v1030
+r290c31 = and v26,r280c75
+v1032 = is_equal r289c7,r110c3
+v1034 = is_equal r289c7,r275c7
+r280c79 = or v1032,v1034
+r290c51 = and v27,r280c79
+v1036 = is_equal r289c7,r275c23
+v1038 = is_equal r289c7,r275c39
+r293c3 = or v1036,v1038
+r290c71 = and v28,r293c3
+v1040 = is_equal r289c7,r275c55
+v1042 = is_equal r289c7,r275c71
+r293c7 = or v1040,v1042
+r294c11 = and v29,r293c7
+v1044 = is_equal r289c7,r277c7
+v1046 = is_equal r289c7,r277c23
+r293c11 = or v1044,v1046
+r294c31 = and v30,r293c11
+v1048 = is_equal r289c7,r277c39
+v1050 = is_equal r289c7,r277c55
+r293c15 = or v1048,v1050
+r294c51 = and v31,r293c15
+v1052 = is_equal r289c7,r277c71
+v1054 = is_equal r289c7,r279c7
+r293c19 = or v1052,v1054
+r294c71 = and v32,r293c19
+v428 = constant 4
+r295c43 = sub v73,v428
+v1056 = is_equal r295c43,v74
+v1058 = is_equal r295c43,r273c31
+r293c23 = or v1056,v1058
+r296c11 = and v33,r293c23
+v1060 = is_equal r295c43,r106c27
+v1062 = is_equal r295c43,r273c59
+r293c27 = or v1060,v1062
+r296c31 = and v34,r293c27
+v1064 = is_equal r295c43,r110c3
+v1066 = is_equal r295c43,r275c7
+r293c31 = or v1064,v1066
+r296c51 = and v35,r293c31
+v1068 = is_equal r295c43,r275c23
+v1070 = is_equal r295c43,r275c39
+r293c35 = or v1068,v1070
+r296c71 = and v36,r293c35
+v1072 = is_equal r295c43,r275c55
+v1074 = is_equal r295c43,r275c71
+r293c39 = or v1072,v1074
+r298c11 = and v37,r293c39
+v1076 = is_equal r295c43,r277c7
+v1078 = is_equal r295c43,r277c23
+r293c43 = or v1076,v1078
+r298c31 = and v38,r293c43
+v1080 = is_equal r295c43,r277c39
+v1082 = is_equal r295c43,r277c55
+r293c47 = or v1080,v1082
+r298c51 = and v39,r293c47
+v1084 = is_equal r295c43,r277c71
+v1086 = is_equal r295c43,r279c7
+r293c51 = or v1084,v1086
+r298c71 = and v40,r293c51
+v433 = constant 5
+r299c79 = sub v73,v433
+v1088 = is_equal r299c79,v74
+v1090 = is_equal r299c79,r273c31
+r293c55 = or v1088,v1090
+r301c11 = and v41,r293c55
+v1092 = is_equal r299c79,r106c27
+v1094 = is_equal r299c79,r273c59
+r293c59 = or v1092,v1094
+r301c31 = and v42,r293c59
+v1096 = is_equal r299c79,r110c3
+v1098 = is_equal r299c79,r275c7
+r293c63 = or v1096,v1098
+r301c51 = and v43,r293c63
+v1100 = is_equal r299c79,r275c23
+v1102 = is_equal r299c79,r275c39
+r293c67 = or v1100,v1102
+r301c71 = and v44,r293c67
+v1104 = is_equal r299c79,r275c55
+v1106 = is_equal r299c79,r275c71
+r293c71 = or v1104,v1106
+r303c11 = and v45,r293c71
+v1108 = is_equal r299c79,r277c7
+v1110 = is_equal r299c79,r277c23
+r293c75 = or v1108,v1110
+r303c31 = and v46,r293c75
+v1112 = is_equal r299c79,r277c39
+v1114 = is_equal r299c79,r277c55
+r293c79 = or v1112,v1114
+r303c51 = and v47,r293c79
+v1116 = is_equal r299c79,r277c71
+v1118 = is_equal r299c79,r279c7
+r306c3 = or v1116,v1118
+r303c71 = and v48,r306c3
+v438 = constant 6
+r305c35 = sub v73,v438
+v1120 = is_equal r305c35,v74
+v1122 = is_equal r305c35,r273c31
+r306c7 = or v1120,v1122
+r307c11 = and v49,r306c7
+v1124 = is_equal r305c35,r106c27
+v1126 = is_equal r305c35,r273c59
+r306c11 = or v1124,v1126
+r307c31 = and v50,r306c11
+v1128 = is_equal r305c35,r110c3
+v1130 = is_equal r305c35,r275c7
+r306c15 = or v1128,v1130
+r307c51 = and v51,r306c15
+v1132 = is_equal r305c35,r275c23
+v1134 = is_equal r305c35,r275c39
+r306c19 = or v1132,v1134
+r307c71 = and v52,r306c19
+v1136 = is_equal r305c35,r275c55
+v1138 = is_equal r305c35,r275c71
+r306c23 = or v1136,v1138
+r309c11 = and v53,r306c23
+v1140 = is_equal r305c35,r277c7
+v1142 = is_equal r305c35,r277c23
+r306c27 = or v1140,v1142
+r309c31 = and v54,r306c27
+v1144 = is_equal r305c35,r277c39
+v1146 = is_equal r305c35,r277c55
+r306c31 = or v1144,v1146
+r309c51 = and v55,r306c31
+v1148 = is_equal r305c35,r277c71
+v1150 = is_equal r305c35,r279c7
+r306c35 = or v1148,v1150
+r309c71 = and v56,r306c35
+v443 = constant 7
+r310c71 = sub v73,v443
+v1152 = is_equal r310c71,v74
+v1154 = is_equal r310c71,r273c31
+r306c39 = or v1152,v1154
+r312c11 = and v57,r306c39
+v1156 = is_equal r310c71,r106c27
+v1158 = is_equal r310c71,r273c59
+r306c43 = or v1156,v1158
+r312c31 = and v58,r306c43
+v1160 = is_equal r310c71,r110c3
+v1162 = is_equal r310c71,r275c7
+r306c47 = or v1160,v1162
+r312c51 = and v59,r306c47
+v1164 = is_equal r310c71,r275c23
+v1166 = is_equal r310c71,r275c39
+r306c51 = or v1164,v1166
+r312c71 = and v60,r306c51
+v1168 = is_equal r310c71,r275c55
+v1170 = is_equal r310c71,r275c71
+r306c55 = or v1168,v1170
+r314c11 = and v61,r306c55
+v1172 = is_equal r310c71,r277c7
+v1174 = is_equal r310c71,r277c23
+r306c59 = or v1172,v1174
+r314c31 = and v62,r306c59
+v1176 = is_equal r310c71,r277c39
+v1178 = is_equal r310c71,r277c55
+r306c63 = or v1176,v1178
+r314c51 = and v63,r306c63
+v1180 = is_equal r310c71,r277c71
+v1182 = is_equal r310c71,r279c7
+r306c67 = or v1180,v1182
+r314c71 = and v64,r306c67
+# [50] assert(is_safe_step(path[i], watcher_map));
+v1 = constant_bool false
+connect r314c71,v1
+v1 = constant_bool false
+connect r314c51,v1
+v1 = constant_bool false
+connect r314c31,v1
+v1 = constant_bool false
+connect r314c11,v1
+v1 = constant_bool false
+connect r312c71,v1
+v1 = constant_bool false
+connect r312c51,v1
+v1 = constant_bool false
+connect r312c31,v1
+v1 = constant_bool false
+connect r312c11,v1
+v1 = constant_bool false
+connect r309c71,v1
+v1 = constant_bool false
+connect r309c51,v1
+v1 = constant_bool false
+connect r309c31,v1
+v1 = constant_bool false
+connect r309c11,v1
+v1 = constant_bool false
+connect r307c71,v1
+v1 = constant_bool false
+connect r307c51,v1
+v1 = constant_bool false
+connect r307c31,v1
+v1 = constant_bool false
+connect r307c11,v1
+v1 = constant_bool false
+connect r303c71,v1
+v1 = constant_bool false
+connect r303c51,v1
+v1 = constant_bool false
+connect r303c31,v1
+v1 = constant_bool false
+connect r303c11,v1
+v1 = constant_bool false
+connect r301c71,v1
+v1 = constant_bool false
+connect r301c51,v1
+v1 = constant_bool false
+connect r301c31,v1
+v1 = constant_bool false
+connect r301c11,v1
+v1 = constant_bool false
+connect r298c71,v1
+v1 = constant_bool false
+connect r298c51,v1
+v1 = constant_bool false
+connect r298c31,v1
+v1 = constant_bool false
+connect r298c11,v1
+v1 = constant_bool false
+connect r296c71,v1
+v1 = constant_bool false
+connect r296c51,v1
+v1 = constant_bool false
+connect r296c31,v1
+v1 = constant_bool false
+connect r296c11,v1
+v1 = constant_bool false
+connect r294c71,v1
+v1 = constant_bool false
+connect r294c51,v1
+v1 = constant_bool false
+connect r294c31,v1
+v1 = constant_bool false
+connect r294c11,v1
+v1 = constant_bool false
+connect r290c71,v1
+v1 = constant_bool false
+connect r290c51,v1
+v1 = constant_bool false
+connect r290c31,v1
+v1 = constant_bool false
+connect r290c11,v1
+v1 = constant_bool false
+connect r288c71,v1
+v1 = constant_bool false
+connect r288c51,v1
+v1 = constant_bool false
+connect r288c31,v1
+v1 = constant_bool false
+connect r288c11,v1
+v1 = constant_bool false
+connect r285c71,v1
+v1 = constant_bool false
+connect r285c51,v1
+v1 = constant_bool false
+connect r285c31,v1
+v1 = constant_bool false
+connect r285c11,v1
+v1 = constant_bool false
+connect r283c71,v1
+v1 = constant_bool false
+connect r283c51,v1
+v1 = constant_bool false
+connect r283c31,v1
+v1 = constant_bool false
+connect r283c11,v1
+v1 = constant_bool false
+connect r281c71,v1
+v1 = constant_bool false
+connect r281c51,v1
+v1 = constant_bool false
+connect r281c31,v1
+v1 = constant_bool false
+connect r281c11,v1
+v1 = constant_bool false
+connect r276c71,v1
+v1 = constant_bool false
+connect r276c51,v1
+v1 = constant_bool false
+connect r276c31,v1
+v1 = constant_bool false
+connect r276c11,v1
+v1 = constant_bool false
+connect r274c71,v1
+v1 = constant_bool false
+connect r274c51,v1
+v1 = constant_bool false
+connect r274c31,v1
+v1 = constant_bool false
+connect r274c11,v1
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+v1184 = is_equal v75,v76
+v1 = constant 0
+r315c39 = sub v1,v76
+v1186 = is_equal v75,r315c39
+r306c71 = or v1184,v1186
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+r316c11 = and v0,r306c71
+v1188 = is_equal v75,r132c51
+v87 = constant 1
+r315c67 = sub v87,v76
+v1190 = is_equal v75,r315c67
+r306c75 = or v1188,v1190
+r316c31 = and v2,r306c75
+v1192 = is_equal v75,r135c27
+v84 = constant 2
+r318c15 = sub v84,v76
+v1194 = is_equal v75,r318c15
+r306c79 = or v1192,v1194
+r316c51 = and v3,r306c79
+v423 = constant 3
+r318c31 = sub v76,v423
+v1196 = is_equal v75,r318c31
+v423 = constant 3
+r318c47 = sub v423,v76
+v1198 = is_equal v75,r318c47
+r319c3 = or v1196,v1198
+r316c71 = and v4,r319c3
+v428 = constant 4
+r318c63 = sub v76,v428
+v1200 = is_equal v75,r318c63
+v428 = constant 4
+r318c79 = sub v428,v76
+v1202 = is_equal v75,r318c79
+r319c7 = or v1200,v1202
+r321c11 = and v5,r319c7
+v433 = constant 5
+r320c15 = sub v76,v433
+v1204 = is_equal v75,r320c15
+v433 = constant 5
+r320c31 = sub v433,v76
+v1206 = is_equal v75,r320c31
+r319c11 = or v1204,v1206
+r321c31 = and v6,r319c11
+v438 = constant 6
+r320c47 = sub v76,v438
+v1208 = is_equal v75,r320c47
+v438 = constant 6
+r320c63 = sub v438,v76
+v1210 = is_equal v75,r320c63
+r319c15 = or v1208,v1210
+r321c51 = and v7,r319c15
+v443 = constant 7
+r320c79 = sub v76,v443
+v1212 = is_equal v75,r320c79
+v443 = constant 7
+r322c15 = sub v443,v76
+v1214 = is_equal v75,r322c15
+r319c19 = or v1212,v1214
+r321c71 = and v8,r319c19
+v1216 = is_equal r135c11,v76
+v1218 = is_equal r135c11,r315c39
+r319c23 = or v1216,v1218
+r323c11 = and v9,r319c23
+v1220 = is_equal r135c11,r132c51
+v1222 = is_equal r135c11,r315c67
+r319c27 = or v1220,v1222
+r323c31 = and v10,r319c27
+v1224 = is_equal r135c11,r135c27
+v1226 = is_equal r135c11,r318c15
+r319c31 = or v1224,v1226
+r323c51 = and v11,r319c31
+v1228 = is_equal r135c11,r318c31
+v1230 = is_equal r135c11,r318c47
+r319c35 = or v1228,v1230
+r323c71 = and v12,r319c35
+v1232 = is_equal r135c11,r318c63
+v1234 = is_equal r135c11,r318c79
+r319c39 = or v1232,v1234
+r325c11 = and v13,r319c39
+v1236 = is_equal r135c11,r320c15
+v1238 = is_equal r135c11,r320c31
+r319c43 = or v1236,v1238
+r325c31 = and v14,r319c43
+v1240 = is_equal r135c11,r320c47
+v1242 = is_equal r135c11,r320c63
+r319c47 = or v1240,v1242
+r325c51 = and v15,r319c47
+v1244 = is_equal r135c11,r320c79
+v1246 = is_equal r135c11,r322c15
+r319c51 = or v1244,v1246
+r325c71 = and v16,r319c51
+v1248 = is_equal r132c35,v76
+v1250 = is_equal r132c35,r315c39
+r319c55 = or v1248,v1250
+r327c11 = and v17,r319c55
+v1252 = is_equal r132c35,r132c51
+v1254 = is_equal r132c35,r315c67
+r319c59 = or v1252,v1254
+r327c31 = and v18,r319c59
+v1256 = is_equal r132c35,r135c27
+v1258 = is_equal r132c35,r318c15
+r319c63 = or v1256,v1258
+r327c51 = and v19,r319c63
+v1260 = is_equal r132c35,r318c31
+v1262 = is_equal r132c35,r318c47
+r319c67 = or v1260,v1262
+r327c71 = and v20,r319c67
+v1264 = is_equal r132c35,r318c63
+v1266 = is_equal r132c35,r318c79
+r319c71 = or v1264,v1266
+r330c11 = and v21,r319c71
+v1268 = is_equal r132c35,r320c15
+v1270 = is_equal r132c35,r320c31
+r319c75 = or v1268,v1270
+r330c31 = and v22,r319c75
+v1272 = is_equal r132c35,r320c47
+v1274 = is_equal r132c35,r320c63
+r319c79 = or v1272,v1274
+r330c51 = and v23,r319c79
+v1276 = is_equal r132c35,r320c79
+v1278 = is_equal r132c35,r322c15
+r333c3 = or v1276,v1278
+r330c71 = and v24,r333c3
+v423 = constant 3
+r332c15 = sub v75,v423
+v1280 = is_equal r332c15,v76
+v1282 = is_equal r332c15,r315c39
+r333c7 = or v1280,v1282
+r334c11 = and v25,r333c7
+v1284 = is_equal r332c15,r132c51
+v1286 = is_equal r332c15,r315c67
+r333c11 = or v1284,v1286
+r334c31 = and v26,r333c11
+v1288 = is_equal r332c15,r135c27
+v1290 = is_equal r332c15,r318c15
+r333c15 = or v1288,v1290
+r334c51 = and v27,r333c15
+v1292 = is_equal r332c15,r318c31
+v1294 = is_equal r332c15,r318c47
+r333c19 = or v1292,v1294
+r334c71 = and v28,r333c19
+v1296 = is_equal r332c15,r318c63
+v1298 = is_equal r332c15,r318c79
+r333c23 = or v1296,v1298
+r336c11 = and v29,r333c23
+v1300 = is_equal r332c15,r320c15
+v1302 = is_equal r332c15,r320c31
+r333c27 = or v1300,v1302
+r336c31 = and v30,r333c27
+v1304 = is_equal r332c15,r320c47
+v1306 = is_equal r332c15,r320c63
+r333c31 = or v1304,v1306
+r336c51 = and v31,r333c31
+v1308 = is_equal r332c15,r320c79
+v1310 = is_equal r332c15,r322c15
+r333c35 = or v1308,v1310
+r336c71 = and v32,r333c35
+v428 = constant 4
+r337c51 = sub v75,v428
+v1312 = is_equal r337c51,v76
+v1314 = is_equal r337c51,r315c39
+r333c39 = or v1312,v1314
+r338c11 = and v33,r333c39
+v1316 = is_equal r337c51,r132c51
+v1318 = is_equal r337c51,r315c67
+r333c43 = or v1316,v1318
+r338c31 = and v34,r333c43
+v1320 = is_equal r337c51,r135c27
+v1322 = is_equal r337c51,r318c15
+r333c47 = or v1320,v1322
+r338c51 = and v35,r333c47
+v1324 = is_equal r337c51,r318c31
+v1326 = is_equal r337c51,r318c47
+r333c51 = or v1324,v1326
+r338c71 = and v36,r333c51
+v1328 = is_equal r337c51,r318c63
+v1330 = is_equal r337c51,r318c79
+r333c55 = or v1328,v1330
+r341c11 = and v37,r333c55
+v1332 = is_equal r337c51,r320c15
+v1334 = is_equal r337c51,r320c31
+r333c59 = or v1332,v1334
+r341c31 = and v38,r333c59
+v1336 = is_equal r337c51,r320c47
+v1338 = is_equal r337c51,r320c63
+r333c63 = or v1336,v1338
+r341c51 = and v39,r333c63
+v1340 = is_equal r337c51,r320c79
+v1342 = is_equal r337c51,r322c15
+r333c67 = or v1340,v1342
+r341c71 = and v40,r333c67
+v433 = constant 5
+r342c7 = sub v75,v433
+v1344 = is_equal r342c7,v76
+v1346 = is_equal r342c7,r315c39
+r333c71 = or v1344,v1346
+r343c11 = and v41,r333c71
+v1348 = is_equal r342c7,r132c51
+v1350 = is_equal r342c7,r315c67
+r333c75 = or v1348,v1350
+r343c31 = and v42,r333c75
+v1352 = is_equal r342c7,r135c27
+v1354 = is_equal r342c7,r318c15
+r333c79 = or v1352,v1354
+r343c51 = and v43,r333c79
+v1356 = is_equal r342c7,r318c31
+v1358 = is_equal r342c7,r318c47
+r346c3 = or v1356,v1358
+r343c71 = and v44,r346c3
+v1360 = is_equal r342c7,r318c63
+v1362 = is_equal r342c7,r318c79
+r346c7 = or v1360,v1362
+r347c11 = and v45,r346c7
+v1364 = is_equal r342c7,r320c15
+v1366 = is_equal r342c7,r320c31
+r346c11 = or v1364,v1366
+r347c31 = and v46,r346c11
+v1368 = is_equal r342c7,r320c47
+v1370 = is_equal r342c7,r320c63
+r346c15 = or v1368,v1370
+r347c51 = and v47,r346c15
+v1372 = is_equal r342c7,r320c79
+v1374 = is_equal r342c7,r322c15
+r346c19 = or v1372,v1374
+r347c71 = and v48,r346c19
+v438 = constant 6
+r348c43 = sub v75,v438
+v1376 = is_equal r348c43,v76
+v1378 = is_equal r348c43,r315c39
+r346c23 = or v1376,v1378
+r349c11 = and v49,r346c23
+v1380 = is_equal r348c43,r132c51
+v1382 = is_equal r348c43,r315c67
+r346c27 = or v1380,v1382
+r349c31 = and v50,r346c27
+v1384 = is_equal r348c43,r135c27
+v1386 = is_equal r348c43,r318c15
+r346c31 = or v1384,v1386
+r349c51 = and v51,r346c31
+v1388 = is_equal r348c43,r318c31
+v1390 = is_equal r348c43,r318c47
+r346c35 = or v1388,v1390
+r349c71 = and v52,r346c35
+v1392 = is_equal r348c43,r318c63
+v1394 = is_equal r348c43,r318c79
+r346c39 = or v1392,v1394
+r351c11 = and v53,r346c39
+v1396 = is_equal r348c43,r320c15
+v1398 = is_equal r348c43,r320c31
+r346c43 = or v1396,v1398
+r351c31 = and v54,r346c43
+v1400 = is_equal r348c43,r320c47
+v1402 = is_equal r348c43,r320c63
+r346c47 = or v1400,v1402
+r351c51 = and v55,r346c47
+v1404 = is_equal r348c43,r320c79
+v1406 = is_equal r348c43,r322c15
+r346c51 = or v1404,v1406
+r351c71 = and v56,r346c51
+v443 = constant 7
+r352c79 = sub v75,v443
+v1408 = is_equal r352c79,v76
+v1410 = is_equal r352c79,r315c39
+r346c55 = or v1408,v1410
+r354c11 = and v57,r346c55
+v1412 = is_equal r352c79,r132c51
+v1414 = is_equal r352c79,r315c67
+r346c59 = or v1412,v1414
+r354c31 = and v58,r346c59
+v1416 = is_equal r352c79,r135c27
+v1418 = is_equal r352c79,r318c15
+r346c63 = or v1416,v1418
+r354c51 = and v59,r346c63
+v1420 = is_equal r352c79,r318c31
+v1422 = is_equal r352c79,r318c47
+r346c67 = or v1420,v1422
+r354c71 = and v60,r346c67
+v1424 = is_equal r352c79,r318c63
+v1426 = is_equal r352c79,r318c79
+r346c71 = or v1424,v1426
+r356c11 = and v61,r346c71
+v1428 = is_equal r352c79,r320c15
+v1430 = is_equal r352c79,r320c31
+r346c75 = or v1428,v1430
+r356c31 = and v62,r346c75
+v1432 = is_equal r352c79,r320c47
+v1434 = is_equal r352c79,r320c63
+r346c79 = or v1432,v1434
+r356c51 = and v63,r346c79
+v1436 = is_equal r352c79,r320c79
+v1438 = is_equal r352c79,r322c15
+r359c3 = or v1436,v1438
+r356c71 = and v64,r359c3
+# [50] assert(is_safe_step(path[i], watcher_map));
+v1 = constant_bool false
+connect r356c71,v1
+v1 = constant_bool false
+connect r356c51,v1
+v1 = constant_bool false
+connect r356c31,v1
+v1 = constant_bool false
+connect r356c11,v1
+v1 = constant_bool false
+connect r354c71,v1
+v1 = constant_bool false
+connect r354c51,v1
+v1 = constant_bool false
+connect r354c31,v1
+v1 = constant_bool false
+connect r354c11,v1
+v1 = constant_bool false
+connect r351c71,v1
+v1 = constant_bool false
+connect r351c51,v1
+v1 = constant_bool false
+connect r351c31,v1
+v1 = constant_bool false
+connect r351c11,v1
+v1 = constant_bool false
+connect r349c71,v1
+v1 = constant_bool false
+connect r349c51,v1
+v1 = constant_bool false
+connect r349c31,v1
+v1 = constant_bool false
+connect r349c11,v1
+v1 = constant_bool false
+connect r347c71,v1
+v1 = constant_bool false
+connect r347c51,v1
+v1 = constant_bool false
+connect r347c31,v1
+v1 = constant_bool false
+connect r347c11,v1
+v1 = constant_bool false
+connect r343c71,v1
+v1 = constant_bool false
+connect r343c51,v1
+v1 = constant_bool false
+connect r343c31,v1
+v1 = constant_bool false
+connect r343c11,v1
+v1 = constant_bool false
+connect r341c71,v1
+v1 = constant_bool false
+connect r341c51,v1
+v1 = constant_bool false
+connect r341c31,v1
+v1 = constant_bool false
+connect r341c11,v1
+v1 = constant_bool false
+connect r338c71,v1
+v1 = constant_bool false
+connect r338c51,v1
+v1 = constant_bool false
+connect r338c31,v1
+v1 = constant_bool false
+connect r338c11,v1
+v1 = constant_bool false
+connect r336c71,v1
+v1 = constant_bool false
+connect r336c51,v1
+v1 = constant_bool false
+connect r336c31,v1
+v1 = constant_bool false
+connect r336c11,v1
+v1 = constant_bool false
+connect r334c71,v1
+v1 = constant_bool false
+connect r334c51,v1
+v1 = constant_bool false
+connect r334c31,v1
+v1 = constant_bool false
+connect r334c11,v1
+v1 = constant_bool false
+connect r330c71,v1
+v1 = constant_bool false
+connect r330c51,v1
+v1 = constant_bool false
+connect r330c31,v1
+v1 = constant_bool false
+connect r330c11,v1
+v1 = constant_bool false
+connect r327c71,v1
+v1 = constant_bool false
+connect r327c51,v1
+v1 = constant_bool false
+connect r327c31,v1
+v1 = constant_bool false
+connect r327c11,v1
+v1 = constant_bool false
+connect r325c71,v1
+v1 = constant_bool false
+connect r325c51,v1
+v1 = constant_bool false
+connect r325c31,v1
+v1 = constant_bool false
+connect r325c11,v1
+v1 = constant_bool false
+connect r323c71,v1
+v1 = constant_bool false
+connect r323c51,v1
+v1 = constant_bool false
+connect r323c31,v1
+v1 = constant_bool false
+connect r323c11,v1
+v1 = constant_bool false
+connect r321c71,v1
+v1 = constant_bool false
+connect r321c51,v1
+v1 = constant_bool false
+connect r321c31,v1
+v1 = constant_bool false
+connect r321c11,v1
+v1 = constant_bool false
+connect r316c71,v1
+v1 = constant_bool false
+connect r316c51,v1
+v1 = constant_bool false
+connect r316c31,v1
+v1 = constant_bool false
+connect r316c11,v1
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+v1440 = is_equal v77,v78
+v1 = constant 0
+r358c47 = sub v1,v78
+v1442 = is_equal v77,r358c47
+r359c7 = or v1440,v1442
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+r360c11 = and v0,r359c7
+v1444 = is_equal v77,r158c75
+v87 = constant 1
+r358c75 = sub v87,v78
+v1446 = is_equal v77,r358c75
+r359c11 = or v1444,v1446
+r360c31 = and v2,r359c11
+v1448 = is_equal v77,r160c51
+v84 = constant 2
+r361c23 = sub v84,v78
+v1450 = is_equal v77,r361c23
+r359c15 = or v1448,v1450
+r360c51 = and v3,r359c15
+v423 = constant 3
+r361c39 = sub v78,v423
+v1452 = is_equal v77,r361c39
+v423 = constant 3
+r361c55 = sub v423,v78
+v1454 = is_equal v77,r361c55
+r359c19 = or v1452,v1454
+r360c71 = and v4,r359c19
+v428 = constant 4
+r361c71 = sub v78,v428
+v1456 = is_equal v77,r361c71
+v428 = constant 4
+r362c7 = sub v428,v78
+v1458 = is_equal v77,r362c7
+r359c23 = or v1456,v1458
+r363c11 = and v5,r359c23
+v433 = constant 5
+r362c23 = sub v78,v433
+v1460 = is_equal v77,r362c23
+v433 = constant 5
+r362c39 = sub v433,v78
+v1462 = is_equal v77,r362c39
+r359c27 = or v1460,v1462
+r363c31 = and v6,r359c27
+v438 = constant 6
+r362c55 = sub v78,v438
+v1464 = is_equal v77,r362c55
+v438 = constant 6
+r362c71 = sub v438,v78
+v1466 = is_equal v77,r362c71
+r359c31 = or v1464,v1466
+r363c51 = and v7,r359c31
+v443 = constant 7
+r364c7 = sub v78,v443
+v1468 = is_equal v77,r364c7
+v443 = constant 7
+r364c23 = sub v443,v78
+v1470 = is_equal v77,r364c23
+r359c35 = or v1468,v1470
+r363c71 = and v8,r359c35
+v1472 = is_equal r160c35,v78
+v1474 = is_equal r160c35,r358c47
+r359c39 = or v1472,v1474
+r365c11 = and v9,r359c39
+v1476 = is_equal r160c35,r158c75
+v1478 = is_equal r160c35,r358c75
+r359c43 = or v1476,v1478
+r365c31 = and v10,r359c43
+v1480 = is_equal r160c35,r160c51
+v1482 = is_equal r160c35,r361c23
+r359c47 = or v1480,v1482
+r365c51 = and v11,r359c47
+v1484 = is_equal r160c35,r361c39
+v1486 = is_equal r160c35,r361c55
+r359c51 = or v1484,v1486
+r365c71 = and v12,r359c51
+v1488 = is_equal r160c35,r361c71
+v1490 = is_equal r160c35,r362c7
+r359c55 = or v1488,v1490
+r367c11 = and v13,r359c55
+v1492 = is_equal r160c35,r362c23
+v1494 = is_equal r160c35,r362c39
+r359c59 = or v1492,v1494
+r367c31 = and v14,r359c59
+v1496 = is_equal r160c35,r362c55
+v1498 = is_equal r160c35,r362c71
+r359c63 = or v1496,v1498
+r367c51 = and v15,r359c63
+v1500 = is_equal r160c35,r364c7
+v1502 = is_equal r160c35,r364c23
+r359c67 = or v1500,v1502
+r367c71 = and v16,r359c67
+v1504 = is_equal r158c59,v78
+v1506 = is_equal r158c59,r358c47
+r359c71 = or v1504,v1506
+r370c11 = and v17,r359c71
+v1508 = is_equal r158c59,r158c75
+v1510 = is_equal r158c59,r358c75
+r359c75 = or v1508,v1510
+r370c31 = and v18,r359c75
+v1512 = is_equal r158c59,r160c51
+v1514 = is_equal r158c59,r361c23
+r359c79 = or v1512,v1514
+r370c51 = and v19,r359c79
+v1516 = is_equal r158c59,r361c39
+v1518 = is_equal r158c59,r361c55
+r373c3 = or v1516,v1518
+r370c71 = and v20,r373c3
+v1520 = is_equal r158c59,r361c71
+v1522 = is_equal r158c59,r362c7
+r373c7 = or v1520,v1522
+r374c11 = and v21,r373c7
+v1524 = is_equal r158c59,r362c23
+v1526 = is_equal r158c59,r362c39
+r373c11 = or v1524,v1526
+r374c31 = and v22,r373c11
+v1528 = is_equal r158c59,r362c55
+v1530 = is_equal r158c59,r362c71
+r373c15 = or v1528,v1530
+r374c51 = and v23,r373c15
+v1532 = is_equal r158c59,r364c7
+v1534 = is_equal r158c59,r364c23
+r373c19 = or v1532,v1534
+r374c71 = and v24,r373c19
+v423 = constant 3
+r375c23 = sub v77,v423
+v1536 = is_equal r375c23,v78
+v1538 = is_equal r375c23,r358c47
+r373c23 = or v1536,v1538
+r376c11 = and v25,r373c23
+v1540 = is_equal r375c23,r158c75
+v1542 = is_equal r375c23,r358c75
+r373c27 = or v1540,v1542
+r376c31 = and v26,r373c27
+v1544 = is_equal r375c23,r160c51
+v1546 = is_equal r375c23,r361c23
+r373c31 = or v1544,v1546
+r376c51 = and v27,r373c31
+v1548 = is_equal r375c23,r361c39
+v1550 = is_equal r375c23,r361c55
+r373c35 = or v1548,v1550
+r376c71 = and v28,r373c35
+v1552 = is_equal r375c23,r361c71
+v1554 = is_equal r375c23,r362c7
+r373c39 = or v1552,v1554
+r378c11 = and v29,r373c39
+v1556 = is_equal r375c23,r362c23
+v1558 = is_equal r375c23,r362c39
+r373c43 = or v1556,v1558
+r378c31 = and v30,r373c43
+v1560 = is_equal r375c23,r362c55
+v1562 = is_equal r375c23,r362c71
+r373c47 = or v1560,v1562
+r378c51 = and v31,r373c47
+v1564 = is_equal r375c23,r364c7
+v1566 = is_equal r375c23,r364c23
+r373c51 = or v1564,v1566
+r378c71 = and v32,r373c51
+v428 = constant 4
+r379c59 = sub v77,v428
+v1568 = is_equal r379c59,v78
+v1570 = is_equal r379c59,r358c47
+r373c55 = or v1568,v1570
+r380c11 = and v33,r373c55
+v1572 = is_equal r379c59,r158c75
+v1574 = is_equal r379c59,r358c75
+r373c59 = or v1572,v1574
+r380c31 = and v34,r373c59
+v1576 = is_equal r379c59,r160c51
+v1578 = is_equal r379c59,r361c23
+r373c63 = or v1576,v1578
+r380c51 = and v35,r373c63
+v1580 = is_equal r379c59,r361c39
+v1582 = is_equal r379c59,r361c55
+r373c67 = or v1580,v1582
+r380c71 = and v36,r373c67
+v1584 = is_equal r379c59,r361c71
+v1586 = is_equal r379c59,r362c7
+r373c71 = or v1584,v1586
+r383c11 = and v37,r373c71
+v1588 = is_equal r379c59,r362c23
+v1590 = is_equal r379c59,r362c39
+r373c75 = or v1588,v1590
+r383c31 = and v38,r373c75
+v1592 = is_equal r379c59,r362c55
+v1594 = is_equal r379c59,r362c71
+r373c79 = or v1592,v1594
+r383c51 = and v39,r373c79
+v1596 = is_equal r379c59,r364c7
+v1598 = is_equal r379c59,r364c23
+r386c3 = or v1596,v1598
+r383c71 = and v40,r386c3
+v433 = constant 5
+r385c15 = sub v77,v433
+v1600 = is_equal r385c15,v78
+v1602 = is_equal r385c15,r358c47
+r386c7 = or v1600,v1602
+r387c11 = and v41,r386c7
+v1604 = is_equal r385c15,r158c75
+v1606 = is_equal r385c15,r358c75
+r386c11 = or v1604,v1606
+r387c31 = and v42,r386c11
+v1608 = is_equal r385c15,r160c51
+v1610 = is_equal r385c15,r361c23
+r386c15 = or v1608,v1610
+r387c51 = and v43,r386c15
+v1612 = is_equal r385c15,r361c39
+v1614 = is_equal r385c15,r361c55
+r386c19 = or v1612,v1614
+r387c71 = and v44,r386c19
+v1616 = is_equal r385c15,r361c71
+v1618 = is_equal r385c15,r362c7
+r386c23 = or v1616,v1618
+r389c11 = and v45,r386c23
+v1620 = is_equal r385c15,r362c23
+v1622 = is_equal r385c15,r362c39
+r386c27 = or v1620,v1622
+r389c31 = and v46,r386c27
+v1624 = is_equal r385c15,r362c55
+v1626 = is_equal r385c15,r362c71
+r386c31 = or v1624,v1626
+r389c51 = and v47,r386c31
+v1628 = is_equal r385c15,r364c7
+v1630 = is_equal r385c15,r364c23
+r386c35 = or v1628,v1630
+r389c71 = and v48,r386c35
+v438 = constant 6
+r390c51 = sub v77,v438
+v1632 = is_equal r390c51,v78
+v1634 = is_equal r390c51,r358c47
+r386c39 = or v1632,v1634
+r391c11 = and v49,r386c39
+v1636 = is_equal r390c51,r158c75
+v1638 = is_equal r390c51,r358c75
+r386c43 = or v1636,v1638
+r391c31 = and v50,r386c43
+v1640 = is_equal r390c51,r160c51
+v1642 = is_equal r390c51,r361c23
+r386c47 = or v1640,v1642
+r391c51 = and v51,r386c47
+v1644 = is_equal r390c51,r361c39
+v1646 = is_equal r390c51,r361c55
+r386c51 = or v1644,v1646
+r391c71 = and v52,r386c51
+v1648 = is_equal r390c51,r361c71
+v1650 = is_equal r390c51,r362c7
+r386c55 = or v1648,v1650
+r394c11 = and v53,r386c55
+v1652 = is_equal r390c51,r362c23
+v1654 = is_equal r390c51,r362c39
+r386c59 = or v1652,v1654
+r394c31 = and v54,r386c59
+v1656 = is_equal r390c51,r362c55
+v1658 = is_equal r390c51,r362c71
+r386c63 = or v1656,v1658
+r394c51 = and v55,r386c63
+v1660 = is_equal r390c51,r364c7
+v1662 = is_equal r390c51,r364c23
+r386c67 = or v1660,v1662
+r394c71 = and v56,r386c67
+v443 = constant 7
+r395c7 = sub v77,v443
+v1664 = is_equal r395c7,v78
+v1666 = is_equal r395c7,r358c47
+r386c71 = or v1664,v1666
+r396c11 = and v57,r386c71
+v1668 = is_equal r395c7,r158c75
+v1670 = is_equal r395c7,r358c75
+r386c75 = or v1668,v1670
+r396c31 = and v58,r386c75
+v1672 = is_equal r395c7,r160c51
+v1674 = is_equal r395c7,r361c23
+r386c79 = or v1672,v1674
+r396c51 = and v59,r386c79
+v1676 = is_equal r395c7,r361c39
+v1678 = is_equal r395c7,r361c55
+r399c3 = or v1676,v1678
+r396c71 = and v60,r399c3
+v1680 = is_equal r395c7,r361c71
+v1682 = is_equal r395c7,r362c7
+r399c7 = or v1680,v1682
+r400c11 = and v61,r399c7
+v1684 = is_equal r395c7,r362c23
+v1686 = is_equal r395c7,r362c39
+r399c11 = or v1684,v1686
+r400c31 = and v62,r399c11
+v1688 = is_equal r395c7,r362c55
+v1690 = is_equal r395c7,r362c71
+r399c15 = or v1688,v1690
+r400c51 = and v63,r399c15
+v1692 = is_equal r395c7,r364c7
+v1694 = is_equal r395c7,r364c23
+r399c19 = or v1692,v1694
+r400c71 = and v64,r399c19
+# [50] assert(is_safe_step(path[i], watcher_map));
+v1 = constant_bool false
+connect r400c71,v1
+v1 = constant_bool false
+connect r400c51,v1
+v1 = constant_bool false
+connect r400c31,v1
+v1 = constant_bool false
+connect r400c11,v1
+v1 = constant_bool false
+connect r396c71,v1
+v1 = constant_bool false
+connect r396c51,v1
+v1 = constant_bool false
+connect r396c31,v1
+v1 = constant_bool false
+connect r396c11,v1
+v1 = constant_bool false
+connect r394c71,v1
+v1 = constant_bool false
+connect r394c51,v1
+v1 = constant_bool false
+connect r394c31,v1
+v1 = constant_bool false
+connect r394c11,v1
+v1 = constant_bool false
+connect r391c71,v1
+v1 = constant_bool false
+connect r391c51,v1
+v1 = constant_bool false
+connect r391c31,v1
+v1 = constant_bool false
+connect r391c11,v1
+v1 = constant_bool false
+connect r389c71,v1
+v1 = constant_bool false
+connect r389c51,v1
+v1 = constant_bool false
+connect r389c31,v1
+v1 = constant_bool false
+connect r389c11,v1
+v1 = constant_bool false
+connect r387c71,v1
+v1 = constant_bool false
+connect r387c51,v1
+v1 = constant_bool false
+connect r387c31,v1
+v1 = constant_bool false
+connect r387c11,v1
+v1 = constant_bool false
+connect r383c71,v1
+v1 = constant_bool false
+connect r383c51,v1
+v1 = constant_bool false
+connect r383c31,v1
+v1 = constant_bool false
+connect r383c11,v1
+v1 = constant_bool false
+connect r380c71,v1
+v1 = constant_bool false
+connect r380c51,v1
+v1 = constant_bool false
+connect r380c31,v1
+v1 = constant_bool false
+connect r380c11,v1
+v1 = constant_bool false
+connect r378c71,v1
+v1 = constant_bool false
+connect r378c51,v1
+v1 = constant_bool false
+connect r378c31,v1
+v1 = constant_bool false
+connect r378c11,v1
+v1 = constant_bool false
+connect r376c71,v1
+v1 = constant_bool false
+connect r376c51,v1
+v1 = constant_bool false
+connect r376c31,v1
+v1 = constant_bool false
+connect r376c11,v1
+v1 = constant_bool false
+connect r374c71,v1
+v1 = constant_bool false
+connect r374c51,v1
+v1 = constant_bool false
+connect r374c31,v1
+v1 = constant_bool false
+connect r374c11,v1
+v1 = constant_bool false
+connect r370c71,v1
+v1 = constant_bool false
+connect r370c51,v1
+v1 = constant_bool false
+connect r370c31,v1
+v1 = constant_bool false
+connect r370c11,v1
+v1 = constant_bool false
+connect r367c71,v1
+v1 = constant_bool false
+connect r367c51,v1
+v1 = constant_bool false
+connect r367c31,v1
+v1 = constant_bool false
+connect r367c11,v1
+v1 = constant_bool false
+connect r365c71,v1
+v1 = constant_bool false
+connect r365c51,v1
+v1 = constant_bool false
+connect r365c31,v1
+v1 = constant_bool false
+connect r365c11,v1
+v1 = constant_bool false
+connect r363c71,v1
+v1 = constant_bool false
+connect r363c51,v1
+v1 = constant_bool false
+connect r363c31,v1
+v1 = constant_bool false
+connect r363c11,v1
+v1 = constant_bool false
+connect r360c71,v1
+v1 = constant_bool false
+connect r360c51,v1
+v1 = constant_bool false
+connect r360c31,v1
+v1 = constant_bool false
+connect r360c11,v1
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+v1696 = is_equal v79,v80
+v1 = constant 0
+r401c55 = sub v1,v80
+v1698 = is_equal v79,r401c55
+r399c23 = or v1696,v1698
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+r402c11 = and v0,r399c23
+v1700 = is_equal v79,r185c19
+v87 = constant 1
+r403c3 = sub v87,v80
+v1702 = is_equal v79,r403c3
+r399c27 = or v1700,v1702
+r402c31 = and v2,r399c27
+v1704 = is_equal v79,r185c75
+v84 = constant 2
+r403c31 = sub v84,v80
+v1706 = is_equal v79,r403c31
+r399c31 = or v1704,v1706
+r402c51 = and v3,r399c31
+v423 = constant 3
+r403c47 = sub v80,v423
+v1708 = is_equal v79,r403c47
+v423 = constant 3
+r403c63 = sub v423,v80
+v1710 = is_equal v79,r403c63
+r399c35 = or v1708,v1710
+r402c71 = and v4,r399c35
+v428 = constant 4
+r403c79 = sub v80,v428
+v1712 = is_equal v79,r403c79
+v428 = constant 4
+r404c15 = sub v428,v80
+v1714 = is_equal v79,r404c15
+r399c39 = or v1712,v1714
+r405c11 = and v5,r399c39
+v433 = constant 5
+r404c31 = sub v80,v433
+v1716 = is_equal v79,r404c31
+v433 = constant 5
+r404c47 = sub v433,v80
+v1718 = is_equal v79,r404c47
+r399c43 = or v1716,v1718
+r405c31 = and v6,r399c43
+v438 = constant 6
+r404c63 = sub v80,v438
+v1720 = is_equal v79,r404c63
+v438 = constant 6
+r404c79 = sub v438,v80
+v1722 = is_equal v79,r404c79
+r399c47 = or v1720,v1722
+r405c51 = and v7,r399c47
+v443 = constant 7
+r406c15 = sub v80,v443
+v1724 = is_equal v79,r406c15
+v443 = constant 7
+r406c31 = sub v443,v80
+v1726 = is_equal v79,r406c31
+r399c51 = or v1724,v1726
+r405c71 = and v8,r399c51
+v1728 = is_equal r185c59,v80
+v1730 = is_equal r185c59,r401c55
+r399c55 = or v1728,v1730
+r407c11 = and v9,r399c55
+v1732 = is_equal r185c59,r185c19
+v1734 = is_equal r185c59,r403c3
+r399c59 = or v1732,v1734
+r407c31 = and v10,r399c59
+v1736 = is_equal r185c59,r185c75
+v1738 = is_equal r185c59,r403c31
+r399c63 = or v1736,v1738
+r407c51 = and v11,r399c63
+v1740 = is_equal r185c59,r403c47
+v1742 = is_equal r185c59,r403c63
+r399c67 = or v1740,v1742
+r407c71 = and v12,r399c67
+v1744 = is_equal r185c59,r403c79
+v1746 = is_equal r185c59,r404c15
+r399c71 = or v1744,v1746
+r409c11 = and v13,r399c71
+v1748 = is_equal r185c59,r404c31
+v1750 = is_equal r185c59,r404c47
+r399c75 = or v1748,v1750
+r409c31 = and v14,r399c75
+v1752 = is_equal r185c59,r404c63
+v1754 = is_equal r185c59,r404c79
+r399c79 = or v1752,v1754
+r409c51 = and v15,r399c79
+v1756 = is_equal r185c59,r406c15
+v1758 = is_equal r185c59,r406c31
+r412c3 = or v1756,v1758
+r409c71 = and v16,r412c3
+v1760 = is_equal r185c3,v80
+v1762 = is_equal r185c3,r401c55
+r412c7 = or v1760,v1762
+r414c11 = and v17,r412c7
+v1764 = is_equal r185c3,r185c19
+v1766 = is_equal r185c3,r403c3
+r412c11 = or v1764,v1766
+r414c31 = and v18,r412c11
+v1768 = is_equal r185c3,r185c75
+v1770 = is_equal r185c3,r403c31
+r412c15 = or v1768,v1770
+r414c51 = and v19,r412c15
+v1772 = is_equal r185c3,r403c47
+v1774 = is_equal r185c3,r403c63
+r412c19 = or v1772,v1774
+r414c71 = and v20,r412c19
+v1776 = is_equal r185c3,r403c79
+v1778 = is_equal r185c3,r404c15
+r412c23 = or v1776,v1778
+r416c11 = and v21,r412c23
+v1780 = is_equal r185c3,r404c31
+v1782 = is_equal r185c3,r404c47
+r412c27 = or v1780,v1782
+r416c31 = and v22,r412c27
+v1784 = is_equal r185c3,r404c63
+v1786 = is_equal r185c3,r404c79
+r412c31 = or v1784,v1786
+r416c51 = and v23,r412c31
+v1788 = is_equal r185c3,r406c15
+v1790 = is_equal r185c3,r406c31
+r412c35 = or v1788,v1790
+r416c71 = and v24,r412c35
+v423 = constant 3
+r417c31 = sub v79,v423
+v1792 = is_equal r417c31,v80
+v1794 = is_equal r417c31,r401c55
+r412c39 = or v1792,v1794
+r418c11 = and v25,r412c39
+v1796 = is_equal r417c31,r185c19
+v1798 = is_equal r417c31,r403c3
+r412c43 = or v1796,v1798
+r418c31 = and v26,r412c43
+v1800 = is_equal r417c31,r185c75
+v1802 = is_equal r417c31,r403c31
+r412c47 = or v1800,v1802
+r418c51 = and v27,r412c47
+v1804 = is_equal r417c31,r403c47
+v1806 = is_equal r417c31,r403c63
+r412c51 = or v1804,v1806
+r418c71 = and v28,r412c51
+v1808 = is_equal r417c31,r403c79
+v1810 = is_equal r417c31,r404c15
+r412c55 = or v1808,v1810
+r420c11 = and v29,r412c55
+v1812 = is_equal r417c31,r404c31
+v1814 = is_equal r417c31,r404c47
+r412c59 = or v1812,v1814
+r420c31 = and v30,r412c59
+v1816 = is_equal r417c31,r404c63
+v1818 = is_equal r417c31,r404c79
+r412c63 = or v1816,v1818
+r420c51 = and v31,r412c63
+v1820 = is_equal r417c31,r406c15
+v1822 = is_equal r417c31,r406c31
+r412c67 = or v1820,v1822
+r420c71 = and v32,r412c67
+v428 = constant 4
+r421c67 = sub v79,v428
+v1824 = is_equal r421c67,v80
+v1826 = is_equal r421c67,r401c55
+r412c71 = or v1824,v1826
+r423c11 = and v33,r412c71
+v1828 = is_equal r421c67,r185c19
+v1830 = is_equal r421c67,r403c3
+r412c75 = or v1828,v1830
+r423c31 = and v34,r412c75
+v1832 = is_equal r421c67,r185c75
+v1834 = is_equal r421c67,r403c31
+r412c79 = or v1832,v1834
+r423c51 = and v35,r412c79
+v1836 = is_equal r421c67,r403c47
+v1838 = is_equal r421c67,r403c63
+r426c3 = or v1836,v1838
+r423c71 = and v36,r426c3
+v1840 = is_equal r421c67,r403c79
+v1842 = is_equal r421c67,r404c15
+r426c7 = or v1840,v1842
+r427c11 = and v37,r426c7
+v1844 = is_equal r421c67,r404c31
+v1846 = is_equal r421c67,r404c47
+r426c11 = or v1844,v1846
+r427c31 = and v38,r426c11
+v1848 = is_equal r421c67,r404c63
+v1850 = is_equal r421c67,r404c79
+r426c15 = or v1848,v1850
+r427c51 = and v39,r426c15
+v1852 = is_equal r421c67,r406c15
+v1854 = is_equal r421c67,r406c31
+r426c19 = or v1852,v1854
+r427c71 = and v40,r426c19
+v433 = constant 5
+r428c23 = sub v79,v433
+v1856 = is_equal r428c23,v80
+v1858 = is_equal r428c23,r401c55
+r426c23 = or v1856,v1858
+r429c11 = and v41,r426c23
+v1860 = is_equal r428c23,r185c19
+v1862 = is_equal r428c23,r403c3
+r426c27 = or v1860,v1862
+r429c31 = and v42,r426c27
+v1864 = is_equal r428c23,r185c75
+v1866 = is_equal r428c23,r403c31
+r426c31 = or v1864,v1866
+r429c51 = and v43,r426c31
+v1868 = is_equal r428c23,r403c47
+v1870 = is_equal r428c23,r403c63
+r426c35 = or v1868,v1870
+r429c71 = and v44,r426c35
+v1872 = is_equal r428c23,r403c79
+v1874 = is_equal r428c23,r404c15
+r426c39 = or v1872,v1874
+r431c11 = and v45,r426c39
+v1876 = is_equal r428c23,r404c31
+v1878 = is_equal r428c23,r404c47
+r426c43 = or v1876,v1878
+r431c31 = and v46,r426c43
+v1880 = is_equal r428c23,r404c63
+v1882 = is_equal r428c23,r404c79
+r426c47 = or v1880,v1882
+r431c51 = and v47,r426c47
+v1884 = is_equal r428c23,r406c15
+v1886 = is_equal r428c23,r406c31
+r426c51 = or v1884,v1886
+r431c71 = and v48,r426c51
+v438 = constant 6
+r432c59 = sub v79,v438
+v1888 = is_equal r432c59,v80
+v1890 = is_equal r432c59,r401c55
+r426c55 = or v1888,v1890
+r433c11 = and v49,r426c55
+v1892 = is_equal r432c59,r185c19
+v1894 = is_equal r432c59,r403c3
+r426c59 = or v1892,v1894
+r433c31 = and v50,r426c59
+v1896 = is_equal r432c59,r185c75
+v1898 = is_equal r432c59,r403c31
+r426c63 = or v1896,v1898
+r433c51 = and v51,r426c63
+v1900 = is_equal r432c59,r403c47
+v1902 = is_equal r432c59,r403c63
+r426c67 = or v1900,v1902
+r433c71 = and v52,r426c67
+v1904 = is_equal r432c59,r403c79
+v1906 = is_equal r432c59,r404c15
+r426c71 = or v1904,v1906
+r436c11 = and v53,r426c71
+v1908 = is_equal r432c59,r404c31
+v1910 = is_equal r432c59,r404c47
+r426c75 = or v1908,v1910
+r436c31 = and v54,r426c75
+v1912 = is_equal r432c59,r404c63
+v1914 = is_equal r432c59,r404c79
+r426c79 = or v1912,v1914
+r436c51 = and v55,r426c79
+v1916 = is_equal r432c59,r406c15
+v1918 = is_equal r432c59,r406c31
+r439c3 = or v1916,v1918
+r436c71 = and v56,r439c3
+v443 = constant 7
+r438c15 = sub v79,v443
+v1920 = is_equal r438c15,v80
+v1922 = is_equal r438c15,r401c55
+r439c7 = or v1920,v1922
+r440c11 = and v57,r439c7
+v1924 = is_equal r438c15,r185c19
+v1926 = is_equal r438c15,r403c3
+r439c11 = or v1924,v1926
+r440c31 = and v58,r439c11
+v1928 = is_equal r438c15,r185c75
+v1930 = is_equal r438c15,r403c31
+r439c15 = or v1928,v1930
+r440c51 = and v59,r439c15
+v1932 = is_equal r438c15,r403c47
+v1934 = is_equal r438c15,r403c63
+r439c19 = or v1932,v1934
+r440c71 = and v60,r439c19
+v1936 = is_equal r438c15,r403c79
+v1938 = is_equal r438c15,r404c15
+r439c23 = or v1936,v1938
+r442c11 = and v61,r439c23
+v1940 = is_equal r438c15,r404c31
+v1942 = is_equal r438c15,r404c47
+r439c27 = or v1940,v1942
+r442c31 = and v62,r439c27
+v1944 = is_equal r438c15,r404c63
+v1946 = is_equal r438c15,r404c79
+r439c31 = or v1944,v1946
+r442c51 = and v63,r439c31
+v1948 = is_equal r438c15,r406c15
+v1950 = is_equal r438c15,r406c31
+r439c35 = or v1948,v1950
+r442c71 = and v64,r439c35
+# [50] assert(is_safe_step(path[i], watcher_map));
+v1 = constant_bool false
+connect r442c71,v1
+v1 = constant_bool false
+connect r442c51,v1
+v1 = constant_bool false
+connect r442c31,v1
+v1 = constant_bool false
+connect r442c11,v1
+v1 = constant_bool false
+connect r440c71,v1
+v1 = constant_bool false
+connect r440c51,v1
+v1 = constant_bool false
+connect r440c31,v1
+v1 = constant_bool false
+connect r440c11,v1
+v1 = constant_bool false
+connect r436c71,v1
+v1 = constant_bool false
+connect r436c51,v1
+v1 = constant_bool false
+connect r436c31,v1
+v1 = constant_bool false
+connect r436c11,v1
+v1 = constant_bool false
+connect r433c71,v1
+v1 = constant_bool false
+connect r433c51,v1
+v1 = constant_bool false
+connect r433c31,v1
+v1 = constant_bool false
+connect r433c11,v1
+v1 = constant_bool false
+connect r431c71,v1
+v1 = constant_bool false
+connect r431c51,v1
+v1 = constant_bool false
+connect r431c31,v1
+v1 = constant_bool false
+connect r431c11,v1
+v1 = constant_bool false
+connect r429c71,v1
+v1 = constant_bool false
+connect r429c51,v1
+v1 = constant_bool false
+connect r429c31,v1
+v1 = constant_bool false
+connect r429c11,v1
+v1 = constant_bool false
+connect r427c71,v1
+v1 = constant_bool false
+connect r427c51,v1
+v1 = constant_bool false
+connect r427c31,v1
+v1 = constant_bool false
+connect r427c11,v1
+v1 = constant_bool false
+connect r423c71,v1
+v1 = constant_bool false
+connect r423c51,v1
+v1 = constant_bool false
+connect r423c31,v1
+v1 = constant_bool false
+connect r423c11,v1
+v1 = constant_bool false
+connect r420c71,v1
+v1 = constant_bool false
+connect r420c51,v1
+v1 = constant_bool false
+connect r420c31,v1
+v1 = constant_bool false
+connect r420c11,v1
+v1 = constant_bool false
+connect r418c71,v1
+v1 = constant_bool false
+connect r418c51,v1
+v1 = constant_bool false
+connect r418c31,v1
+v1 = constant_bool false
+connect r418c11,v1
+v1 = constant_bool false
+connect r416c71,v1
+v1 = constant_bool false
+connect r416c51,v1
+v1 = constant_bool false
+connect r416c31,v1
+v1 = constant_bool false
+connect r416c11,v1
+v1 = constant_bool false
+connect r414c71,v1
+v1 = constant_bool false
+connect r414c51,v1
+v1 = constant_bool false
+connect r414c31,v1
+v1 = constant_bool false
+connect r414c11,v1
+v1 = constant_bool false
+connect r409c71,v1
+v1 = constant_bool false
+connect r409c51,v1
+v1 = constant_bool false
+connect r409c31,v1
+v1 = constant_bool false
+connect r409c11,v1
+v1 = constant_bool false
+connect r407c71,v1
+v1 = constant_bool false
+connect r407c51,v1
+v1 = constant_bool false
+connect r407c31,v1
+v1 = constant_bool false
+connect r407c11,v1
+v1 = constant_bool false
+connect r405c71,v1
+v1 = constant_bool false
+connect r405c51,v1
+v1 = constant_bool false
+connect r405c31,v1
+v1 = constant_bool false
+connect r405c11,v1
+v1 = constant_bool false
+connect r402c71,v1
+v1 = constant_bool false
+connect r402c51,v1
+v1 = constant_bool false
+connect r402c31,v1
+v1 = constant_bool false
+connect r402c11,v1
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+v1952 = is_equal v65,v66
+v1 = constant 0
+r443c63 = sub v1,v66
+v1954 = is_equal v65,r443c63
+r439c39 = or v1952,v1954
+# [36] if watcher_map[x][y] {
+# [39] if (square.x - fx == square.y - fy) | (square.x - fx == fy - square.y) {
+r444c11 = and v0,r439c39
+v87 = constant 1
+r443c79 = sub v82,v87
+v1956 = is_equal v81,r443c79
+v87 = constant 1
+r445c15 = sub v87,v82
+v1958 = is_equal v81,r445c15
+r439c43 = or v1956,v1958
+r444c31 = and v2,r439c43
+v84 = constant 2
+r445c31 = sub v82,v84
+v1960 = is_equal v81,r445c31
+v84 = constant 2
+r445c47 = sub v84,v82
+v1962 = is_equal v81,r445c47
+r439c47 = or v1960,v1962
+r444c51 = and v3,r439c47
+v423 = constant 3
+r445c63 = sub v82,v423
+v1964 = is_equal v81,r445c63
+v423 = constant 3
+r445c79 = sub v423,v82
+v1966 = is_equal v81,r445c79
+r439c51 = or v1964,v1966
+r444c71 = and v4,r439c51
+v428 = constant 4
+r446c15 = sub v82,v428
+v1968 = is_equal v81,r446c15
+v428 = constant 4
+r446c31 = sub v428,v82
+v1970 = is_equal v81,r446c31
+r439c55 = or v1968,v1970
+r447c11 = and v5,r439c55
+v433 = constant 5
+r446c47 = sub v82,v433
+v1972 = is_equal v81,r446c47
+v433 = constant 5
+r446c63 = sub v433,v82
+v1974 = is_equal v81,r446c63
+r439c59 = or v1972,v1974
+r447c31 = and v6,r439c59
+v438 = constant 6
+r446c79 = sub v82,v438
+v1976 = is_equal v81,r446c79
+v438 = constant 6
+r448c15 = sub v438,v82
+v1978 = is_equal v81,r448c15
+r439c63 = or v1976,v1978
+r447c51 = and v7,r439c63
+v443 = constant 7
+r448c31 = sub v82,v443
+v1980 = is_equal v81,r448c31
+v443 = constant 7
+r448c47 = sub v443,v82
+v1982 = is_equal v81,r448c47
+r439c67 = or v1980,v1982
+r447c71 = and v8,r439c67
+v87 = constant 1
+r448c63 = sub v81,v87
+v1984 = is_equal r448c63,v82
+v1986 = is_equal r448c63,r443c63
+r439c71 = or v1984,v1986
+r450c11 = and v9,r439c71
+v1988 = is_equal r448c63,r443c79
+v1990 = is_equal r448c63,r445c15
+r439c75 = or v1988,v1990
+r450c31 = and v10,r439c75
+v1992 = is_equal r448c63,r445c31
+v1994 = is_equal r448c63,r445c47
+r439c79 = or v1992,v1994
+r450c51 = and v11,r439c79
+v1996 = is_equal r448c63,r445c63
+v1998 = is_equal r448c63,r445c79
+r452c3 = or v1996,v1998
+r450c71 = and v12,r452c3
+v2000 = is_equal r448c63,r446c15
+v2002 = is_equal r448c63,r446c31
+r452c7 = or v2000,v2002
+r454c11 = and v13,r452c7
+v2004 = is_equal r448c63,r446c47
+v2006 = is_equal r448c63,r446c63
+r452c11 = or v2004,v2006
+r454c31 = and v14,r452c11
+v2008 = is_equal r448c63,r446c79
+v2010 = is_equal r448c63,r448c15
+r452c15 = or v2008,v2010
+r454c51 = and v15,r452c15
+v2012 = is_equal r448c63,r448c31
+v2014 = is_equal r448c63,r448c47
+r452c19 = or v2012,v2014
+r454c71 = and v16,r452c19
+v84 = constant 2
+r455c19 = sub v81,v84
+v2016 = is_equal r455c19,v82
+v2018 = is_equal r455c19,r443c63
+r452c23 = or v2016,v2018
+r456c11 = and v17,r452c23
+v2020 = is_equal r455c19,r443c79
+v2022 = is_equal r455c19,r445c15
+r452c27 = or v2020,v2022
+r456c31 = and v18,r452c27
+v2024 = is_equal r455c19,r445c31
+v2026 = is_equal r455c19,r445c47
+r452c31 = or v2024,v2026
+r456c51 = and v19,r452c31
+v2028 = is_equal r455c19,r445c63
+v2030 = is_equal r455c19,r445c79
+r452c35 = or v2028,v2030
+r456c71 = and v20,r452c35
+v2032 = is_equal r455c19,r446c15
+v2034 = is_equal r455c19,r446c31
+r452c39 = or v2032,v2034
+r458c11 = and v21,r452c39
+v2036 = is_equal r455c19,r446c47
+v2038 = is_equal r455c19,r446c63
+r452c43 = or v2036,v2038
+r458c31 = and v22,r452c43
+v2040 = is_equal r455c19,r446c79
+v2042 = is_equal r455c19,r448c15
+r452c47 = or v2040,v2042
+r458c51 = and v23,r452c47
+v2044 = is_equal r455c19,r448c31
+v2046 = is_equal r455c19,r448c47
+r452c51 = or v2044,v2046
+r458c71 = and v24,r452c51
+v423 = constant 3
+r459c55 = sub v81,v423
+v2048 = is_equal r459c55,v82
+v2050 = is_equal r459c55,r443c63
+r452c55 = or v2048,v2050
+r460c11 = and v25,r452c55
+v2052 = is_equal r459c55,r443c79
+v2054 = is_equal r459c55,r445c15
+r452c59 = or v2052,v2054
+r460c31 = and v26,r452c59
+v2056 = is_equal r459c55,r445c31
+v2058 = is_equal r459c55,r445c47
+r452c63 = or v2056,v2058
+r460c51 = and v27,r452c63
+v2060 = is_equal r459c55,r445c63
+v2062 = is_equal r459c55,r445c79
+r452c67 = or v2060,v2062
+r460c71 = and v28,r452c67
+v2064 = is_equal r459c55,r446c15
+v2066 = is_equal r459c55,r446c31
+r452c71 = or v2064,v2066
+r463c11 = and v29,r452c71
+v2068 = is_equal r459c55,r446c47
+v2070 = is_equal r459c55,r446c63
+r452c75 = or v2068,v2070
+r463c31 = and v30,r452c75
+v2072 = is_equal r459c55,r446c79
+v2074 = is_equal r459c55,r448c15
+r452c79 = or v2072,v2074
+r463c51 = and v31,r452c79
+v2076 = is_equal r459c55,r448c31
+v2078 = is_equal r459c55,r448c47
+r466c3 = or v2076,v2078
+r463c71 = and v32,r466c3
+v428 = constant 4
+r465c11 = sub v81,v428
+v2080 = is_equal r465c11,v82
+v2082 = is_equal r465c11,r443c63
+r466c7 = or v2080,v2082
+r467c11 = and v33,r466c7
+v2084 = is_equal r465c11,r443c79
+v2086 = is_equal r465c11,r445c15
+r466c11 = or v2084,v2086
+r467c31 = and v34,r466c11
+v2088 = is_equal r465c11,r445c31
+v2090 = is_equal r465c11,r445c47
+r466c15 = or v2088,v2090
+r467c51 = and v35,r466c15
+v2092 = is_equal r465c11,r445c63
+v2094 = is_equal r465c11,r445c79
+r466c19 = or v2092,v2094
+r467c71 = and v36,r466c19
+v2096 = is_equal r465c11,r446c15
+v2098 = is_equal r465c11,r446c31
+r466c23 = or v2096,v2098
+r469c11 = and v37,r466c23
+v2100 = is_equal r465c11,r446c47
+v2102 = is_equal r465c11,r446c63
+r466c27 = or v2100,v2102
+r469c31 = and v38,r466c27
+v2104 = is_equal r465c11,r446c79
+v2106 = is_equal r465c11,r448c15
+r466c31 = or v2104,v2106
+r469c51 = and v39,r466c31
+v2108 = is_equal r465c11,r448c31
+v2110 = is_equal r465c11,r448c47
+r466c35 = or v2108,v2110
+r469c71 = and v40,r466c35
+v433 = constant 5
+r470c47 = sub v81,v433
+v2112 = is_equal r470c47,v82
+v2114 = is_equal r470c47,r443c63
+r466c39 = or v2112,v2114
+r471c11 = and v41,r466c39
+v2116 = is_equal r470c47,r443c79
+v2118 = is_equal r470c47,r445c15
+r466c43 = or v2116,v2118
+r471c31 = and v42,r466c43
+v2120 = is_equal r470c47,r445c31
+v2122 = is_equal r470c47,r445c47
+r466c47 = or v2120,v2122
+r471c51 = and v43,r466c47
+v2124 = is_equal r470c47,r445c63
+v2126 = is_equal r470c47,r445c79
+r466c51 = or v2124,v2126
+r471c71 = and v44,r466c51
+v2128 = is_equal r470c47,r446c15
+v2130 = is_equal r470c47,r446c31
+r466c55 = or v2128,v2130
+r474c11 = and v45,r466c55
+v2132 = is_equal r470c47,r446c47
+v2134 = is_equal r470c47,r446c63
+r466c59 = or v2132,v2134
+r474c31 = and v46,r466c59
+v2136 = is_equal r470c47,r446c79
+v2138 = is_equal r470c47,r448c15
+r466c63 = or v2136,v2138
+r474c51 = and v47,r466c63
+v2140 = is_equal r470c47,r448c31
+v2142 = is_equal r470c47,r448c47
+r466c67 = or v2140,v2142
+r474c71 = and v48,r466c67
+v438 = constant 6
+r475c3 = sub v81,v438
+v2144 = is_equal r475c3,v82
+v2146 = is_equal r475c3,r443c63
+r466c71 = or v2144,v2146
+r476c11 = and v49,r466c71
+v2148 = is_equal r475c3,r443c79
+v2150 = is_equal r475c3,r445c15
+r466c75 = or v2148,v2150
+r476c31 = and v50,r466c75
+v2152 = is_equal r475c3,r445c31
+v2154 = is_equal r475c3,r445c47
+r466c79 = or v2152,v2154
+r476c51 = and v51,r466c79
+v2156 = is_equal r475c3,r445c63
+v2158 = is_equal r475c3,r445c79
+r479c3 = or v2156,v2158
+r476c71 = and v52,r479c3
+v2160 = is_equal r475c3,r446c15
+v2162 = is_equal r475c3,r446c31
+r479c7 = or v2160,v2162
+r480c11 = and v53,r479c7
+v2164 = is_equal r475c3,r446c47
+v2166 = is_equal r475c3,r446c63
+r479c11 = or v2164,v2166
+r480c31 = and v54,r479c11
+v2168 = is_equal r475c3,r446c79
+v2170 = is_equal r475c3,r448c15
+r479c15 = or v2168,v2170
+r480c51 = and v55,r479c15
+v2172 = is_equal r475c3,r448c31
+v2174 = is_equal r475c3,r448c47
+r479c19 = or v2172,v2174
+r480c71 = and v56,r479c19
+v443 = constant 7
+r481c39 = sub v81,v443
+v2176 = is_equal r481c39,v82
+v2178 = is_equal r481c39,r443c63
+r479c23 = or v2176,v2178
+r482c11 = and v57,r479c23
+v2180 = is_equal r481c39,r443c79
+v2182 = is_equal r481c39,r445c15
+r479c27 = or v2180,v2182
+r482c31 = and v58,r479c27
+v2184 = is_equal r481c39,r445c31
+v2186 = is_equal r481c39,r445c47
+r479c31 = or v2184,v2186
+r482c51 = and v59,r479c31
+v2188 = is_equal r481c39,r445c63
+v2190 = is_equal r481c39,r445c79
+r479c35 = or v2188,v2190
+r482c71 = and v60,r479c35
+v2192 = is_equal r481c39,r446c15
+v2194 = is_equal r481c39,r446c31
+r479c39 = or v2192,v2194
+r484c11 = and v61,r479c39
+v2196 = is_equal r481c39,r446c47
+v2198 = is_equal r481c39,r446c63
+r479c43 = or v2196,v2198
+r484c31 = and v62,r479c43
+v2200 = is_equal r481c39,r446c79
+v2202 = is_equal r481c39,r448c15
+r479c47 = or v2200,v2202
+r484c51 = and v63,r479c47
+v2204 = is_equal r481c39,r448c31
+v2206 = is_equal r481c39,r448c47
+r479c51 = or v2204,v2206
+r484c71 = and v64,r479c51
+# [50] assert(is_safe_step(path[i], watcher_map));
+v1 = constant_bool false
+connect r484c71,v1
+v1 = constant_bool false
+connect r484c51,v1
+v1 = constant_bool false
+connect r484c31,v1
+v1 = constant_bool false
+connect r484c11,v1
+v1 = constant_bool false
+connect r482c71,v1
+v1 = constant_bool false
+connect r482c51,v1
+v1 = constant_bool false
+connect r482c31,v1
+v1 = constant_bool false
+connect r482c11,v1
+v1 = constant_bool false
+connect r480c71,v1
+v1 = constant_bool false
+connect r480c51,v1
+v1 = constant_bool false
+connect r480c31,v1
+v1 = constant_bool false
+connect r480c11,v1
+v1 = constant_bool false
+connect r476c71,v1
+v1 = constant_bool false
+connect r476c51,v1
+v1 = constant_bool false
+connect r476c31,v1
+v1 = constant_bool false
+connect r476c11,v1
+v1 = constant_bool false
+connect r474c71,v1
+v1 = constant_bool false
+connect r474c51,v1
+v1 = constant_bool false
+connect r474c31,v1
+v1 = constant_bool false
+connect r474c11,v1
+v1 = constant_bool false
+connect r471c71,v1
+v1 = constant_bool false
+connect r471c51,v1
+v1 = constant_bool false
+connect r471c31,v1
+v1 = constant_bool false
+connect r471c11,v1
+v1 = constant_bool false
+connect r469c71,v1
+v1 = constant_bool false
+connect r469c51,v1
+v1 = constant_bool false
+connect r469c31,v1
+v1 = constant_bool false
+connect r469c11,v1
+v1 = constant_bool false
+connect r467c71,v1
+v1 = constant_bool false
+connect r467c51,v1
+v1 = constant_bool false
+connect r467c31,v1
+v1 = constant_bool false
+connect r467c11,v1
+v1 = constant_bool false
+connect r463c71,v1
+v1 = constant_bool false
+connect r463c51,v1
+v1 = constant_bool false
+connect r463c31,v1
+v1 = constant_bool false
+connect r463c11,v1
+v1 = constant_bool false
+connect r460c71,v1
+v1 = constant_bool false
+connect r460c51,v1
+v1 = constant_bool false
+connect r460c31,v1
+v1 = constant_bool false
+connect r460c11,v1
+v1 = constant_bool false
+connect r458c71,v1
+v1 = constant_bool false
+connect r458c51,v1
+v1 = constant_bool false
+connect r458c31,v1
+v1 = constant_bool false
+connect r458c11,v1
+v1 = constant_bool false
+connect r456c71,v1
+v1 = constant_bool false
+connect r456c51,v1
+v1 = constant_bool false
+connect r456c31,v1
+v1 = constant_bool false
+connect r456c11,v1
+v1 = constant_bool false
+connect r454c71,v1
+v1 = constant_bool false
+connect r454c51,v1
+v1 = constant_bool false
+connect r454c31,v1
+v1 = constant_bool false
+connect r454c11,v1
+v1 = constant_bool false
+connect r450c71,v1
+v1 = constant_bool false
+connect r450c51,v1
+v1 = constant_bool false
+connect r450c31,v1
+v1 = constant_bool false
+connect r450c11,v1
+v1 = constant_bool false
+connect r447c71,v1
+v1 = constant_bool false
+connect r447c51,v1
+v1 = constant_bool false
+connect r447c31,v1
+v1 = constant_bool false
+connect r447c11,v1
+v1 = constant_bool false
+connect r444c71,v1
+v1 = constant_bool false
+connect r444c51,v1
+v1 = constant_bool false
+connect r444c31,v1
+v1 = constant_bool false
+connect r444c11,v1
+register_public_inputs (v0,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13,v14,v15,v16,v17,v18,v19,v20,v21,v22,v23,v24,v25,v26,v27,v28,v29,v30,v31,v32,v33,v34,v35,v36,v37,v38,v39,v40,v41,v42,v43,v44,v45,v46,v47,v48,v49,v50,v51,v52,v53,v54,v55,v56,v57,v58,v59,v60,v61,v62,v63,v64)
+register_public_inputs (v65,v66)

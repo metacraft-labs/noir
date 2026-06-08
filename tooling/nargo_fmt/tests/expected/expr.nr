@@ -2,9 +2,7 @@
 fn qux() {
     {}
 
-    {
-        /* a block with a comment */
-    }
+    { /* a block with a comment */ }
     {}
     {
         // A block with a comment.
@@ -72,6 +70,22 @@ fn test() {
     34
 }
 
+fn line() {
+    42; // 42
+}
+
+fn line() {
+    42; // 42
+    42;
+    // hello
+}
+
+fn line() {
+    42; // 42
+    // 42
+    // hello
+}
+
 fn parenthesized() {
     value + (x as Field)
 }
@@ -81,14 +95,15 @@ fn parenthesized() {
 }
 
 fn parenthesized() {
-    value + (/*test*/x as Field/*test*/)
+    value + ( /*test*/ x as Field /*test*/)
 }
 
 fn parenthesized() {
-    value + (
-        // line
-        x as Field
-    )
+    value
+        + (
+            // line
+            x as Field
+        )
 }
 
 fn constructor() {
@@ -102,21 +117,23 @@ fn if_expr() {
 }
 
 fn return_if_expr() {
-    if true { 42 } else { 40 + 2 }
+    if true {
+        42
+    } else {
+        40 + 2
+    }
 }
 
 fn return_if_expr() {
+    if true { 42 };
+
     if true {
         42
-    };
-
-    if true { 42 } else { 40 + 2 }
+    } else {
+        40 + 2
+    }
 }
 
 fn if_if() {
-    if cond {
-        some();
-    } else {
-        none();
-    }.bar().baz();
+    (if cond { some(); } else { none(); }).bar().baz();
 }

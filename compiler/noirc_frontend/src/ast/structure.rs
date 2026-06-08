@@ -1,29 +1,35 @@
 use std::fmt::Display;
 
-use crate::{token::SecondaryAttribute, Ident, UnresolvedGenerics, UnresolvedType};
+use crate::ast::{Ident, UnresolvedGenerics, UnresolvedType};
+use crate::token::SecondaryAttribute;
+
 use iter_extended::vecmap;
 use noirc_errors::Span;
+
+use super::{Documented, ItemVisibility};
 
 /// Ast node for a struct
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NoirStruct {
     pub name: Ident,
     pub attributes: Vec<SecondaryAttribute>,
+    pub visibility: ItemVisibility,
     pub generics: UnresolvedGenerics,
-    pub fields: Vec<(Ident, UnresolvedType)>,
+    pub fields: Vec<Documented<StructField>>,
     pub span: Span,
 }
 
 impl NoirStruct {
-    pub fn new(
-        name: Ident,
-        attributes: Vec<SecondaryAttribute>,
-        generics: Vec<Ident>,
-        fields: Vec<(Ident, UnresolvedType)>,
-        span: Span,
-    ) -> NoirStruct {
-        NoirStruct { name, attributes, generics, fields, span }
+    pub fn is_abi(&self) -> bool {
+        self.attributes.iter().any(|attr| attr.is_abi())
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructField {
+    pub visibility: ItemVisibility,
+    pub name: Ident,
+    pub typ: UnresolvedType,
 }
 
 impl Display for NoirStruct {
@@ -33,8 +39,8 @@ impl Display for NoirStruct {
 
         writeln!(f, "struct {}{} {{", self.name, generics)?;
 
-        for (name, typ) in self.fields.iter() {
-            writeln!(f, "    {name}: {typ},")?;
+        for field in self.fields.iter() {
+            writeln!(f, "    {}: {},", field.item.name, field.item.typ)?;
         }
 
         write!(f, "}}")

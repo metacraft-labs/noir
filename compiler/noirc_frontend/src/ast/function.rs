@@ -3,8 +3,8 @@ use std::fmt::Display;
 use noirc_errors::Span;
 
 use crate::{
+    ast::{FunctionReturnType, Ident, Param, Visibility},
     token::{Attributes, FunctionAttribute, SecondaryAttribute},
-    FunctionReturnType, Ident, Pattern, Visibility,
 };
 
 use super::{FunctionDefinition, UnresolvedType, UnresolvedTypeData};
@@ -19,16 +19,30 @@ pub struct NoirFunction {
     pub def: FunctionDefinition,
 }
 
-/// Currently, we support three types of functions:
+/// Currently, we support four types of functions:
 /// - Normal functions
 /// - LowLevel/Foreign which link to an OPCODE in ACIR
 /// - BuiltIn which are provided by the runtime
+/// - TraitFunctionWithoutBody for which we don't type-check their body
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum FunctionKind {
     LowLevel,
     Builtin,
     Normal,
     Oracle,
+    TraitFunctionWithoutBody,
+}
+
+impl FunctionKind {
+    pub fn can_ignore_return_type(self) -> bool {
+        match self {
+            FunctionKind::LowLevel
+            | FunctionKind::Builtin
+            | FunctionKind::Oracle
+            | FunctionKind::TraitFunctionWithoutBody => true,
+            FunctionKind::Normal => false,
+        }
+    }
 }
 
 impl NoirFunction {
@@ -45,11 +59,13 @@ impl NoirFunction {
         NoirFunction { kind: FunctionKind::Oracle, def }
     }
 
+    pub fn return_visibility(&self) -> Visibility {
+        self.def.return_visibility
+    }
+
     pub fn return_type(&self) -> UnresolvedType {
         match &self.def.return_type {
-            FunctionReturnType::Default(_) => {
-                UnresolvedType::without_span(UnresolvedTypeData::Unit)
-            }
+            FunctionReturnType::Default(span) => UnresolvedTypeData::Unit.with_span(*span),
             FunctionReturnType::Ty(ty) => ty.clone(),
         }
     }
@@ -59,16 +75,16 @@ impl NoirFunction {
     pub fn name_ident(&self) -> &Ident {
         &self.def.name
     }
-    pub fn parameters(&self) -> &Vec<(Pattern, UnresolvedType, Visibility)> {
+    pub fn parameters(&self) -> &[Param] {
         &self.def.parameters
     }
     pub fn attributes(&self) -> &Attributes {
         &self.def.attributes
     }
     pub fn function_attribute(&self) -> Option<&FunctionAttribute> {
-        self.def.attributes.function.as_ref()
+        self.def.attributes.function()
     }
-    pub fn secondary_attributes(&self) -> &Vec<SecondaryAttribute> {
+    pub fn secondary_attributes(&self) -> &[SecondaryAttribute] {
         self.def.attributes.secondary.as_ref()
     }
     pub fn def(&self) -> &FunctionDefinition {
@@ -78,7 +94,7 @@ impl NoirFunction {
         &mut self.def
     }
     pub fn number_of_statements(&self) -> usize {
-        self.def.body.0.len()
+        self.def.body.statements.len()
     }
     pub fn span(&self) -> Span {
         self.def.span
@@ -97,11 +113,14 @@ impl NoirFunction {
 impl From<FunctionDefinition> for NoirFunction {
     fn from(fd: FunctionDefinition) -> Self {
         // The function type is determined by the existence of a function attribute
-        let kind = match fd.attributes.function {
+        let kind = match fd.attributes.function() {
             Some(FunctionAttribute::Builtin(_)) => FunctionKind::Builtin,
             Some(FunctionAttribute::Foreign(_)) => FunctionKind::LowLevel,
             Some(FunctionAttribute::Test { .. }) => FunctionKind::Normal,
             Some(FunctionAttribute::Oracle(_)) => FunctionKind::Oracle,
+            Some(FunctionAttribute::Fold) => FunctionKind::Normal,
+            Some(FunctionAttribute::NoPredicates) => FunctionKind::Normal,
+            Some(FunctionAttribute::InlineAlways) => FunctionKind::Normal,
             None => FunctionKind::Normal,
         };
 

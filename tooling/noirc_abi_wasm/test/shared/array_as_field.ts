@@ -8,9 +8,8 @@ export const abi: Abi = {
       visibility: 'private',
     },
   ],
-  param_witnesses: { foo: [1, 2] },
   return_type: null,
-  return_witnesses: [],
+  error_types: {},
 };
 
 export const inputs: InputMap = {

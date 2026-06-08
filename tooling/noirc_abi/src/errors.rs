@@ -1,15 +1,27 @@
-use crate::{input_parser::InputValue, AbiParameter, AbiType};
-use acvm::acir::native_types::Witness;
+use crate::{
+    input_parser::{InputTypecheckingError, InputValue},
+    AbiType,
+};
+use acvm::{acir::native_types::Witness, AcirField, FieldElement};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum InputParserError {
     #[error("input file is badly formed, could not parse, {0}")]
     ParseInputMap(String),
-    #[error("Expected witness values to be integers, provided value causes `{0}` error")]
-    ParseStr(String),
-    #[error("Could not parse hex value {0}")]
-    ParseHexStr(String),
+    #[error(
+        "The value passed for parameter `{arg_name}` is invalid:\nExpected witness values to be integers, but `{value}` failed with `{error}`"
+    )]
+    ParseStr { arg_name: String, value: String, error: String },
+    #[error("The value passed for parameter `{arg_name}` is invalid:\nValue {value} is less than minimum allowed value of {min}")]
+    InputUnderflowsMinimum { arg_name: String, value: String, min: String },
+    #[error("The value passed for parameter `{arg_name}` is invalid:\nValue {value} exceeds maximum allowed value of {max}")]
+    InputOverflowsMaximum { arg_name: String, value: String, max: String },
+    #[error(
+        "The value passed for parameter `{arg_name}` is invalid:\nValue {value} exceeds field modulus. Values must fall within [0, {})",
+        FieldElement::modulus()
+    )]
+    InputExceedsFieldModulus { arg_name: String, value: String },
     #[error("cannot parse value into {0:?}")]
     AbiTypeMismatch(AbiType),
     #[error("Expected argument `{0}`, but none was found")]
@@ -38,8 +50,8 @@ impl From<serde_json::Error> for InputParserError {
 pub enum AbiError {
     #[error("Received parameters not expected by ABI: {0:?}")]
     UnexpectedParams(Vec<String>),
-    #[error("The parameter {} is expected to be a {:?} but found incompatible value {value:?}", .param.name, .param.typ)]
-    TypeMismatch { param: AbiParameter, value: InputValue },
+    #[error("The value passed for parameter `{}` does not match the specified type:\n{0}", .0.path())]
+    TypeMismatch(#[from] InputTypecheckingError),
     #[error("ABI expects the parameter `{0}`, but this was not found")]
     MissingParam(String),
     #[error(

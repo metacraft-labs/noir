@@ -8,23 +8,77 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use errors::SemverError;
 use fm::{NormalizePath, FILE_EXTENSION};
 use nargo::{
     package::{Dependency, Package, PackageType},
     workspace::Workspace,
 };
+use noirc_driver::parse_expression_width;
 use noirc_frontend::graph::CrateName;
 use serde::Deserialize;
 
 mod errors;
+mod flock;
 mod git;
+mod semver;
 
 pub use errors::ManifestError;
-use git::clone_git_repo;
+use git::{clone_git_repo, lock_git_deps};
+
+/// Searches for a `Nargo.toml` file in the current directory and all parent directories.
+/// For example, if the current directory is `/workspace/package/src`, then this function
+/// will search for a `Nargo.toml` file in
+/// * `/workspace/package/src`,
+/// * `/workspace/package`,
+/// * `/workspace`.
+///
+/// Returns the [PathBuf] of the `Nargo.toml` file if found, otherwise returns None.
+///
+/// It will return innermost `Nargo.toml` file, which is the one closest to the current directory.
+/// For example, if the current directory is `/workspace/package/src`, then this function
+/// will return the `Nargo.toml` file in `/workspace/package/Nargo.toml`
+pub fn find_file_manifest(current_path: &Path) -> Option<PathBuf> {
+    for path in current_path.ancestors() {
+        if let Ok(toml_path) = get_package_manifest(path) {
+            return Some(toml_path);
+        }
+    }
+    None
+}
 
 /// Returns the [PathBuf] of the directory containing the `Nargo.toml` by searching from `current_path` to the root of its [Path].
+/// When `workspace` is `true` it returns the topmost directory, when `false` the innermost one.
 ///
 /// Returns a [ManifestError] if no parent directories of `current_path` contain a manifest file.
+pub fn find_root(current_path: &Path, workspace: bool) -> Result<PathBuf, ManifestError> {
+    if workspace {
+        find_package_root(current_path)
+    } else {
+        find_file_root(current_path)
+    }
+}
+
+/// Returns the [PathBuf] of the directory containing the `Nargo.toml` by searching from `current_path` to the root of its [Path],
+/// returning at the innermost directory found, i.e. the one corresponding to the package that contains the `current_path`.
+///
+/// Returns a [ManifestError] if no parent directories of `current_path` contain a manifest file.
+pub fn find_file_root(current_path: &Path) -> Result<PathBuf, ManifestError> {
+    match find_file_manifest(current_path) {
+        Some(manifest_path) => {
+            let package_root = manifest_path
+                .parent()
+                .expect("infallible: manifest file path can't be root directory");
+            Ok(package_root.to_path_buf())
+        }
+        None => Err(ManifestError::MissingFile(current_path.to_path_buf())),
+    }
+}
+
+/// Returns the [PathBuf] of the directory containing the `Nargo.toml` by searching from `current_path` to the root of its [Path],
+/// returning the topmost directory found, i.e. the one corresponding to the entire workspace.
+///
+/// Returns a [ManifestError] if none of the ancestor directories of `current_path` contain a manifest file.
 pub fn find_package_root(current_path: &Path) -> Result<PathBuf, ManifestError> {
     let root = path_root(current_path);
     let manifest_path = find_package_manifest(&root, current_path)?;
@@ -36,6 +90,11 @@ pub fn find_package_root(current_path: &Path) -> Result<PathBuf, ManifestError> 
 }
 
 // TODO(#2323): We are probably going to need a "filepath utils" crate soon
+/// Get the root of path, for example:
+/// * `C:\foo\bar` -> `C:\foo`
+/// * `//shared/foo/bar` -> `//shared/foo`
+/// * `/foo` -> `/foo`
+///   otherwise empty path.
 fn path_root(path: &Path) -> PathBuf {
     let mut components = path.components();
 
@@ -77,6 +136,7 @@ pub fn find_package_manifest(
         })
     }
 }
+
 /// Returns the [PathBuf] of the `Nargo.toml` file in the `current_path` directory.
 ///
 /// Returns a [ManifestError] if `current_path` does not contain a manifest file.
@@ -97,8 +157,12 @@ struct PackageConfig {
 }
 
 impl PackageConfig {
-    fn resolve_to_package(&self, root_dir: &Path) -> Result<Package, ManifestError> {
-        let name = if let Some(name) = &self.package.name {
+    fn resolve_to_package(
+        &self,
+        root_dir: &Path,
+        processed: &mut Vec<String>,
+    ) -> Result<Package, ManifestError> {
+        let name: CrateName = if let Some(name) = &self.package.name {
             name.parse().map_err(|_| ManifestError::InvalidPackageName {
                 toml: root_dir.join("Nargo.toml"),
                 name: name.into(),
@@ -113,7 +177,7 @@ impl PackageConfig {
                 toml: root_dir.join("Nargo.toml"),
                 name: name.into(),
             })?;
-            let resolved_dep = dep_config.resolve_to_dependency(root_dir)?;
+            let resolved_dep = dep_config.resolve_to_dependency(root_dir, processed)?;
 
             dependencies.insert(name, resolved_dep);
         }
@@ -162,12 +226,35 @@ impl PackageConfig {
             }
         };
 
+        // If there is a package version, ensure that it is semver compatible
+        if let Some(version) = &self.package.version {
+            semver::parse_semver_compatible_version(version).map_err(|err| {
+                ManifestError::SemverError(SemverError::CouldNotParsePackageVersion {
+                    package_name: name.to_string(),
+                    error: err.to_string(),
+                })
+            })?;
+        }
+
+        let expression_width = self
+            .package
+            .expression_width
+            .as_ref()
+            .map(|expression_width| {
+                parse_expression_width(expression_width)
+                    .map_err(|err| ManifestError::ParseExpressionWidth(err.to_string()))
+            })
+            .map_or(Ok(None), |res| res.map(Some))?;
+
         Ok(Package {
+            version: self.package.version.clone(),
+            compiler_required_version: self.package.compiler_version.clone(),
             root_dir: root_dir.to_path_buf(),
             entry_path,
             package_type,
             name,
             dependencies,
+            expression_width,
         })
     }
 }
@@ -223,19 +310,20 @@ struct WorkspaceConfig {
 #[derive(Default, Debug, Deserialize, Clone)]
 struct PackageMetadata {
     name: Option<String>,
+    version: Option<String>,
     #[serde(alias = "type")]
     package_type: Option<String>,
     entry: Option<PathBuf>,
     description: Option<String>,
     authors: Option<Vec<String>>,
-    // If not compiler version is supplied, the latest is used
+    // If no compiler version is supplied, the latest is used
     // For now, we state that all packages must be compiled under the same
     // compiler version.
     // We also state that ACIR and the compiler will upgrade in lockstep.
     // so you will not need to supply an ACIR and compiler version
     compiler_version: Option<String>,
-    backend: Option<String>,
     license: Option<String>,
+    expression_width: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -248,7 +336,11 @@ enum DependencyConfig {
 }
 
 impl DependencyConfig {
-    fn resolve_to_dependency(&self, pkg_root: &Path) -> Result<Dependency, ManifestError> {
+    fn resolve_to_dependency(
+        &self,
+        pkg_root: &Path,
+        processed: &mut Vec<String>,
+    ) -> Result<Dependency, ManifestError> {
         let dep = match self {
             Self::Github { git, tag, directory } => {
                 let dir_path = clone_git_repo(git, tag).map_err(ManifestError::GitError)?;
@@ -265,13 +357,13 @@ impl DependencyConfig {
                     dir_path
                 };
                 let toml_path = project_path.join("Nargo.toml");
-                let package = resolve_package_from_toml(&toml_path)?;
+                let package = resolve_package_from_toml(&toml_path, processed)?;
                 Dependency::Remote { package }
             }
             Self::Path { path } => {
                 let dir_path = pkg_root.join(path);
                 let toml_path = dir_path.join("Nargo.toml");
-                let package = resolve_package_from_toml(&toml_path)?;
+                let package = resolve_package_from_toml(&toml_path, processed)?;
                 Dependency::Local { package }
             }
         };
@@ -290,9 +382,11 @@ fn toml_to_workspace(
     nargo_toml: NargoToml,
     package_selection: PackageSelection,
 ) -> Result<Workspace, ManifestError> {
+    let mut resolved = Vec::new();
+    let _lock = lock_git_deps().expect("Failed to lock git dependencies cache");
     let workspace = match nargo_toml.config {
         Config::Package { package_config } => {
-            let member = package_config.resolve_to_package(&nargo_toml.root_dir)?;
+            let member = package_config.resolve_to_package(&nargo_toml.root_dir, &mut resolved)?;
             match &package_selection {
                 PackageSelection::Selected(selected_name) if selected_name != &member.name => {
                     return Err(ManifestError::MissingSelectedPackage(member.name))
@@ -301,6 +395,8 @@ fn toml_to_workspace(
                     root_dir: nargo_toml.root_dir,
                     selected_package_index: Some(0),
                     members: vec![member],
+                    is_assumed: false,
+                    target_dir: None,
                 },
             }
         }
@@ -310,7 +406,7 @@ fn toml_to_workspace(
             for (index, member_path) in workspace_config.members.into_iter().enumerate() {
                 let package_root_dir = nargo_toml.root_dir.join(&member_path);
                 let package_toml_path = package_root_dir.join("Nargo.toml");
-                let member = resolve_package_from_toml(&package_toml_path)?;
+                let member = resolve_package_from_toml(&package_toml_path, &mut resolved)?;
 
                 match &package_selection {
                     PackageSelection::Selected(selected_name) => {
@@ -348,7 +444,13 @@ fn toml_to_workspace(
                 PackageSelection::All => (),
             }
 
-            Workspace { root_dir: nargo_toml.root_dir, members, selected_package_index }
+            Workspace {
+                root_dir: nargo_toml.root_dir,
+                members,
+                selected_package_index,
+                is_assumed: false,
+                target_dir: None,
+            }
         }
     };
 
@@ -367,20 +469,46 @@ fn read_toml(toml_path: &Path) -> Result<NargoToml, ManifestError> {
 }
 
 /// Resolves a Nargo.toml file into a `Package` struct as defined by our `nargo` core.
-fn resolve_package_from_toml(toml_path: &Path) -> Result<Package, ManifestError> {
+fn resolve_package_from_toml(
+    toml_path: &Path,
+    processed: &mut Vec<String>,
+) -> Result<Package, ManifestError> {
+    // Checks for cyclic dependencies
+    let str_path = toml_path.to_str().expect("ICE - path is empty");
+    if processed.contains(&str_path.to_string()) {
+        let mut cycle = false;
+        let mut message = String::new();
+        for toml in processed {
+            cycle = cycle || toml == str_path;
+            if cycle {
+                message += &format!("{} referencing ", toml);
+            }
+        }
+        message += str_path;
+        return Err(ManifestError::CyclicDependency { cycle: message });
+    }
+    // Adds the package to the set of resolved packages
+    if let Some(str) = toml_path.to_str() {
+        processed.push(str.to_string());
+    }
+
     let nargo_toml = read_toml(toml_path)?;
 
-    match nargo_toml.config {
+    let result = match nargo_toml.config {
         Config::Package { package_config } => {
-            package_config.resolve_to_package(&nargo_toml.root_dir)
+            package_config.resolve_to_package(&nargo_toml.root_dir, processed)
         }
         Config::Workspace { .. } => {
             Err(ManifestError::UnexpectedWorkspace(toml_path.to_path_buf()))
         }
-    }
+    };
+    let pos =
+        processed.iter().position(|toml| toml == str_path).expect("added package must be here");
+    processed.remove(pos);
+    result
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PackageSelection {
     Selected(CrateName),
     DefaultOrAll,
@@ -388,23 +516,40 @@ pub enum PackageSelection {
 }
 
 /// Resolves a Nargo.toml file into a `Workspace` struct as defined by our `nargo` core.
+///
+/// As a side effect it downloads project dependencies as well.
 pub fn resolve_workspace_from_toml(
     toml_path: &Path,
     package_selection: PackageSelection,
+    current_compiler_version: Option<String>,
 ) -> Result<Workspace, ManifestError> {
     let nargo_toml = read_toml(toml_path)?;
-
-    toml_to_workspace(nargo_toml, package_selection)
+    let workspace = toml_to_workspace(nargo_toml, package_selection)?;
+    if let Some(current_compiler_version) = current_compiler_version {
+        semver::semver_check_workspace(&workspace, current_compiler_version)?;
+    }
+    Ok(workspace)
 }
 
-#[test]
-fn parse_standard_toml() {
-    let src = r#"
+#[cfg(test)]
+mod tests {
+    use std::{
+        path::{Path, PathBuf},
+        str::FromStr,
+    };
+
+    use test_case::test_matrix;
+
+    use crate::{find_root, Config, ManifestError};
+
+    #[test]
+    fn parse_standard_toml() {
+        let src = r#"
 
         [package]
         name = "test"
         authors = ["kev", "foo"]
-        compiler_version = "0.1"
+        compiler_version = "*"
 
         [dependencies]
         rand = { tag = "next", git = "https://github.com/rust-lang-nursery/rand"}
@@ -412,42 +557,175 @@ fn parse_standard_toml() {
         hello = {path = "./noir_driver"}
     "#;
 
-    assert!(Config::try_from(String::from(src)).is_ok());
-    assert!(Config::try_from(src).is_ok());
-}
+        assert!(Config::try_from(String::from(src)).is_ok());
+        assert!(Config::try_from(src).is_ok());
+    }
 
-#[test]
-fn parse_package_toml_no_deps() {
-    let src = r#"
+    #[test]
+    fn parse_package_toml_no_deps() {
+        let src = r#"
         [package]
         name = "test"
         authors = ["kev", "foo"]
-        compiler_version = "0.1"
+        compiler_version = "*"
     "#;
 
-    assert!(Config::try_from(String::from(src)).is_ok());
-    assert!(Config::try_from(src).is_ok());
-}
+        assert!(Config::try_from(String::from(src)).is_ok());
+        assert!(Config::try_from(src).is_ok());
+    }
 
-#[test]
-fn parse_workspace_toml() {
-    let src = r#"
+    #[test]
+    fn parse_workspace_toml() {
+        let src = r#"
         [workspace]
         members = ["a", "b"]
     "#;
 
-    assert!(Config::try_from(String::from(src)).is_ok());
-    assert!(Config::try_from(src).is_ok());
-}
+        assert!(Config::try_from(String::from(src)).is_ok());
+        assert!(Config::try_from(src).is_ok());
+    }
 
-#[test]
-fn parse_workspace_default_member_toml() {
-    let src = r#"
+    #[test]
+    fn parse_workspace_default_member_toml() {
+        let src = r#"
         [workspace]
         members = ["a", "b"]
         default-member = "a"
     "#;
 
-    assert!(Config::try_from(String::from(src)).is_ok());
-    assert!(Config::try_from(src).is_ok());
+        assert!(Config::try_from(String::from(src)).is_ok());
+        assert!(Config::try_from(src).is_ok());
+    }
+
+    #[test]
+    fn parse_package_expression_width_toml() {
+        let src = r#"
+    [package]
+    name = "test"
+    version = "0.1.0"
+    type = "bin"
+    authors = [""]
+    expression_width = "3"
+    "#;
+
+        assert!(Config::try_from(String::from(src)).is_ok());
+        assert!(Config::try_from(src).is_ok());
+    }
+
+    /// Test that `find_root` handles all kinds of prefixes.
+    /// (It dispatches based on `workspace` to methods which handle paths differently).
+    #[test_matrix(
+        [true, false],
+        ["C:\\foo\\bar", "//shared/foo/bar", "/foo/bar", "bar/baz", ""]
+    )]
+    fn test_find_root_does_not_panic(workspace: bool, path: &str) {
+        let path = PathBuf::from_str(path).unwrap();
+        let error = find_root(&path, workspace).expect_err("non-existing paths");
+        assert!(matches!(error, ManifestError::MissingFile(_)));
+    }
+
+    /// Test to demonstrate how `find_root` works.
+    #[test]
+    fn test_find_root_example() {
+        const INDENT_SIZE: usize = 4;
+        /// Create directories and files according to a YAML-like layout below
+        fn setup(layout: &str, root: &Path) {
+            fn is_dir(item: &str) -> bool {
+                !item.contains('.')
+            }
+            let mut current_dir = root.to_path_buf();
+            let mut current_indent = 0;
+            let mut last_item: Option<String> = None;
+
+            for line in layout.lines() {
+                if let Some((prefix, item)) = line.split_once('-') {
+                    let item = item.replace(std::path::MAIN_SEPARATOR, "_").trim().to_string();
+
+                    let indent = prefix.len() / INDENT_SIZE;
+
+                    if last_item.is_none() {
+                        current_indent = indent;
+                    }
+
+                    assert!(
+                        indent <= current_indent + 1,
+                        "cannot increase indent by more than {INDENT_SIZE}; item = {item}, current_dir={}", current_dir.display()
+                    );
+
+                    // Go into the last created directory
+                    if indent > current_indent && last_item.is_some() {
+                        let last_item = last_item.unwrap();
+                        assert!(is_dir(&last_item), "last item was not a dir: {last_item}");
+                        current_dir.push(last_item);
+                        current_indent += 1;
+                    }
+                    // Go back into an ancestor directory
+                    while indent < current_indent {
+                        current_dir.pop();
+                        current_indent -= 1;
+                    }
+                    // Create a file or a directory
+                    let item_path = current_dir.join(&item);
+                    if is_dir(&item) {
+                        std::fs::create_dir(&item_path).unwrap_or_else(|e| {
+                            panic!("failed to create dir {}: {e}", item_path.display())
+                        });
+                    } else {
+                        std::fs::write(&item_path, "").expect("failed to create file");
+                    }
+
+                    last_item = Some(item);
+                }
+            }
+        }
+
+        // Temporary directory to hold the project.
+        let tmp = tempfile::tempdir().unwrap();
+        // Join a string path to the tmp dir
+        let path = |p: &str| tmp.path().join(p);
+        // Check that an expected root is found
+        let assert_ok = |current_dir: &str, ws: bool, exp: &str| {
+            let root = find_root(&path(current_dir), ws).expect("should find a root");
+            assert_eq!(root, path(exp));
+        };
+        // Check that a root is not found
+        let assert_err = |current_dir: &str| {
+            find_root(&path(current_dir), true).expect_err("shouldn't find a root");
+        };
+
+        let layout = r"
+            - project
+                - docs
+                - workspace
+                    - packages
+                        - foo
+                            - Nargo.toml
+                            - Prover.toml
+                            - src
+                                - main.nr
+                        - bar
+                            - Nargo.toml
+                            - src
+                                - lib.nr
+                    - Nargo.toml
+                - examples
+                    - baz
+                        - Nargo.toml
+                        - src
+                            - main.nr
+            ";
+
+        // Set up the file system.
+        setup(layout, tmp.path());
+
+        assert_err("dummy");
+        assert_err("project/docs");
+        assert_err("project/examples");
+        assert_ok("project/workspace", true, "project/workspace");
+        assert_ok("project/workspace", false, "project/workspace");
+        assert_ok("project/workspace/packages/foo", true, "project/workspace");
+        assert_ok("project/workspace/packages/bar", false, "project/workspace/packages/bar");
+        assert_ok("project/examples/baz/src", true, "project/examples/baz");
+        assert_ok("project/examples/baz/src", false, "project/examples/baz");
+    }
 }

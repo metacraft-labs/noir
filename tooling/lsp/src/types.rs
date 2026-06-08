@@ -1,3 +1,8 @@
+use lsp_types::{
+    CodeActionOptions, CompletionOptions, DeclarationCapability, DefinitionOptions,
+    DocumentSymbolOptions, HoverOptions, InlayHintOptions, OneOf, ReferencesOptions, RenameOptions,
+    SignatureHelpOptions, TypeDefinitionProviderCapability,
+};
 use noirc_frontend::graph::CrateName;
 use serde::{Deserialize, Serialize};
 
@@ -6,8 +11,7 @@ pub(crate) use lsp_types::{
     CodeLens, CodeLensOptions, CodeLensParams, Command, Diagnostic, DiagnosticSeverity,
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, InitializeParams, InitializedParams,
-    LogMessageParams, MessageType, Position, PublishDiagnosticsParams, Range, ServerInfo,
-    TextDocumentSyncCapability, TextDocumentSyncOptions, Url,
+    Position, PublishDiagnosticsParams, Range, ServerInfo, TextDocumentSyncCapability, Url,
 };
 
 pub(crate) mod request {
@@ -19,7 +23,10 @@ pub(crate) mod request {
     };
 
     // Re-providing lsp_types that we don't need to override
-    pub(crate) use lsp_types::request::{CodeLensRequest as CodeLens, Shutdown};
+    pub(crate) use lsp_types::request::{
+        CodeLensRequest as CodeLens, Formatting, GotoDeclaration, GotoDefinition,
+        GotoTypeDefinition, Shutdown,
+    };
 
     #[derive(Debug)]
     pub(crate) struct Initialize;
@@ -95,13 +102,60 @@ pub(crate) struct ServerCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) text_document_sync: Option<TextDocumentSyncCapability>,
 
+    /// The server provides go to declaration support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) declaration_provider: Option<DeclarationCapability>,
+
+    /// The server provides goto definition support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) definition_provider: Option<OneOf<bool, DefinitionOptions>>,
+
+    /// The server provides goto type definition support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) type_definition_provider: Option<TypeDefinitionProviderCapability>,
+
     /// The server provides code lens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) code_lens_provider: Option<CodeLensOptions>,
 
+    /// The server provides document formatting.
+    pub(crate) document_formatting_provider: bool,
+
     /// The server handles and provides custom nargo messages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) nargo: Option<NargoCapability>,
+
+    /// The server provides rename support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rename_provider: Option<OneOf<bool, RenameOptions>>,
+
+    /// The server provides references support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) references_provider: Option<OneOf<bool, ReferencesOptions>>,
+
+    /// The server provides hover support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) hover_provider: Option<OneOf<bool, HoverOptions>>,
+
+    /// The server provides inlay hints support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) inlay_hint_provider: Option<OneOf<bool, InlayHintOptions>>,
+
+    /// The server provides document symbol support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) document_symbol_provider: Option<OneOf<bool, DocumentSymbolOptions>>,
+
+    /// The server provides completion support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) completion_provider: Option<OneOf<bool, CompletionOptions>>,
+
+    /// The server provides signature help support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) signature_help_provider: Option<OneOf<bool, SignatureHelpOptions>>,
+
+    /// The server provides code action support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) code_action_provider: Option<OneOf<bool, CodeActionOptions>>,
 }
 
 #[derive(Debug, PartialEq, Clone, Default, Deserialize, Serialize)]
@@ -188,3 +242,5 @@ pub(crate) struct NargoTestRunResult {
 }
 
 pub(crate) type CodeLensResult = Option<Vec<CodeLens>>;
+pub(crate) type GotoDefinitionResult = Option<lsp_types::GotoDefinitionResponse>;
+pub(crate) type GotoDeclarationResult = Option<lsp_types::request::GotoDeclarationResponse>;

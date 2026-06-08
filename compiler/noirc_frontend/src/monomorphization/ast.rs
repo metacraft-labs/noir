@@ -1,8 +1,21 @@
+use std::{collections::BTreeMap, fmt::Display};
+
 use acvm::FieldElement;
 use iter_extended::vecmap;
-use noirc_errors::Location;
+use noirc_errors::{
+    debug_info::{DebugFunctions, DebugTypes, DebugVariables},
+    Location,
+};
 
-use crate::{hir_def::function::FunctionSignature, BinaryOpKind, Distinctness, Signedness};
+use crate::{
+    ast::{BinaryOpKind, IntegerBitSize, Signedness, Visibility},
+    hir_def::expr::Constructor,
+    token::{Attributes, FunctionAttribute},
+};
+use crate::{hir_def::function::FunctionSignature, token::FmtStrFragment};
+use serde::{Deserialize, Serialize};
+
+use super::HirType;
 
 /// The monomorphized AST is expression-based, all statements are also
 /// folded into this expression enum. Compared to the HIR, the monomorphized
@@ -24,14 +37,25 @@ pub enum Expression {
     Index(Index),
     Cast(Cast),
     For(For),
+    Loop(Box<Expression>),
+    While(While),
     If(If),
+    Match(Match),
     Tuple(Vec<Expression>),
     ExtractTupleField(Box<Expression>, usize),
     Call(Call),
     Let(Let),
-    Constrain(Box<Expression>, Location, Option<String>),
+    Constrain(Box<Expression>, Location, Option<Box<(Expression, HirType)>>),
     Assign(Assign),
     Semi(Box<Expression>),
+    Break,
+    Continue,
+}
+
+impl Expression {
+    pub fn is_array_or_slice_literal(&self) -> bool {
+        matches!(self, Expression::Literal(Literal::Array(_) | Literal::Slice(_)))
+    }
 }
 
 /// A definition is either a local (variable), function, or is a built-in
@@ -39,6 +63,7 @@ pub enum Expression {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Definition {
     Local(LocalId),
+    Global(GlobalId),
     Function(FuncId),
     Builtin(String),
     LowLevel(String),
@@ -51,9 +76,19 @@ pub enum Definition {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct LocalId(pub u32);
 
+/// A function ID corresponds directly to an index of `Program::globals`
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct GlobalId(pub u32);
+
 /// A function ID corresponds directly to an index of `Program::functions`
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FuncId(pub u32);
+
+impl Display for FuncId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, Hash)]
 pub struct Ident {
@@ -79,17 +114,25 @@ pub struct For {
 }
 
 #[derive(Debug, Clone, Hash)]
+pub struct While {
+    pub condition: Box<Expression>,
+    pub body: Box<Expression>,
+}
+
+#[derive(Debug, Clone, Hash)]
 pub enum Literal {
     Array(ArrayLiteral),
-    Integer(FieldElement, Type, Location),
+    Slice(ArrayLiteral),
+    Integer(FieldElement, /*sign*/ bool, Type, Location), // false for positive integer and true for negative
     Bool(bool),
+    Unit,
     Str(String),
-    FmtStr(String, u64, Box<Expression>),
+    FmtStr(Vec<FmtStrFragment>, u64, Box<Expression>),
 }
 
 #[derive(Debug, Clone, Hash)]
 pub struct Unary {
-    pub operator: crate::UnaryOp,
+    pub operator: crate::ast::UnaryOp,
     pub rhs: Box<Expression>,
     pub result_type: Type,
     pub location: Location,
@@ -117,6 +160,21 @@ pub struct If {
     pub consequence: Box<Expression>,
     pub alternative: Option<Box<Expression>>,
     pub typ: Type,
+}
+
+#[derive(Debug, Clone, Hash)]
+pub struct Match {
+    pub variable_to_match: LocalId,
+    pub cases: Vec<MatchCase>,
+    pub default_case: Option<Box<Expression>>,
+    pub typ: Type,
+}
+
+#[derive(Debug, Clone, Hash)]
+pub struct MatchCase {
+    pub constructor: Constructor,
+    pub arguments: Vec<LocalId>,
+    pub branch: Expression,
 }
 
 #[derive(Debug, Clone, Hash)]
@@ -192,6 +250,62 @@ pub enum LValue {
 
 pub type Parameters = Vec<(LocalId, /*mutable:*/ bool, /*name:*/ String, Type)>;
 
+/// Represents how an Acir function should be inlined.
+/// This type is only relevant for ACIR functions as we do not inline any Brillig functions
+#[derive(
+    Default, Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize, PartialOrd, Ord,
+)]
+pub enum InlineType {
+    /// The most basic entry point can expect all its functions to be inlined.
+    /// All function calls are expected to be inlined into a single ACIR.
+    #[default]
+    Inline,
+    /// Functions marked as inline always will always be inlined, even in brillig contexts.
+    InlineAlways,
+    /// Functions marked as foldable will not be inlined and compiled separately into ACIR
+    Fold,
+    /// Functions marked to have no predicates will not be inlined in the default inlining pass
+    /// and will be separately inlined after the flattening pass.
+    /// They are different from `Fold` as they are expected to be inlined into the program
+    /// entry point before being used in the backend.
+    /// This attribute is unsafe and can cause a function whose logic relies on predicates from
+    /// the flattening pass to fail.
+    NoPredicates,
+}
+
+impl From<&Attributes> for InlineType {
+    fn from(attributes: &Attributes) -> Self {
+        attributes.function().map_or(InlineType::default(), |func_attribute| match func_attribute {
+            FunctionAttribute::Fold => InlineType::Fold,
+            FunctionAttribute::NoPredicates => InlineType::NoPredicates,
+            FunctionAttribute::InlineAlways => InlineType::InlineAlways,
+            _ => InlineType::default(),
+        })
+    }
+}
+
+impl InlineType {
+    pub fn is_entry_point(&self) -> bool {
+        match self {
+            InlineType::Inline => false,
+            InlineType::InlineAlways => false,
+            InlineType::Fold => true,
+            InlineType::NoPredicates => false,
+        }
+    }
+}
+
+impl std::fmt::Display for InlineType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InlineType::Inline => write!(f, "inline"),
+            InlineType::InlineAlways => write!(f, "inline_always"),
+            InlineType::Fold => write!(f, "fold"),
+            InlineType::NoPredicates => write!(f, "no_predicates"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Hash)]
 pub struct Function {
     pub id: FuncId,
@@ -202,6 +316,8 @@ pub struct Function {
 
     pub return_type: Type,
     pub unconstrained: bool,
+    pub inline_type: InlineType,
+    pub func_sig: FunctionSignature,
 }
 
 /// Compared to hir_def::types::Type, this monomorphized Type has:
@@ -212,16 +328,21 @@ pub struct Function {
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum Type {
     Field,
-    Array(/*len:*/ u64, Box<Type>),     // Array(4, Field) = [Field; 4]
-    Integer(Signedness, /*bits:*/ u32), // u32 = Integer(unsigned, 32)
+    Array(/*len:*/ u32, Box<Type>), // Array(4, Field) = [Field; 4]
+    Integer(Signedness, /*bits:*/ IntegerBitSize), // u32 = Integer(unsigned, ThirtyTwo)
     Bool,
-    String(/*len:*/ u64), // String(4) = str[4]
-    FmtString(/*len:*/ u64, Box<Type>),
+    String(/*len:*/ u32), // String(4) = str[4]
+    FmtString(/*len:*/ u32, Box<Type>),
     Unit,
     Tuple(Vec<Type>),
     Slice(Box<Type>),
     MutableReference(Box<Type>),
-    Function(/*args:*/ Vec<Type>, /*ret:*/ Box<Type>, /*env:*/ Box<Type>),
+    Function(
+        /*args:*/ Vec<Type>,
+        /*ret:*/ Box<Type>,
+        /*env:*/ Box<Type>,
+        /*unconstrained:*/ bool,
+    ),
 }
 
 impl Type {
@@ -233,26 +354,43 @@ impl Type {
     }
 }
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, Hash, Default)]
 pub struct Program {
     pub functions: Vec<Function>,
+    pub function_signatures: Vec<FunctionSignature>,
     pub main_function_signature: FunctionSignature,
-    /// Indicates whether witness indices are allowed to reoccur in the ABI of the resulting ACIR.
-    ///
-    /// Note: this has no impact on monomorphization, and is simply attached here for ease of
-    /// forwarding to the next phase.
-    pub return_distinctness: Distinctness,
     pub return_location: Option<Location>,
+    pub return_visibility: Visibility,
+    pub globals: BTreeMap<GlobalId, Expression>,
+    pub debug_variables: DebugVariables,
+    pub debug_functions: DebugFunctions,
+    pub debug_types: DebugTypes,
 }
 
 impl Program {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         functions: Vec<Function>,
+        function_signatures: Vec<FunctionSignature>,
         main_function_signature: FunctionSignature,
-        return_distinctness: Distinctness,
         return_location: Option<Location>,
+        return_visibility: Visibility,
+        globals: BTreeMap<GlobalId, Expression>,
+        debug_variables: DebugVariables,
+        debug_functions: DebugFunctions,
+        debug_types: DebugTypes,
     ) -> Program {
-        Program { functions, main_function_signature, return_distinctness, return_location }
+        Program {
+            functions,
+            function_signatures,
+            main_function_signature,
+            return_location,
+            return_visibility,
+            globals,
+            debug_variables,
+            debug_functions,
+            debug_types,
+        }
     }
 
     pub fn main(&self) -> &Function {
@@ -267,16 +405,19 @@ impl Program {
         FuncId(0)
     }
 
-    pub fn take_main_body(&mut self) -> Expression {
-        self.take_function_body(FuncId(0))
+    /// Globals are expected to be generated within a different context than
+    /// all other functions in the program. Thus, the globals space has the same
+    /// ID as `main`, although we should never expect a clash in these IDs.
+    pub fn global_space_id() -> FuncId {
+        FuncId(0)
     }
 
     /// Takes a function body by replacing it with `false` and
     /// returning the previous value
     pub fn take_function_body(&mut self, function: FuncId) -> Expression {
-        let main = &mut self.functions[function.0 as usize];
-        let replacement = Expression::Literal(Literal::Bool(false));
-        std::mem::replace(&mut main.body, replacement)
+        let function_definition = &mut self[function];
+        let replacement = Expression::Block(vec![]);
+        std::mem::replace(&mut function_definition.body, replacement)
     }
 }
 
@@ -334,7 +475,11 @@ impl std::fmt::Display for Type {
                 let elements = vecmap(elements, ToString::to_string);
                 write!(f, "({})", elements.join(", "))
             }
-            Type::Function(args, ret, env) => {
+            Type::Function(args, ret, env, unconstrained) => {
+                if *unconstrained {
+                    write!(f, "unconstrained ")?;
+                }
+
                 let args = vecmap(args, ToString::to_string);
                 let closure_env_text = match **env {
                     Type::Unit => "".to_string(),
@@ -342,7 +487,7 @@ impl std::fmt::Display for Type {
                 };
                 write!(f, "fn({}) -> {}{}", args.join(", "), ret, closure_env_text)
             }
-            Type::Slice(element) => write!(f, "[{element}"),
+            Type::Slice(element) => write!(f, "[{element}]"),
             Type::MutableReference(element) => write!(f, "&mut {element}"),
         }
     }

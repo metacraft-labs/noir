@@ -9,17 +9,24 @@ use std::{
     slice,
 };
 
+use fm::FileManager;
+use noirc_driver::file_manager_with_stdlib;
+
 use crate::{
-    constants::{CONTRACT_DIR, PROOFS_DIR, TARGET_DIR},
+    constants::{CONTRACT_DIR, EXPORT_DIR, PROOFS_DIR, TARGET_DIR},
     package::Package,
 };
 
 #[derive(Clone)]
 pub struct Workspace {
     pub root_dir: PathBuf,
+    /// Optional target directory override.
+    pub target_dir: Option<PathBuf>,
     pub members: Vec<Package>,
     // If `Some()`, the `selected_package_index` is used to select the only `Package` when iterating a Workspace
     pub selected_package_index: Option<usize>,
+    /// If we could not resolve the workspace we would inform the user we have assumed it (ie. from lsp file path given)
+    pub is_assumed: bool,
 }
 
 impl Workspace {
@@ -28,17 +35,36 @@ impl Workspace {
         self.target_directory_path().join(name).with_extension("json")
     }
 
+    pub fn target_directory_path(&self) -> PathBuf {
+        self.target_dir.as_ref().cloned().unwrap_or_else(|| self.root_dir.join(TARGET_DIR))
+    }
+
+    pub fn export_directory_path(&self) -> PathBuf {
+        self.root_dir.join(EXPORT_DIR)
+    }
+
     pub fn contracts_directory_path(&self, package: &Package) -> PathBuf {
         let name: String = package.name.clone().into();
         self.root_dir.join(CONTRACT_DIR).join(name)
     }
-
+    
     pub fn proofs_directory_path(&self) -> PathBuf {
         self.root_dir.join(PROOFS_DIR)
     }
 
-    pub fn target_directory_path(&self) -> PathBuf {
-        self.root_dir.join(TARGET_DIR)
+    /// Returns a new `FileManager` for the root directory of this workspace.
+    /// If the root directory is not the standard library, the standard library
+    /// is added to the returned `FileManager`.
+    pub fn new_file_manager(&self) -> FileManager {
+        if self.is_stdlib() {
+            FileManager::new(&self.root_dir)
+        } else {
+            file_manager_with_stdlib(&self.root_dir)
+        }
+    }
+
+    fn is_stdlib(&self) -> bool {
+        self.members.len() == 1 && self.members[0].name.to_string() == "std"
     }
 }
 

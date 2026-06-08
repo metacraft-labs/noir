@@ -1,5 +1,5 @@
 //! This integration test aims to mirror the steps taken by a new user using Nargo for the first time.
-//! It then follows the steps published at https://noir-lang.org/getting_started/hello_world.html
+//! It then follows the steps published at https://noir-lang.org/docs/getting_started/create_a_project
 //! Any modifications to the commands run here MUST be documented in the noir-lang book.
 
 use assert_cmd::prelude::*;
@@ -19,7 +19,10 @@ fn hello_world_example() {
     // `nargo new hello_world`
     let mut cmd = Command::cargo_bin("nargo").unwrap();
     cmd.arg("new").arg(project_name);
-    cmd.assert().success().stdout(predicate::str::contains("Project successfully created!"));
+    cmd.assert().success().stdout(predicate::str::contains(format!(
+        "Project successfully created! It is located at {}",
+        project_dir.display()
+    )));
 
     project_dir.child("src").assert(predicate::path::is_dir());
     project_dir.child("Nargo.toml").assert(predicate::path::is_file());
@@ -29,27 +32,14 @@ fn hello_world_example() {
     // `nargo check`
     let mut cmd = Command::cargo_bin("nargo").unwrap();
     cmd.arg("check");
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Constraint system successfully built!"));
+    cmd.assert().success().stdout(predicate::str::is_empty());
 
     project_dir.child("Prover.toml").assert(predicate::path::is_file());
-    project_dir.child("Verifier.toml").assert(predicate::path::is_file());
 
-    // `nargo prove`
+    // `nargo execute`
     project_dir.child("Prover.toml").write_str("x = 1\ny = 2").unwrap();
 
     let mut cmd = Command::cargo_bin("nargo").unwrap();
-    cmd.arg("prove");
-    cmd.assert().success();
-
-    project_dir
-        .child("proofs")
-        .child(format!("{project_name}.proof"))
-        .assert(predicate::path::is_file());
-
-    // `nargo verify p`
-    let mut cmd = Command::cargo_bin("nargo").unwrap();
-    cmd.arg("verify");
+    cmd.arg("execute");
     cmd.assert().success();
 }

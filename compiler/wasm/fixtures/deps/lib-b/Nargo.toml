@@ -1,7 +1,0 @@
-[package]
-name="lib_b"
-type="lib"
-authors = [""]
-compiler_version = "0.1"
-
-[dependencies]

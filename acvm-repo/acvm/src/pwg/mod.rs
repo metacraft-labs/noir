@@ -4,32 +4,39 @@ use std::collections::HashMap;
 
 use acir::{
     brillig::ForeignCallResult,
-    circuit::{opcodes::BlockId, Opcode, OpcodeLocation},
+    circuit::{
+        brillig::{BrilligBytecode, BrilligFunctionId},
+        opcodes::{
+            AcirFunctionId, BlockId, ConstantOrWitnessEnum, FunctionInput, InvalidInputBitSize,
+        },
+        AssertionPayload, ErrorSelector, ExpressionOrMemory, Opcode, OpcodeLocation,
+        RawAssertionPayload, ResolvedAssertionPayload,
+    },
     native_types::{Expression, Witness, WitnessMap},
-    BlackBoxFunc, FieldElement,
+    AcirField, BlackBoxFunc,
 };
 use acvm_blackbox_solver::BlackBoxResolutionError;
 
-use self::{arithmetic::ArithmeticSolver, directives::solve_directives, memory_op::MemoryOpSolver};
-use crate::{BlackBoxFunctionSolver, Language};
+use self::{
+    arithmetic::ExpressionSolver, blackbox::bigint::AcvmBigIntSolver, memory_op::MemoryOpSolver,
+};
+use crate::BlackBoxFunctionSolver;
 
 use thiserror::Error;
 
 // arithmetic
 pub(crate) mod arithmetic;
 // Brillig bytecode
-mod brillig;
-// Directives
-mod directives;
+pub(crate) mod brillig;
 // black box functions
-mod blackbox;
+pub(crate) mod blackbox;
 mod memory_op;
 
 pub use self::brillig::{BrilligSolver, BrilligSolverStatus};
 pub use brillig::ForeignCallWaitInfo;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ACVMStatus {
+pub enum ACVMStatus<F> {
     /// All opcodes have been solved.
     Solved,
 
@@ -38,30 +45,37 @@ pub enum ACVMStatus {
 
     /// The ACVM has encountered an irrecoverable error while executing the circuit and can not progress.
     /// Most commonly this will be due to an unsatisfied constraint due to invalid inputs to the circuit.
-    Failure(OpcodeResolutionError),
+    Failure(OpcodeResolutionError<F>),
 
     /// The ACVM has encountered a request for a Brillig [foreign call][acir::brillig_vm::Opcode::ForeignCall]
     /// to retrieve information from outside of the ACVM. The result of the foreign call must be passed back
     /// to the ACVM using [`ACVM::resolve_pending_foreign_call`].
     ///
     /// Once this is done, the ACVM can be restarted to solve the remaining opcodes.
-    RequiresForeignCall(ForeignCallWaitInfo),
+    RequiresForeignCall(ForeignCallWaitInfo<F>),
+
+    /// The ACVM has encountered a request for an ACIR [call][acir::circuit::Opcode]
+    /// to execute a separate ACVM instance. The result of the ACIR call must be passd back to the ACVM.
+    ///
+    /// Once this is done, the ACVM can be restarted to solve the remaining opcodes.
+    RequiresAcirCall(AcirCallWaitInfo<F>),
 }
 
-impl std::fmt::Display for ACVMStatus {
+impl<F> std::fmt::Display for ACVMStatus<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ACVMStatus::Solved => write!(f, "Solved"),
             ACVMStatus::InProgress => write!(f, "In progress"),
             ACVMStatus::Failure(_) => write!(f, "Execution failure"),
             ACVMStatus::RequiresForeignCall(_) => write!(f, "Waiting on foreign call"),
+            ACVMStatus::RequiresAcirCall(_) => write!(f, "Waiting on acir call"),
         }
     }
 }
 
-pub enum StepResult<'a, B: BlackBoxFunctionSolver> {
-    Status(ACVMStatus),
-    IntoBrillig(BrilligSolver<'a, B>),
+pub enum StepResult<'a, F, B: BlackBoxFunctionSolver<F>> {
+    Status(ACVMStatus<F>),
+    IntoBrillig(BrilligSolver<'a, F, B>),
 }
 
 // This enum represents the different cases in which an
@@ -69,15 +83,17 @@ pub enum StepResult<'a, B: BlackBoxFunctionSolver> {
 // The most common being that one of its input has not been
 // assigned a value.
 //
-// TODO: ExpressionHasTooManyUnknowns is specific for arithmetic expressions
-// TODO: we could have a error enum for arithmetic failure cases in that module
+// TODO: ExpressionHasTooManyUnknowns is specific for expression solver
+// TODO: we could have a error enum for expression solver failure cases in that module
 // TODO that can be converted into an OpcodeNotSolvable or OpcodeResolutionError enum
 #[derive(Clone, PartialEq, Eq, Debug, Error)]
-pub enum OpcodeNotSolvable {
+pub enum OpcodeNotSolvable<F> {
     #[error("missing assignment for witness index {0}")]
     MissingAssignment(u32),
+    #[error("Attempted to load uninitialized memory block")]
+    MissingMemoryBlock(u32),
     #[error("expression has too many unknowns {0}")]
-    ExpressionHasTooManyUnknowns(Expression),
+    ExpressionHasTooManyUnknowns(Expression<F>),
 }
 
 /// Allows to point to a specific opcode as cause in errors.
@@ -101,75 +117,146 @@ impl std::fmt::Display for ErrorLocation {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Error)]
-pub enum OpcodeResolutionError {
+pub enum OpcodeResolutionError<F> {
     #[error("Cannot solve opcode: {0}")]
-    OpcodeNotSolvable(#[from] OpcodeNotSolvable),
-    #[error("Backend does not currently support the {0} opcode. ACVM does not currently have a fallback for this opcode.")]
-    UnsupportedBlackBoxFunc(BlackBoxFunc),
+    OpcodeNotSolvable(#[from] OpcodeNotSolvable<F>),
     #[error("Cannot satisfy constraint")]
-    UnsatisfiedConstrain { opcode_location: ErrorLocation },
+    UnsatisfiedConstrain {
+        opcode_location: ErrorLocation,
+        payload: Option<ResolvedAssertionPayload<F>>,
+    },
     #[error("Index out of bounds, array has size {array_size:?}, but index was {index:?}")]
-    IndexOutOfBounds { opcode_location: ErrorLocation, index: u32, array_size: u32 },
+    IndexOutOfBounds { opcode_location: ErrorLocation, index: F, array_size: u32 },
+    #[error("Cannot solve opcode: {invalid_input_bit_size}")]
+    InvalidInputBitSize {
+        opcode_location: ErrorLocation,
+        invalid_input_bit_size: InvalidInputBitSize,
+    },
     #[error("Failed to solve blackbox function: {0}, reason: {1}")]
     BlackBoxFunctionFailed(BlackBoxFunc, String),
-    #[error("Failed to solve brillig function, reason: {message}")]
-    BrilligFunctionFailed { message: String, call_stack: Vec<OpcodeLocation> },
+    #[error("Failed to solve brillig function")]
+    BrilligFunctionFailed {
+        function_id: BrilligFunctionId,
+        call_stack: Vec<OpcodeLocation>,
+        payload: Option<ResolvedAssertionPayload<F>>,
+    },
+    #[error("Attempted to call `main` with a `Call` opcode")]
+    AcirMainCallAttempted { opcode_location: ErrorLocation },
+    #[error("{results_size:?} result values were provided for {outputs_size:?} call output witnesses, most likely due to bad ACIR codegen")]
+    AcirCallOutputsMismatch { opcode_location: ErrorLocation, results_size: u32, outputs_size: u32 },
+    #[error("(--pedantic): Predicates are expected to be 0 or 1, but found: {pred_value}")]
+    PredicateLargerThanOne { opcode_location: ErrorLocation, pred_value: F },
 }
 
-impl From<BlackBoxResolutionError> for OpcodeResolutionError {
+impl<F> From<BlackBoxResolutionError> for OpcodeResolutionError<F> {
     fn from(value: BlackBoxResolutionError) -> Self {
         match value {
             BlackBoxResolutionError::Failed(func, reason) => {
                 OpcodeResolutionError::BlackBoxFunctionFailed(func, reason)
             }
-            BlackBoxResolutionError::Unsupported(func) => {
-                OpcodeResolutionError::UnsupportedBlackBoxFunc(func)
-            }
         }
     }
 }
 
-pub struct ACVM<'a, B: BlackBoxFunctionSolver> {
-    status: ACVMStatus,
+impl<F> From<InvalidInputBitSize> for OpcodeResolutionError<F> {
+    fn from(invalid_input_bit_size: InvalidInputBitSize) -> Self {
+        Self::InvalidInputBitSize {
+            opcode_location: ErrorLocation::Unresolved,
+            invalid_input_bit_size,
+        }
+    }
+}
+
+pub type ProfilingSamples = Vec<ProfilingSample>;
+
+#[derive(Default)]
+pub struct ProfilingSample {
+    pub call_stack: Vec<OpcodeLocation>,
+    pub brillig_function_id: Option<BrilligFunctionId>,
+}
+
+pub struct ACVM<'a, F, B: BlackBoxFunctionSolver<F>> {
+    status: ACVMStatus<F>,
 
     backend: &'a B,
 
     /// Stores the solver for memory operations acting on blocks of memory disambiguated by [block][`BlockId`].
-    block_solvers: HashMap<BlockId, MemoryOpSolver>,
+    block_solvers: HashMap<BlockId, MemoryOpSolver<F>>,
+
+    bigint_solver: AcvmBigIntSolver,
 
     /// A list of opcodes which are to be executed by the ACVM.
-    opcodes: &'a [Opcode],
+    opcodes: &'a [Opcode<F>],
     /// Index of the next opcode to be executed.
     instruction_pointer: usize,
 
-    witness_map: WitnessMap,
+    witness_map: WitnessMap<F>,
 
-    brillig_solver: Option<BrilligSolver<'a, B>>,
+    brillig_solver: Option<BrilligSolver<'a, F, B>>,
+
+    /// A counter maintained throughout an ACVM process that determines
+    /// whether the caller has resolved the results of an ACIR [call][Opcode::Call].
+    acir_call_counter: usize,
+    /// Represents the outputs of all ACIR calls during an ACVM process
+    /// List is appended onto by the caller upon reaching a [ACVMStatus::RequiresAcirCall]
+    acir_call_results: Vec<Vec<F>>,
+
+    // Each unconstrained function referenced in the program
+    unconstrained_functions: &'a [BrilligBytecode<F>],
+
+    assertion_payloads: &'a [(OpcodeLocation, AssertionPayload<F>)],
+
+    profiling_active: bool,
+
+    profiling_samples: ProfilingSamples,
 }
 
-impl<'a, B: BlackBoxFunctionSolver> ACVM<'a, B> {
-    pub fn new(backend: &'a B, opcodes: &'a [Opcode], initial_witness: WitnessMap) -> Self {
+impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> ACVM<'a, F, B> {
+    pub fn new(
+        backend: &'a B,
+        opcodes: &'a [Opcode<F>],
+        initial_witness: WitnessMap<F>,
+        unconstrained_functions: &'a [BrilligBytecode<F>],
+        assertion_payloads: &'a [(OpcodeLocation, AssertionPayload<F>)],
+    ) -> Self {
         let status = if opcodes.is_empty() { ACVMStatus::Solved } else { ACVMStatus::InProgress };
+        let bigint_solver = AcvmBigIntSolver::with_pedantic_solving(backend.pedantic_solving());
         ACVM {
             status,
             backend,
             block_solvers: HashMap::default(),
+            bigint_solver,
             opcodes,
             instruction_pointer: 0,
             witness_map: initial_witness,
             brillig_solver: None,
+            acir_call_counter: 0,
+            acir_call_results: Vec::default(),
+            unconstrained_functions,
+            assertion_payloads,
+            profiling_active: false,
+            profiling_samples: Vec::new(),
         }
+    }
+
+    // Enable profiling
+    pub fn with_profiler(&mut self, profiling_active: bool) {
+        self.profiling_active = profiling_active;
     }
 
     /// Returns a reference to the current state of the ACVM's [`WitnessMap`].
     ///
     /// Once execution has completed, the witness map can be extracted using [`ACVM::finalize`]
-    pub fn witness_map(&self) -> &WitnessMap {
+    pub fn witness_map(&self) -> &WitnessMap<F> {
         &self.witness_map
     }
 
+    pub fn overwrite_witness(&mut self, witness: Witness, value: F) -> Option<F> {
+        self.witness_map.insert(witness, value)
+    }
+
     /// Returns a slice containing the opcodes of the circuit being executed.
-    pub fn opcodes(&self) -> &[Opcode] {
+    pub fn opcodes(&self) -> &[Opcode<F>] {
         self.opcodes
     }
 
@@ -178,8 +265,12 @@ impl<'a, B: BlackBoxFunctionSolver> ACVM<'a, B> {
         self.instruction_pointer
     }
 
+    pub fn take_profiling_samples(&mut self) -> ProfilingSamples {
+        std::mem::take(&mut self.profiling_samples)
+    }
+
     /// Finalize the ACVM execution, returning the resulting [`WitnessMap`].
-    pub fn finalize(self) -> WitnessMap {
+    pub fn finalize(self) -> WitnessMap<F> {
         if self.status != ACVMStatus::Solved {
             panic!("ACVM execution is not complete: ({})", self.status);
         }
@@ -188,29 +279,29 @@ impl<'a, B: BlackBoxFunctionSolver> ACVM<'a, B> {
 
     /// Updates the current status of the VM.
     /// Returns the given status.
-    fn status(&mut self, status: ACVMStatus) -> ACVMStatus {
+    fn status(&mut self, status: ACVMStatus<F>) -> ACVMStatus<F> {
         self.status = status.clone();
         status
     }
 
-    pub fn get_status(&self) -> &ACVMStatus {
+    pub fn get_status(&self) -> &ACVMStatus<F> {
         &self.status
     }
 
     /// Sets the VM status to [ACVMStatus::Failure] using the provided `error`.
     /// Returns the new status.
-    fn fail(&mut self, error: OpcodeResolutionError) -> ACVMStatus {
+    fn fail(&mut self, error: OpcodeResolutionError<F>) -> ACVMStatus<F> {
         self.status(ACVMStatus::Failure(error))
     }
 
     /// Sets the status of the VM to `RequiresForeignCall`.
     /// Indicating that the VM is now waiting for a foreign call to be resolved.
-    fn wait_for_foreign_call(&mut self, foreign_call: ForeignCallWaitInfo) -> ACVMStatus {
+    fn wait_for_foreign_call(&mut self, foreign_call: ForeignCallWaitInfo<F>) -> ACVMStatus<F> {
         self.status(ACVMStatus::RequiresForeignCall(foreign_call))
     }
 
     /// Return a reference to the arguments for the next pending foreign call, if one exists.
-    pub fn get_pending_foreign_call(&self) -> Option<&ForeignCallWaitInfo> {
+    pub fn get_pending_foreign_call(&self) -> Option<&ForeignCallWaitInfo<F>> {
         if let ACVMStatus::RequiresForeignCall(foreign_call) = &self.status {
             Some(foreign_call)
         } else {
@@ -221,7 +312,7 @@ impl<'a, B: BlackBoxFunctionSolver> ACVM<'a, B> {
     /// Resolves a foreign call's [result][acir::brillig_vm::ForeignCallResult] using a result calculated outside of the ACVM.
     ///
     /// The ACVM can then be restarted to solve the remaining Brillig VM process as well as the remaining ACIR opcodes.
-    pub fn resolve_pending_foreign_call(&mut self, foreign_call_result: ForeignCallResult) {
+    pub fn resolve_pending_foreign_call(&mut self, foreign_call_result: ForeignCallResult<F>) {
         if !matches!(self.status, ACVMStatus::RequiresForeignCall(_)) {
             panic!("ACVM is not expecting a foreign call response as no call was made");
         }
@@ -233,38 +324,71 @@ impl<'a, B: BlackBoxFunctionSolver> ACVM<'a, B> {
         self.status(ACVMStatus::InProgress);
     }
 
+    /// Sets the status of the VM to `RequiresAcirCall`
+    /// Indicating that the VM is now waiting for an ACIR call to be resolved
+    fn wait_for_acir_call(&mut self, acir_call: AcirCallWaitInfo<F>) -> ACVMStatus<F> {
+        self.status(ACVMStatus::RequiresAcirCall(acir_call))
+    }
+
+    /// Resolves an ACIR call's result (simply a list of fields) using a result calculated by a separate ACVM instance.
+    ///
+    /// The current ACVM instance can then be restarted to solve the remaining ACIR opcodes.
+    pub fn resolve_pending_acir_call(&mut self, call_result: Vec<F>) {
+        if !matches!(self.status, ACVMStatus::RequiresAcirCall(_)) {
+            panic!("ACVM is not expecting an ACIR call response as no call was made");
+        }
+
+        if self.acir_call_counter < self.acir_call_results.len() {
+            panic!("No unresolved ACIR calls");
+        }
+        self.acir_call_results.push(call_result);
+
+        // Now that the ACIR call has been resolved then we can resume execution.
+        self.status(ACVMStatus::InProgress);
+    }
+
     /// Executes the ACVM's circuit until execution halts.
     ///
     /// Execution can halt due to three reasons:
     /// 1. All opcodes have been executed successfully.
     /// 2. The circuit has been found to be unsatisfiable.
     /// 2. A Brillig [foreign call][`ForeignCallWaitInfo`] has been encountered and must be resolved.
-    pub fn solve(&mut self) -> ACVMStatus {
+    pub fn solve(&mut self) -> ACVMStatus<F> {
         while self.status == ACVMStatus::InProgress {
             self.solve_opcode();
         }
         self.status.clone()
     }
 
-    pub fn solve_opcode(&mut self) -> ACVMStatus {
+    pub fn solve_opcode(&mut self) -> ACVMStatus<F> {
         let opcode = &self.opcodes[self.instruction_pointer];
-
         let resolution = match opcode {
-            Opcode::Arithmetic(expr) => ArithmeticSolver::solve(&mut self.witness_map, expr),
-            Opcode::BlackBoxFuncCall(bb_func) => {
-                blackbox::solve(self.backend, &mut self.witness_map, bb_func)
-            }
-            Opcode::Directive(directive) => solve_directives(&mut self.witness_map, directive),
-            Opcode::MemoryInit { block_id, init } => {
+            Opcode::AssertZero(expr) => ExpressionSolver::solve(&mut self.witness_map, expr),
+            Opcode::BlackBoxFuncCall(bb_func) => blackbox::solve(
+                self.backend,
+                &mut self.witness_map,
+                bb_func,
+                &mut self.bigint_solver,
+            ),
+            Opcode::MemoryInit { block_id, init, .. } => {
                 let solver = self.block_solvers.entry(*block_id).or_default();
                 solver.init(init, &self.witness_map)
             }
             Opcode::MemoryOp { block_id, op, predicate } => {
                 let solver = self.block_solvers.entry(*block_id).or_default();
-                solver.solve_memory_op(op, &mut self.witness_map, predicate)
+                solver.solve_memory_op(
+                    op,
+                    &mut self.witness_map,
+                    predicate,
+                    self.backend.pedantic_solving(),
+                )
             }
-            Opcode::Brillig(_) => match self.solve_brillig_opcode() {
+            Opcode::BrilligCall { .. } => match self.solve_brillig_call_opcode() {
                 Ok(Some(foreign_call)) => return self.wait_for_foreign_call(foreign_call),
+                res => res.map(|_| ()),
+            },
+            Opcode::Call { .. } => match self.solve_call_opcode() {
+                Ok(Some(input_values)) => return self.wait_for_acir_call(input_values),
                 res => res.map(|_| ()),
             },
         };
@@ -273,8 +397,8 @@ impl<'a, B: BlackBoxFunctionSolver> ACVM<'a, B> {
 
     fn handle_opcode_resolution(
         &mut self,
-        resolution: Result<(), OpcodeResolutionError>,
-    ) -> ACVMStatus {
+        resolution: Result<(), OpcodeResolutionError<F>>,
+    ) -> ACVMStatus<F> {
         match resolution {
             Ok(()) => {
                 self.instruction_pointer += 1;
@@ -292,13 +416,25 @@ impl<'a, B: BlackBoxFunctionSolver> ACVM<'a, B> {
                     OpcodeResolutionError::IndexOutOfBounds {
                         opcode_location: opcode_index,
                         ..
-                    }
-                    | OpcodeResolutionError::UnsatisfiedConstrain {
-                        opcode_location: opcode_index,
                     } => {
                         *opcode_index = ErrorLocation::Resolved(OpcodeLocation::Acir(
                             self.instruction_pointer(),
                         ));
+                    }
+                    OpcodeResolutionError::UnsatisfiedConstrain {
+                        opcode_location: opcode_index,
+                        payload: assertion_payload,
+                    } => {
+                        let location = OpcodeLocation::Acir(self.instruction_pointer());
+                        *opcode_index = ErrorLocation::Resolved(location);
+                        *assertion_payload = self.extract_assertion_payload(location);
+                    }
+                    OpcodeResolutionError::InvalidInputBitSize {
+                        opcode_location: opcode_index,
+                        ..
+                    } => {
+                        let location = OpcodeLocation::Acir(self.instruction_pointer());
+                        *opcode_index = ErrorLocation::Resolved(location);
                     }
                     // All other errors are thrown normally.
                     _ => (),
@@ -308,25 +444,78 @@ impl<'a, B: BlackBoxFunctionSolver> ACVM<'a, B> {
         }
     }
 
-    fn solve_brillig_opcode(
+    fn extract_assertion_payload(
+        &self,
+        location: OpcodeLocation,
+    ) -> Option<ResolvedAssertionPayload<F>> {
+        let (_, assertion_descriptor) =
+            self.assertion_payloads.iter().find(|(loc, _)| location == *loc)?;
+        let mut fields = Vec::new();
+        for expr in assertion_descriptor.payload.iter() {
+            match expr {
+                ExpressionOrMemory::Expression(expr) => {
+                    let value = get_value(expr, &self.witness_map).ok()?;
+                    fields.push(value);
+                }
+                ExpressionOrMemory::Memory(block_id) => {
+                    let memory_block = self.block_solvers.get(block_id)?;
+                    fields.extend((0..memory_block.block_len).map(|memory_index| {
+                        *memory_block
+                            .block_value
+                            .get(&memory_index)
+                            .expect("All memory is initialized on creation")
+                    }));
+                }
+            }
+        }
+        let error_selector = ErrorSelector::new(assertion_descriptor.error_selector);
+
+        Some(ResolvedAssertionPayload::Raw(RawAssertionPayload {
+            selector: error_selector,
+            data: fields,
+        }))
+    }
+
+    fn solve_brillig_call_opcode(
         &mut self,
-    ) -> Result<Option<ForeignCallWaitInfo>, OpcodeResolutionError> {
-        let Opcode::Brillig(brillig) = &self.opcodes[self.instruction_pointer] else {
-            unreachable!("Not executing a Brillig opcode");
+    ) -> Result<Option<ForeignCallWaitInfo<F>>, OpcodeResolutionError<F>> {
+        let Opcode::BrilligCall { id, inputs, outputs, predicate } =
+            &self.opcodes[self.instruction_pointer]
+        else {
+            unreachable!("Not executing a BrilligCall opcode");
         };
 
-        let witness = &mut self.witness_map;
-        if BrilligSolver::<B>::should_skip(witness, brillig)? {
-            return BrilligSolver::<B>::zero_out_brillig_outputs(witness, brillig).map(|_| None);
+        let opcode_location =
+            ErrorLocation::Resolved(OpcodeLocation::Acir(self.instruction_pointer()));
+        if is_predicate_false(
+            &self.witness_map,
+            predicate,
+            self.backend.pedantic_solving(),
+            &opcode_location,
+        )? {
+            return BrilligSolver::<F, B>::zero_out_brillig_outputs(&mut self.witness_map, outputs)
+                .map(|_| None);
         }
 
         // If we're resuming execution after resolving a foreign call then
         // there will be a cached `BrilligSolver` to avoid recomputation.
-        let mut solver: BrilligSolver<'_, B> = match self.brillig_solver.take() {
+        let mut solver: BrilligSolver<'_, F, B> = match self.brillig_solver.take() {
             Some(solver) => solver,
-            None => BrilligSolver::new(witness, brillig, self.backend, self.instruction_pointer)?,
+            None => BrilligSolver::new_call(
+                &self.witness_map,
+                &self.block_solvers,
+                inputs,
+                &self.unconstrained_functions[id.as_usize()].bytecode,
+                self.backend,
+                self.instruction_pointer,
+                *id,
+                self.profiling_active,
+            )?,
         };
-        match solver.solve()? {
+
+        let result = solver.solve()?;
+
+        match result {
             BrilligSolverStatus::ForeignCallWait(foreign_call) => {
                 // Cache the current state of the solver
                 self.brillig_solver = Some(solver);
@@ -337,66 +526,187 @@ impl<'a, B: BlackBoxFunctionSolver> ACVM<'a, B> {
             }
             BrilligSolverStatus::Finished => {
                 // Write execution outputs
-                solver.finalize(witness, brillig)?;
+                if self.profiling_active {
+                    let profiling_info =
+                        solver.finalize_with_profiling(&mut self.witness_map, outputs)?;
+                    profiling_info.into_iter().for_each(|sample| {
+                        let mapped =
+                            sample.call_stack.into_iter().map(|loc| OpcodeLocation::Brillig {
+                                acir_index: self.instruction_pointer,
+                                brillig_index: loc,
+                            });
+                        self.profiling_samples.push(ProfilingSample {
+                            call_stack: std::iter::once(OpcodeLocation::Acir(
+                                self.instruction_pointer,
+                            ))
+                            .chain(mapped)
+                            .collect(),
+                            brillig_function_id: Some(*id),
+                        });
+                    });
+                } else {
+                    solver.finalize(&mut self.witness_map, outputs)?;
+                }
+
                 Ok(None)
             }
         }
     }
 
-    pub fn step_into_brillig_opcode(&mut self) -> StepResult<'a, B> {
-        let Opcode::Brillig(brillig) = &self.opcodes[self.instruction_pointer] else {
+    pub fn step_into_brillig(&mut self) -> StepResult<'a, F, B> {
+        let Opcode::BrilligCall { id, inputs, outputs, predicate } =
+            &self.opcodes[self.instruction_pointer]
+        else {
             return StepResult::Status(self.solve_opcode());
         };
 
+        let opcode_location =
+            ErrorLocation::Resolved(OpcodeLocation::Acir(self.instruction_pointer()));
         let witness = &mut self.witness_map;
-        let should_skip = match BrilligSolver::<B>::should_skip(witness, brillig) {
+        let should_skip = match is_predicate_false(
+            witness,
+            predicate,
+            self.backend.pedantic_solving(),
+            &opcode_location,
+        ) {
             Ok(result) => result,
             Err(err) => return StepResult::Status(self.handle_opcode_resolution(Err(err))),
         };
-
         if should_skip {
-            let resolution = BrilligSolver::<B>::zero_out_brillig_outputs(witness, brillig);
+            let resolution = BrilligSolver::<F, B>::zero_out_brillig_outputs(witness, outputs);
             return StepResult::Status(self.handle_opcode_resolution(resolution));
         }
 
-        let solver = BrilligSolver::new(witness, brillig, self.backend, self.instruction_pointer);
+        let solver = BrilligSolver::new_call(
+            witness,
+            &self.block_solvers,
+            inputs,
+            &self.unconstrained_functions[id.as_usize()].bytecode,
+            self.backend,
+            self.instruction_pointer,
+            *id,
+            self.profiling_active,
+        );
         match solver {
             Ok(solver) => StepResult::IntoBrillig(solver),
             Err(..) => StepResult::Status(self.handle_opcode_resolution(solver.map(|_| ()))),
         }
     }
 
-    pub fn finish_brillig_with_solver(&mut self, solver: BrilligSolver<'a, B>) -> ACVMStatus {
-        if !matches!(&self.opcodes[self.instruction_pointer], Opcode::Brillig(..)) {
-            unreachable!("Not executing a Brillig opcode");
+    pub fn finish_brillig_with_solver(&mut self, solver: BrilligSolver<'a, F, B>) -> ACVMStatus<F> {
+        if !matches!(self.opcodes[self.instruction_pointer], Opcode::BrilligCall { .. }) {
+            unreachable!("Not executing a Brillig/BrilligCall opcode");
         }
         self.brillig_solver = Some(solver);
         self.solve_opcode()
+    }
+
+    pub fn solve_call_opcode(
+        &mut self,
+    ) -> Result<Option<AcirCallWaitInfo<F>>, OpcodeResolutionError<F>> {
+        let Opcode::Call { id, inputs, outputs, predicate } =
+            &self.opcodes[self.instruction_pointer]
+        else {
+            unreachable!("Not executing a Call opcode");
+        };
+
+        let opcode_location =
+            ErrorLocation::Resolved(OpcodeLocation::Acir(self.instruction_pointer()));
+        if *id == AcirFunctionId(0) {
+            return Err(OpcodeResolutionError::AcirMainCallAttempted { opcode_location });
+        }
+
+        if is_predicate_false(
+            &self.witness_map,
+            predicate,
+            self.backend.pedantic_solving(),
+            &opcode_location,
+        )? {
+            // Zero out the outputs if we have a false predicate
+            for output in outputs {
+                insert_value(output, F::zero(), &mut self.witness_map)?;
+            }
+            return Ok(None);
+        }
+
+        if self.acir_call_counter >= self.acir_call_results.len() {
+            let mut initial_witness = WitnessMap::default();
+            for (i, input_witness) in inputs.iter().enumerate() {
+                let input_value = *witness_to_value(&self.witness_map, *input_witness)?;
+                initial_witness.insert(Witness(i as u32), input_value);
+            }
+            return Ok(Some(AcirCallWaitInfo { id: *id, initial_witness }));
+        }
+
+        let result_values = &self.acir_call_results[self.acir_call_counter];
+        if outputs.len() != result_values.len() {
+            return Err(OpcodeResolutionError::AcirCallOutputsMismatch {
+                opcode_location,
+                results_size: result_values.len() as u32,
+                outputs_size: outputs.len() as u32,
+            });
+        }
+
+        for (output_witness, result_value) in outputs.iter().zip(result_values) {
+            insert_value(output_witness, *result_value, &mut self.witness_map)?;
+        }
+
+        self.acir_call_counter += 1;
+        Ok(None)
     }
 }
 
 // Returns the concrete value for a particular witness
 // If the witness has no assignment, then
 // an error is returned
-pub fn witness_to_value(
-    initial_witness: &WitnessMap,
+pub fn witness_to_value<F>(
+    initial_witness: &WitnessMap<F>,
     witness: Witness,
-) -> Result<&FieldElement, OpcodeResolutionError> {
+) -> Result<&F, OpcodeResolutionError<F>> {
     match initial_witness.get(&witness) {
         Some(value) => Ok(value),
         None => Err(OpcodeNotSolvable::MissingAssignment(witness.0).into()),
     }
 }
 
+// TODO(https://github.com/noir-lang/noir/issues/5985):
+// remove skip_bitsize_checks
+pub fn input_to_value<F: AcirField>(
+    initial_witness: &WitnessMap<F>,
+    input: FunctionInput<F>,
+    skip_bitsize_checks: bool,
+) -> Result<F, OpcodeResolutionError<F>> {
+    match input.input() {
+        ConstantOrWitnessEnum::Witness(witness) => {
+            let initial_value = *witness_to_value(initial_witness, witness)?;
+            if skip_bitsize_checks || initial_value.num_bits() <= input.num_bits() {
+                Ok(initial_value)
+            } else {
+                let value_num_bits = initial_value.num_bits();
+                let value = initial_value.to_string();
+                Err(OpcodeResolutionError::InvalidInputBitSize {
+                    opcode_location: ErrorLocation::Unresolved,
+                    invalid_input_bit_size: InvalidInputBitSize {
+                        value,
+                        value_num_bits,
+                        max_bits: input.num_bits(),
+                    },
+                })
+            }
+        }
+        ConstantOrWitnessEnum::Constant(value) => Ok(value),
+    }
+}
+
 // TODO: There is an issue open to decide on whether we need to get values from Expressions
 // TODO versus just getting values from Witness
-pub fn get_value(
-    expr: &Expression,
-    initial_witness: &WitnessMap,
-) -> Result<FieldElement, OpcodeResolutionError> {
-    let expr = ArithmeticSolver::evaluate(expr, initial_witness);
+pub fn get_value<F: AcirField>(
+    expr: &Expression<F>,
+    initial_witness: &WitnessMap<F>,
+) -> Result<F, OpcodeResolutionError<F>> {
+    let expr = ExpressionSolver::evaluate(expr, initial_witness);
     match expr.to_const() {
-        Some(value) => Ok(value),
+        Some(value) => Ok(*value),
         None => Err(OpcodeResolutionError::OpcodeNotSolvable(
             OpcodeNotSolvable::MissingAssignment(any_witness_from_expression(&expr).unwrap().0),
         )),
@@ -407,11 +717,11 @@ pub fn get_value(
 ///
 /// Returns an error if there was already a value in the map
 /// which does not match the value that one is about to insert
-pub fn insert_value(
+pub fn insert_value<F: AcirField>(
     witness: &Witness,
-    value_to_insert: FieldElement,
-    initial_witness: &mut WitnessMap,
-) -> Result<(), OpcodeResolutionError> {
+    value_to_insert: F,
+    initial_witness: &mut WitnessMap<F>,
+) -> Result<(), OpcodeResolutionError<F>> {
     let optional_old_value = initial_witness.insert(*witness, value_to_insert);
 
     let old_value = match optional_old_value {
@@ -422,6 +732,7 @@ pub fn insert_value(
     if old_value != value_to_insert {
         return Err(OpcodeResolutionError::UnsatisfiedConstrain {
             opcode_location: ErrorLocation::Unresolved,
+            payload: None,
         });
     }
 
@@ -431,7 +742,7 @@ pub fn insert_value(
 // Returns one witness belonging to an expression, in no relevant order
 // Returns None if the expression is const
 // The function is used during partial witness generation to report unsolved witness
-fn any_witness_from_expression(expr: &Expression) -> Option<Witness> {
+fn any_witness_from_expression<F>(expr: &Expression<F>) -> Option<Witness> {
     if expr.linear_combinations.is_empty() {
         if expr.mul_terms.is_empty() {
             None
@@ -443,29 +754,40 @@ fn any_witness_from_expression(expr: &Expression) -> Option<Witness> {
     }
 }
 
-#[deprecated(
-    note = "For backwards compatibility, this method allows you to derive _sensible_ defaults for opcode support based on the np language. \n Backends should simply specify what they support."
-)]
-// This is set to match the previous functionality that we had
-// Where we could deduce what opcodes were supported
-// by knowing the np complete language
-pub fn default_is_opcode_supported(language: Language) -> fn(&Opcode) -> bool {
-    // R1CS does not support any of the opcode except Arithmetic by default.
-    // The compiler will replace those that it can -- ie range, xor, and
-    fn r1cs_is_supported(opcode: &Opcode) -> bool {
-        matches!(opcode, Opcode::Arithmetic(_))
+/// Returns `true` if the predicate is zero
+/// A predicate is used to indicate whether we should skip a certain operation.
+/// If we have a zero predicate it means the operation should be skipped.
+pub(crate) fn is_predicate_false<F: AcirField>(
+    witness: &WitnessMap<F>,
+    predicate: &Option<Expression<F>>,
+    pedantic_solving: bool,
+    opcode_location: &ErrorLocation,
+) -> Result<bool, OpcodeResolutionError<F>> {
+    match predicate {
+        Some(pred) => {
+            let pred_value = get_value(pred, witness)?;
+            let predicate_is_false = pred_value.is_zero();
+            if pedantic_solving {
+                // We expect that the predicate should resolve to either 0 or 1.
+                if !predicate_is_false && !pred_value.is_one() {
+                    let opcode_location = *opcode_location;
+                    return Err(OpcodeResolutionError::PredicateLargerThanOne {
+                        opcode_location,
+                        pred_value,
+                    });
+                }
+            }
+            Ok(predicate_is_false)
+        }
+        // If the predicate is `None`, then we treat it as an unconditional `true`
+        None => Ok(false),
     }
+}
 
-    // PLONK supports most of the opcodes by default
-    // The ones which are not supported, the acvm compiler will
-    // attempt to transform into supported opcodes. If these are also not available
-    // then a compiler error will be emitted.
-    fn plonk_is_supported(_opcode: &Opcode) -> bool {
-        true
-    }
-
-    match language {
-        Language::R1CS => r1cs_is_supported,
-        Language::PLONKCSat { .. } => plonk_is_supported,
-    }
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcirCallWaitInfo<F> {
+    /// Index in the list of ACIR function's that should be called
+    pub id: AcirFunctionId,
+    /// Initial witness for the given circuit to be called
+    pub initial_witness: WitnessMap<F>,
 }

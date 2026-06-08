@@ -1,13 +1,10 @@
-use crate::backends::Backend;
 use crate::errors::CliError;
 
 use super::fs::{create_named_dir, write_to_file};
 use super::NargoConfig;
 use clap::Args;
 use nargo::constants::{PKG_FILE, SRC_DIR};
-use nargo::package::PackageType;
-use noirc_driver::NOIRC_VERSION;
-use noirc_frontend::graph::CrateName;
+use nargo::package::{CrateName, PackageType};
 use std::path::PathBuf;
 
 /// Create a Noir project in the current directory.
@@ -34,12 +31,7 @@ const BIN_EXAMPLE: &str = include_str!("./noir_template_files/binary.nr");
 const CONTRACT_EXAMPLE: &str = include_str!("./noir_template_files/contract.nr");
 const LIB_EXAMPLE: &str = include_str!("./noir_template_files/library.nr");
 
-pub(crate) fn run(
-    // Backend is currently unused, but we might want to use it to inform the "new" template in the future
-    _backend: &Backend,
-    args: InitCommand,
-    config: NargoConfig,
-) -> Result<(), CliError> {
+pub(crate) fn run(args: InitCommand, config: NargoConfig) -> Result<(), CliError> {
     let package_name = match args.name {
         Some(name) => name,
         None => {
@@ -73,7 +65,6 @@ pub(crate) fn initialize_project(
 name = "{package_name}"
 type = "{package_type}"
 authors = [""]
-compiler_version = "{NOIRC_VERSION}"
 
 [dependencies]"#
     );

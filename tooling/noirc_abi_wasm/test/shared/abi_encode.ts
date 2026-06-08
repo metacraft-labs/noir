@@ -5,16 +5,15 @@ export const abi: Abi = {
     { name: 'foo', type: { kind: 'field' }, visibility: 'private' },
     {
       name: 'bar',
-      type: { kind: 'array', length: 2, type: { kind: 'field' } },
+      type: { kind: 'array', length: 3, type: { kind: 'integer', sign: 'signed', width: 32 } },
       visibility: 'private',
     },
   ],
-  param_witnesses: { foo: [1], bar: [2, 3] },
   return_type: null,
-  return_witnesses: [],
+  error_types: {},
 };
 
 export const inputs: InputMap = {
   foo: '1',
-  bar: ['1', '2'],
+  bar: ['1', '2', '-1'],
 };

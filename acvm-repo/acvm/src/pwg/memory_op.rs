@@ -3,31 +3,46 @@ use std::collections::HashMap;
 use acir::{
     circuit::opcodes::MemOp,
     native_types::{Expression, Witness, WitnessMap},
-    FieldElement,
+    AcirField,
 };
 
-use super::{arithmetic::ArithmeticSolver, get_value, insert_value, witness_to_value};
+use super::{
+    arithmetic::ExpressionSolver, get_value, insert_value, is_predicate_false, witness_to_value,
+};
 use super::{ErrorLocation, OpcodeResolutionError};
 
 type MemoryIndex = u32;
 
 /// Maintains the state for solving [`MemoryInit`][`acir::circuit::Opcode::MemoryInit`] and [`MemoryOp`][`acir::circuit::Opcode::MemoryOp`] opcodes.
 #[derive(Default)]
-pub(super) struct MemoryOpSolver {
-    block_value: HashMap<MemoryIndex, FieldElement>,
-    block_len: u32,
+pub(crate) struct MemoryOpSolver<F> {
+    pub(super) block_value: HashMap<MemoryIndex, F>,
+    pub(super) block_len: u32,
 }
 
-impl MemoryOpSolver {
+impl<F: AcirField> MemoryOpSolver<F> {
+    fn index_from_field(&self, index: F) -> Result<MemoryIndex, OpcodeResolutionError<F>> {
+        if index.num_bits() <= 32 {
+            let memory_index = index.try_to_u64().unwrap() as MemoryIndex;
+            Ok(memory_index)
+        } else {
+            Err(OpcodeResolutionError::IndexOutOfBounds {
+                opcode_location: ErrorLocation::Unresolved,
+                index,
+                array_size: self.block_len,
+            })
+        }
+    }
+
     fn write_memory_index(
         &mut self,
         index: MemoryIndex,
-        value: FieldElement,
-    ) -> Result<(), OpcodeResolutionError> {
+        value: F,
+    ) -> Result<(), OpcodeResolutionError<F>> {
         if index >= self.block_len {
             return Err(OpcodeResolutionError::IndexOutOfBounds {
                 opcode_location: ErrorLocation::Unresolved,
-                index,
+                index: F::from(index as u128),
                 array_size: self.block_len,
             });
         }
@@ -35,10 +50,10 @@ impl MemoryOpSolver {
         Ok(())
     }
 
-    fn read_memory_index(&self, index: MemoryIndex) -> Result<FieldElement, OpcodeResolutionError> {
+    fn read_memory_index(&self, index: MemoryIndex) -> Result<F, OpcodeResolutionError<F>> {
         self.block_value.get(&index).copied().ok_or(OpcodeResolutionError::IndexOutOfBounds {
             opcode_location: ErrorLocation::Unresolved,
-            index,
+            index: F::from(index as u128),
             array_size: self.block_len,
         })
     }
@@ -47,8 +62,8 @@ impl MemoryOpSolver {
     pub(crate) fn init(
         &mut self,
         init: &[Witness],
-        initial_witness: &WitnessMap,
-    ) -> Result<(), OpcodeResolutionError> {
+        initial_witness: &WitnessMap<F>,
+    ) -> Result<(), OpcodeResolutionError<F>> {
         self.block_len = init.len() as u32;
         for (memory_index, witness) in init.iter().enumerate() {
             self.write_memory_index(
@@ -61,30 +76,30 @@ impl MemoryOpSolver {
 
     pub(crate) fn solve_memory_op(
         &mut self,
-        op: &MemOp,
-        initial_witness: &mut WitnessMap,
-        predicate: &Option<Expression>,
-    ) -> Result<(), OpcodeResolutionError> {
+        op: &MemOp<F>,
+        initial_witness: &mut WitnessMap<F>,
+        predicate: &Option<Expression<F>>,
+        pedantic_solving: bool,
+    ) -> Result<(), OpcodeResolutionError<F>> {
         let operation = get_value(&op.operation, initial_witness)?;
 
         // Find the memory index associated with this memory operation.
         let index = get_value(&op.index, initial_witness)?;
-        let memory_index = index.try_to_u64().unwrap() as MemoryIndex;
+        let memory_index = self.index_from_field(index)?;
 
         // Calculate the value associated with this memory operation.
         //
         // In read operations, this corresponds to the witness index at which the value from memory will be written.
         // In write operations, this corresponds to the expression which will be written to memory.
-        let value = ArithmeticSolver::evaluate(&op.value, initial_witness);
+        let value = ExpressionSolver::evaluate(&op.value, initial_witness);
 
         // `operation == 0` implies a read operation. (`operation == 1` implies write operation).
         let is_read_operation = operation.is_zero();
 
-        // If the predicate is `None`, then we simply return the value 1
-        let pred_value = match predicate {
-            Some(pred) => get_value(pred, initial_witness),
-            None => Ok(FieldElement::one()),
-        }?;
+        // Fetch whether or not the predicate is false (e.g. equal to zero)
+        let opcode_location = ErrorLocation::Unresolved;
+        let skip_operation =
+            is_predicate_false(initial_witness, predicate, pedantic_solving, &opcode_location)?;
 
         if is_read_operation {
             // `value_read = arr[memory_index]`
@@ -97,11 +112,8 @@ impl MemoryOpSolver {
 
             // A zero predicate indicates that we should skip the read operation
             // and zero out the operation's output.
-            let value_in_array = if pred_value.is_zero() {
-                FieldElement::zero()
-            } else {
-                self.read_memory_index(memory_index)?
-            };
+            let value_in_array =
+                if skip_operation { F::zero() } else { self.read_memory_index(memory_index)? };
             insert_value(&value_read_witness, value_in_array, initial_witness)
         } else {
             // `arr[memory_index] = value_write`
@@ -111,7 +123,7 @@ impl MemoryOpSolver {
             let value_write = value;
 
             // A zero predicate indicates that we should skip the write operation.
-            if pred_value.is_zero() {
+            if skip_operation {
                 // We only want to write to already initialized memory.
                 // Do nothing if the predicate is zero.
                 Ok(())
@@ -130,10 +142,13 @@ mod tests {
     use acir::{
         circuit::opcodes::MemOp,
         native_types::{Expression, Witness, WitnessMap},
-        FieldElement,
+        AcirField, FieldElement,
     };
 
     use super::MemoryOpSolver;
+
+    // use pedantic_solving for tests
+    const PEDANTIC_SOLVING: bool = true;
 
     #[test]
     fn test_solver() {
@@ -154,7 +169,9 @@ mod tests {
         block_solver.init(&init, &initial_witness).unwrap();
 
         for op in trace {
-            block_solver.solve_memory_op(&op, &mut initial_witness, &None).unwrap();
+            block_solver
+                .solve_memory_op(&op, &mut initial_witness, &None, PEDANTIC_SOLVING)
+                .unwrap();
         }
 
         assert_eq!(initial_witness[&Witness(4)], FieldElement::from(2u128));
@@ -179,7 +196,9 @@ mod tests {
         let mut err = None;
         for op in invalid_trace {
             if err.is_none() {
-                err = block_solver.solve_memory_op(&op, &mut initial_witness, &None).err();
+                err = block_solver
+                    .solve_memory_op(&op, &mut initial_witness, &None, PEDANTIC_SOLVING)
+                    .err();
             }
         }
 
@@ -187,9 +206,9 @@ mod tests {
             err,
             Some(crate::pwg::OpcodeResolutionError::IndexOutOfBounds {
                 opcode_location: _,
-                index: 2,
+                index,
                 array_size: 2
-            })
+            }) if index == FieldElement::from(2u128)
         ));
     }
 
@@ -213,7 +232,12 @@ mod tests {
         for op in invalid_trace {
             if err.is_none() {
                 err = block_solver
-                    .solve_memory_op(&op, &mut initial_witness, &Some(Expression::zero()))
+                    .solve_memory_op(
+                        &op,
+                        &mut initial_witness,
+                        &Some(Expression::zero()),
+                        PEDANTIC_SOLVING,
+                    )
                     .err();
             }
         }
@@ -245,7 +269,12 @@ mod tests {
         for op in invalid_trace {
             if err.is_none() {
                 err = block_solver
-                    .solve_memory_op(&op, &mut initial_witness, &Some(Expression::zero()))
+                    .solve_memory_op(
+                        &op,
+                        &mut initial_witness,
+                        &Some(Expression::zero()),
+                        PEDANTIC_SOLVING,
+                    )
                     .err();
             }
         }

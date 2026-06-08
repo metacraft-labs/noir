@@ -2,11 +2,14 @@
 # More documentation for the advisories section can be found here:
 # https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-unsound = "warn"
+version = 2
 yanked = "warn"
-notice = "warn"
+
+ignore = [
+    "RUSTSEC-2024-0388", # derivative unmaintained
+    "RUSTSEC-2024-0384", # instant unmaintained
+    "RUSTSEC-2020-0016", # net2 unmaintained
+]
 
 # This section is considered when running `cargo deny check bans`.
 # More documentation about the 'bans' section can be found here:
@@ -32,9 +35,8 @@ skip = []
 skip-tree = []
 
 [licenses]
-unlicensed = "deny"
+version = 2
 confidence-threshold = 0.9
-# copyleft = "deny"
 
 # List of explicitly allowed licenses
 # See https://spdx.org/licenses/ for list of possible licenses
@@ -48,18 +50,13 @@ allow = [
     "ISC",
     "0BSD",
     "Unicode-DFS-2016",
+    "Unicode-3.0",
     "Unlicense",
     "Zlib",
-    # https://github.com/briansmith/ring/issues/902
-    "LicenseRef-ring",
-    # https://github.com/briansmith/webpki/issues/148
-    "LicenseRef-webpki",
-    # https://github.com/rustls/webpki/blob/main/LICENSE ISC Style
-    "LicenseRef-rustls-webpki",
-    # bitmaps 2.1.0, generational-arena 0.2.9,im 15.1.0
+    # bitmaps 2.1.0, im 15.1.0
     "MPL-2.0",
     # Boost Software License
-    "BSL-1.0"
+    "BSL-1.0",
 ]
 
 # Allow 1 or more licenses on a per-crate basis, so that particular licenses
@@ -69,25 +66,18 @@ exceptions = [
     # so we prefer to not have dependencies using it
     # https://tldrlegal.com/license/creative-commons-cc0-1.0-universal
     { allow = ["CC0-1.0"], name = "more-asserts" },
+    { allow = ["CC0-1.0"], name = "notify" },
+    { allow = ["CC0-1.0"], name = "tiny-keccak" },
     { allow = ["MPL-2.0"], name = "sized-chunks" },
     { allow = ["MPL-2.0"], name = "webpki-roots" },
-
+    { allow = ["CDDL-1.0"], name = "inferno" },
+    { allow = ["OpenSSL"], name = "ring" },
 ]
 
 [[licenses.clarify]]
-name = "ring"
-expression = "LicenseRef-ring"
+crate = "ring"
+expression = "ISC"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
-
-[[licenses.clarify]]
-name = "webpki"
-expression = "LicenseRef-webpki"
-license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
-
-[[licenses.clarify]]
-name = "rustls-webpki"
-expression = "LicenseRef-rustls-webpki"
-license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
 
 # This section is considered when running `cargo deny check sources`.
 # More documentation about the 'sources' section can be found here:
@@ -99,7 +89,9 @@ unknown-registry = "warn"
 # Lint level for what to happen when a crate from a git repository that is not
 # in the allow list is encountered
 unknown-git = "deny"
-allow-git = [
-    "https://github.com/noir-lang/grumpkin",
-    "https://github.com/jfecher/chumsky"
-]
+
+# DON'T YOU DARE ADD ANYTHING TO THIS IF YOU WANT TO PUBLISH ANYTHING NOIR RELATED TO CRATES.IO
+#
+# crates.io rejects git dependencies so anything depending on these is unpublishable and you'll ruin my day
+# when I find out.
+allow-git = ["https://github.com/noir-lang/clap-markdown"]

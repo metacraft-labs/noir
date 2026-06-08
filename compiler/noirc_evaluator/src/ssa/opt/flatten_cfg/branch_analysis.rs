@@ -2,14 +2,14 @@
 //!
 //! The algorithm is split into two parts:
 //! 1. The outer part:
-//!   A. An (unrolled) CFG can be though of as a linear sequence of blocks where some nodes split
-//!   off, but eventually rejoin to a new node and continue the linear sequence.
-//!   B. Follow this sequence in order, and whenever a split is found call
-//!   `find_join_point_of_branches` and then recur from the join point it returns until the
-//!   return instruction is found.
+//!    A. An (unrolled) CFG can be though of as a linear sequence of blocks where some nodes split
+//!       off, but eventually rejoin to a new node and continue the linear sequence.
+//!    B. Follow this sequence in order, and whenever a split is found call
+//!       `find_join_point_of_branches` and then recur from the join point it returns until the
+//!       return instruction is found.
 //!
 //! 2. The inner part defined by `find_join_point_of_branches`:
-//!   A. For each of the two branches in a jmpif block:
+//!    A. For each of the two branches in a jmpif block:
 //!     - Check if either has multiple predecessors. If so, it is a join point.
 //!     - If not, continue to search the linear sequence of successor blocks from that block.
 //!       - If another split point is found, recur in `find_join_point_of_branches`
@@ -114,7 +114,7 @@ mod test {
 
     use crate::ssa::{
         function_builder::FunctionBuilder,
-        ir::{cfg::ControlFlowGraph, function::RuntimeType, map::Id, types::Type},
+        ir::{cfg::ControlFlowGraph, map::Id, types::Type},
         opt::flatten_cfg::branch_analysis::find_branch_ends,
     };
 
@@ -134,7 +134,7 @@ mod test {
         //      ↘   ↙
         //       b9
         let main_id = Id::test_new(0);
-        let mut builder = FunctionBuilder::new("main".into(), main_id, RuntimeType::Acir);
+        let mut builder = FunctionBuilder::new("main".into(), main_id);
 
         let b1 = builder.insert_block();
         let b2 = builder.insert_block();
@@ -169,8 +169,8 @@ mod test {
         builder.switch_to_block(b9);
         builder.terminate_with_return(vec![]);
 
-        let mut ssa = builder.finish();
-        let function = ssa.main_mut();
+        let ssa = builder.finish();
+        let function = ssa.main();
         let cfg = ControlFlowGraph::with_function(function);
         let branch_ends = find_branch_ends(function, &cfg);
         assert_eq!(branch_ends.len(), 2);
@@ -195,7 +195,7 @@ mod test {
         //        ↘    ↙
         //          b15
         let main_id = Id::test_new(0);
-        let mut builder = FunctionBuilder::new("main".into(), main_id, RuntimeType::Acir);
+        let mut builder = FunctionBuilder::new("main".into(), main_id);
 
         let b1 = builder.insert_block();
         let b2 = builder.insert_block();
@@ -253,8 +253,8 @@ mod test {
         builder.switch_to_block(b15);
         builder.terminate_with_return(vec![]);
 
-        let mut ssa = builder.finish();
-        let function = ssa.main_mut();
+        let ssa = builder.finish();
+        let function = ssa.main();
         let cfg = ControlFlowGraph::with_function(function);
         find_branch_ends(function, &cfg);
     }

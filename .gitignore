@@ -4,6 +4,7 @@ examples/**/target/
 examples/9
 node_modules
 pkg/
+.idea
 
 # Yarn
 .pnp.*
@@ -14,19 +15,8 @@ pkg/
 !.yarn/sdks
 !.yarn/versions
 
-# Source resolver
-compiler/source-resolver/node_modules
-compiler/source-resolver/lib
-compiler/source-resolver/lib-node
-
 # Noir.js
 tooling/noir_js/lib
-
-# Nix stuff
-**/outputs
-result
-.envrc.local
-.direnv/
 
 # Nargo output
 *.proof
@@ -36,12 +26,17 @@ result
 *.pk
 *.vk
 **/Verifier.toml
+**/contract
 **/target
-!tooling/nargo_cli/tests/acir_artifacts/*/target
-!tooling/nargo_cli/tests/acir_artifacts/*/target/witness.gz
+!test_programs/acir_artifacts/*/target
+!test_programs/acir_artifacts/*/target/witness.gz
 !compiler/wasm/noir-script/target
 
 gates_report.json
+gates_report_brillig.json
+gates_report_brillig_execution.json
+compilation_report.json
+execution_report.json
 
 # Github Actions scratch space
 # This gives a location to download artifacts into the repository in CI without making git dirty.
@@ -53,3 +48,12 @@ compiler/wasm/web
 tooling/noirc_abi_wasm/nodejs
 tooling/noirc_abi_wasm/web
 tooling/noir_js/lib
+
+# docs autogen build
+/docs/docs/noir_js/reference/
+
+# Nix & Direnv
+.direnv
+result
+.env
+codegen

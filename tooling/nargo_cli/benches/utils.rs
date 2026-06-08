@@ -4,11 +4,23 @@ use std::path::PathBuf;
 fn get_selected_tests() -> Vec<PathBuf> {
     let manifest_dir = match std::env::var("CARGO_MANIFEST_DIR") {
         Ok(dir) => PathBuf::from(dir),
-        Err(_) => std::env::current_dir().unwrap().join("crates").join("nargo_cli"),
+        Err(_) => std::env::current_dir().unwrap(),
     };
-    let test_dir = manifest_dir.join("tests").join("execution_success");
 
-    let selected_tests =
-        vec!["8_integration", "sha256_blocks", "struct", "eddsa", "regression", "regression_2099"];
-    selected_tests.into_iter().map(|t| test_dir.join(t)).collect()
+    let test_dir = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("test_programs")
+        .join("execution_success");
+
+    let selected_tests = vec!["struct", "eddsa", "regression"];
+    let mut selected_tests =
+        selected_tests.into_iter().map(|t| test_dir.join(t)).collect::<Vec<_>>();
+
+    let test_dir = test_dir.parent().unwrap().join("benchmarks");
+    selected_tests.extend(test_dir.read_dir().unwrap().filter_map(|e| e.ok()).map(|e| e.path()));
+
+    selected_tests
 }

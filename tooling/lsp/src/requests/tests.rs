@@ -1,13 +1,13 @@
 use std::future::{self, Future};
 
+use crate::insert_all_files_for_workspace_into_file_manager;
 use async_lsp::{ErrorCode, LanguageClient, ResponseError};
 use lsp_types::{LogMessageParams, MessageType};
-use nargo::prepare_package;
 use nargo_toml::{find_package_manifest, resolve_workspace_from_toml, PackageSelection};
-use noirc_driver::check_crate;
+use noirc_driver::{check_crate, NOIR_ARTIFACT_VERSION_STRING};
 
 use crate::{
-    get_non_stdlib_asset, get_package_tests_in_crate,
+    get_package_tests_in_crate, parse_diff,
     types::{NargoPackageTests, NargoTestsParams, NargoTestsResult},
     LspState,
 };
@@ -40,19 +40,32 @@ fn on_tests_request_inner(
         }
     };
 
-    let workspace =
-        resolve_workspace_from_toml(&toml_path, PackageSelection::All).map_err(|err| {
-            // If we found a manifest, but the workspace is invalid, we raise an error about it
-            ResponseError::new(ErrorCode::REQUEST_FAILED, err)
-        })?;
+    let workspace = resolve_workspace_from_toml(
+        &toml_path,
+        PackageSelection::All,
+        Some(NOIR_ARTIFACT_VERSION_STRING.to_string()),
+    )
+    .map_err(|err| {
+        // If we found a manifest, but the workspace is invalid, we raise an error about it
+        ResponseError::new(ErrorCode::REQUEST_FAILED, err)
+    })?;
+
+    let mut workspace_file_manager = workspace.new_file_manager();
+    insert_all_files_for_workspace_into_file_manager(
+        state,
+        &workspace,
+        &mut workspace_file_manager,
+    );
+    let parsed_files = parse_diff(&workspace_file_manager, state);
 
     let package_tests: Vec<_> = workspace
         .into_iter()
         .filter_map(|package| {
-            let (mut context, crate_id) = prepare_package(package, Box::new(get_non_stdlib_asset));
+            let (mut context, crate_id) =
+                crate::prepare_package(&workspace_file_manager, &parsed_files, package);
             // We ignore the warnings and errors produced by compilation for producing tests
             // because we can still get the test functions even if compilation fails
-            let _ = check_crate(&mut context, crate_id, false);
+            let _ = check_crate(&mut context, crate_id, &Default::default());
 
             // We don't add test headings for a package if it contains no `#[test]` functions
             get_package_tests_in_crate(&context, &crate_id, &package.name)

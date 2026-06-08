@@ -8,7 +8,7 @@ use std::{
 
 pub type Position = u32;
 
-#[derive(PartialOrd, Eq, Ord, Debug, Clone)]
+#[derive(PartialOrd, Eq, Ord, Debug, Clone, Default)]
 pub struct Spanned<T> {
     pub contents: T,
     span: Span,
@@ -16,7 +16,7 @@ pub struct Spanned<T> {
 
 /// This is important for tests. Two Spanned objects are equal if their content is equal
 /// They may not have the same span. Use into_span to test for Span being equal specifically
-impl<T: std::cmp::PartialEq> PartialEq<Spanned<T>> for Spanned<T> {
+impl<T: PartialEq> PartialEq<Spanned<T>> for Spanned<T> {
     fn eq(&self, other: &Spanned<T>) -> bool {
         self.contents == other.contents
     }
@@ -43,6 +43,10 @@ impl<T> Spanned<T> {
     pub fn span(&self) -> Span {
         self.span
     }
+
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
 }
 
 impl<T> std::borrow::Borrow<T> for Spanned<T> {
@@ -65,6 +69,10 @@ impl Span {
         Span::inclusive(start, start)
     }
 
+    pub fn empty(position: u32) -> Span {
+        Span::from(position..position)
+    }
+
     #[must_use]
     pub fn merge(self, other: Span) -> Span {
         Span(self.0.merge(other.0))
@@ -81,6 +89,26 @@ impl Span {
     pub fn end(&self) -> u32 {
         self.0.end().into()
     }
+
+    pub fn contains(&self, other: &Span) -> bool {
+        self.start() <= other.start() && self.end() >= other.end()
+    }
+
+    /// Returns `true` if any point of `self` intersects a point of `other`.
+    /// Adjacent spans are considered to intersect (so, for example, `0..1` intersects `1..3`).
+    pub fn intersects(&self, other: &Span) -> bool {
+        self.end() >= other.start() && self.start() <= other.end()
+    }
+
+    pub fn is_smaller(&self, other: &Span) -> bool {
+        let self_distance = self.end() - self.start();
+        let other_distance = other.end() - other.start();
+        self_distance < other_distance
+    }
+
+    pub fn shift_by(&self, offset: u32) -> Span {
+        Self::from(self.start() + offset..self.end() + offset)
+    }
 }
 
 impl From<Span> for Range<usize> {
@@ -92,26 +120,6 @@ impl From<Span> for Range<usize> {
 impl From<Range<u32>> for Span {
     fn from(Range { start, end }: Range<u32>) -> Self {
         Self(ByteSpan::new(start, end))
-    }
-}
-
-impl chumsky::Span for Span {
-    type Context = ();
-
-    type Offset = u32;
-
-    fn new(_context: Self::Context, range: Range<Self::Offset>) -> Self {
-        Span(ByteSpan::from(range))
-    }
-
-    fn context(&self) -> Self::Context {}
-
-    fn start(&self) -> Self::Offset {
-        self.start()
-    }
-
-    fn end(&self) -> Self::Offset {
-        self.end()
     }
 }
 
@@ -128,5 +136,43 @@ impl Location {
 
     pub fn dummy() -> Self {
         Self { span: Span::single_char(0), file: FileId::dummy() }
+    }
+
+    pub fn contains(&self, other: &Location) -> bool {
+        self.file == other.file && self.span.contains(&other.span)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Span;
+
+    #[test]
+    fn test_intersects() {
+        assert!(Span::from(5..10).intersects(&Span::from(5..10)));
+
+        assert!(Span::from(5..10).intersects(&Span::from(5..5)));
+        assert!(Span::from(5..5).intersects(&Span::from(5..10)));
+
+        assert!(Span::from(10..10).intersects(&Span::from(5..10)));
+        assert!(Span::from(5..10).intersects(&Span::from(10..10)));
+
+        assert!(Span::from(5..10).intersects(&Span::from(6..9)));
+        assert!(Span::from(6..9).intersects(&Span::from(5..10)));
+
+        assert!(Span::from(5..10).intersects(&Span::from(4..11)));
+        assert!(Span::from(4..11).intersects(&Span::from(5..10)));
+
+        assert!(Span::from(5..10).intersects(&Span::from(4..6)));
+        assert!(Span::from(4..6).intersects(&Span::from(5..10)));
+
+        assert!(Span::from(5..10).intersects(&Span::from(9..11)));
+        assert!(Span::from(9..11).intersects(&Span::from(5..10)));
+
+        assert!(!Span::from(5..10).intersects(&Span::from(3..4)));
+        assert!(!Span::from(3..4).intersects(&Span::from(5..10)));
+
+        assert!(!Span::from(5..10).intersects(&Span::from(11..12)));
+        assert!(!Span::from(11..12).intersects(&Span::from(5..10)));
     }
 }
