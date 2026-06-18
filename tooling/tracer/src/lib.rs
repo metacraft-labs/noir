@@ -15,8 +15,8 @@ use debugger_glue::{
 
 pub mod tracer_glue;
 use tracer_glue::{
-    register_call, register_error, register_print, register_return, register_step,
-    register_variables,
+    compute_line_lengths, register_call, register_error, register_print, register_return,
+    register_step, register_variables,
 };
 
 pub mod tail_diff_vecs;
@@ -329,6 +329,74 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
     if tracing_context.debug_context.get_current_debug_location().is_none() {
         println!("Warning: circuit contains no opcodes; generating no trace");
         return Ok(());
+    }
+
+    // Column-aware replay navigation: opt the writer into the
+    // `DeltaColumn` (tag 0x07) encoding path *before* any Step event
+    // is emitted (which includes the line-1 entry Step emitted by
+    // `TraceWriter::start` inside `ensure_trace_started`).  Sticky for
+    // the lifetime of the trace; flips the `meta.dat` bit 4
+    // (`FLAG_HAS_COLUMN_AWARE_STEPS`) consumed by ct-print and the
+    // db-backend.  Mirrors the M-sol / M-evm / M-cairo / Leo
+    // recorders.
+    TraceWriter::enable_column_aware_steps(tracer);
+
+    // Register every Noir source file the debugger knows about
+    // together with its per-line byte-length table.  The Nim writer
+    // ignores `register_path_with_line_lengths` for paths it has
+    // already interned, so this has to happen before any
+    // `register_step` / `start` call lands.  Skipping the
+    // registration drops the table the reader's
+    // `decodeGlobalPositionIndex` needs to surface a column, so even
+    // with column-aware mode latched, `ct-print` would print
+    // `column: null` for every Step.
+    //
+    // We use the same `DebugArtifact::name(file_id)` accessor that
+    // `DebugContext::get_filepath_for_location` consumes on the step-
+    // emission path so the path-table identity matches across
+    // registration and per-step emission.  Without this, `register_step`
+    // would intern a *separate* path (the workdir-stripped relative
+    // form) and the column-decoding global position index would land
+    // on a path with no `line_lengths`, surfacing the raw byte cursor
+    // as a fake line.
+    let debug_artifact = tracing_context.debug_context.debug_artifact();
+    let cwd = std::env::current_dir().ok();
+    for debug_file in debug_artifact.file_map.values() {
+        // Noir injects a synthetic `__debug/lib.nr` helper crate to
+        // back its `__debug_*` builtins.  The debugger filters those
+        // out of `get_source_location_for_debug_location`, so steps
+        // never land on them in practice (the recorder's closing-brace
+        // suppression catches the few stragglers).  Registering the
+        // path here would still bloat the trace's `paths` table and
+        // perturb the strict `_via_ct_print_full` golden tests; skip
+        // it so the table only carries real user-visible source files.
+        if debug_file.path.starts_with("__debug/") {
+            continue;
+        }
+        // Mirror the workdir-stripping that `DebugArtifact::name`
+        // applies before the debugger hands a path to `register_step`.
+        // Registering the *unstripped* form here would intern a path
+        // that `register_step` never re-mentions, leaving every Step
+        // event keyed against a path with no `line_lengths` table —
+        // which makes the column decoder fall back to the raw byte
+        // cursor as a fake line.
+        let path: PathBuf = match &cwd {
+            Some(cwd) => debug_file
+                .path
+                .strip_prefix(cwd)
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|_| debug_file.path.clone()),
+            None => debug_file.path.clone(),
+        };
+        let line_lengths = compute_line_lengths(&debug_file.source);
+        if let Err(err) =
+            TraceWriter::register_path_with_line_lengths(tracer, &path, &line_lengths)
+        {
+            println!(
+                "Warning: register_path_with_line_lengths failed for {}: {err}",
+                path.display()
+            );
+        }
     }
 
     let _ = TraceWriter::ensure_type_id(tracer, TypeKind::None, "None");

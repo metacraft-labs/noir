@@ -76,11 +76,41 @@ pub fn finish_trace(tracer: &mut dyn TraceWriter, out_dir: &str) {
 }
 
 /// Registers a tracing step to the given `location` in the given `tracer`.
+///
+/// When the location carries a 1-indexed column (the common case for
+/// real Noir source spans), the step is registered through the
+/// column-aware FFI entry point so the writer emits the `DeltaColumn`
+/// (tag 0x07) follow-up event after the canonical Step.  Locations
+/// without a column (synthetic / unknown) fall through to the
+/// line-only path, which the default `register_step_with_column`
+/// override in the writer also handles via `register_step` directly.
 pub(crate) fn register_step(tracer: &mut dyn TraceWriter, location: &SourceLocation) {
-    let SourceLocation { filepath, line_number } = &location;
+    let SourceLocation { filepath, line_number, column_number } = location;
     let path = &PathBuf::from(filepath.to_string());
     let line = Line(*line_number as i64);
-    TraceWriter::register_step(tracer, path, line);
+    let column = column_number.map(|c| Line(c as i64));
+    TraceWriter::register_step_with_column(tracer, path, line, column);
+}
+
+/// Compute per-line UTF-8 byte counts for `source` (no trailing
+/// newline counted in the per-line value).  The CTFS `paths.dat`
+/// Layout A consumes this to encode each step's global byte position
+/// so the reader can recover the 1-indexed column.
+///
+/// Mirrors `codetracer-leo-recorder/src/source_map.rs::compute_line_lengths`.
+pub(crate) fn compute_line_lengths(source: &str) -> Vec<u32> {
+    let mut lengths: Vec<u32> = Vec::new();
+    let mut line_start: usize = 0;
+    for (i, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            lengths.push((i - line_start) as u32);
+            line_start = i + 1;
+        }
+    }
+    if line_start < source.len() {
+        lengths.push((source.len() - line_start) as u32);
+    }
+    lengths
 }
 
 /// Registers all variables in the given frame for the last registered step. Each time a new step is
@@ -285,7 +315,7 @@ pub(crate) fn register_call(
     location: &SourceLocation,
     frame: &StackFrame,
 ) {
-    let SourceLocation { filepath, line_number } = &location;
+    let SourceLocation { filepath, line_number, column_number: _ } = &location;
     let path = &PathBuf::from(filepath.to_string());
     let line = Line(*line_number as i64);
     let file_id = TraceWriter::ensure_function_id(tracer, &frame.function_name, path, line);
