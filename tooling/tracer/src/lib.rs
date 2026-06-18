@@ -340,6 +340,17 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
     // db-backend.  Mirrors the M-sol / M-evm / M-cairo / Leo
     // recorders.
     TraceWriter::enable_column_aware_steps(tracer);
+    // Advertise per-column breakpoint + motion capabilities so the
+    // GUI can light up those affordances on Noir recordings.  Sets
+    // meta.dat bits 6 and 7 (FLAG_SUPPORTS_COLUMN_BREAKPOINTS,
+    // FLAG_SUPPORTS_COLUMN_MOTIONS).  Noir's
+    // `DebugContext::get_column_for_location` (codetracer fork)
+    // surfaces per-statement byte columns from `Span::start`, so
+    // both capabilities hold; see
+    // `codetracer-trace-format-spec/internal-files.md` §"Column-
+    // Aware Capability Flags".
+    TraceWriter::enable_column_breakpoints_support(tracer);
+    TraceWriter::enable_column_motions_support(tracer);
 
     // Register every Noir source file the debugger knows about
     // together with its per-line byte-length table.  The Nim writer
