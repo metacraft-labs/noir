@@ -569,6 +569,27 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         self.debug_artifact.location_line_index(location)
     }
 
+    /// Returns the 1-indexed column number where `location` starts.
+    ///
+    /// Used by the codetracer-noir recorder to emit column-aware Step
+    /// events (`register_step_with_column`) so the replay surfaces the
+    /// real cursor position for multiple statements that share a line.
+    /// `DebugArtifact::location_column_number` walks the file's
+    /// line-index table, so callers should expect an `Err` for
+    /// synthetic (no-source) locations.
+    pub fn get_column_for_location(&self, location: Location) -> Result<usize, Error> {
+        self.debug_artifact.location_column_number(location)
+    }
+
+    /// Borrow the underlying `DebugArtifact` so the recorder can walk
+    /// `file_map` to register every Noir source path's per-line byte
+    /// lengths up front (CTFS `paths.dat` Layout A).  Without that
+    /// table the writer cannot encode columns at all, even though
+    /// column-aware mode is enabled.
+    pub fn debug_artifact(&self) -> &DebugArtifact {
+        self.debug_artifact
+    }
+
     /// Returns the current call stack with expanded source locations. In
     /// general, the matching between opcode location and source location is 1
     /// to 1, but due to the compiler inlining functions a single opcode
