@@ -5,9 +5,12 @@
 //                             [--locations]
 //
 // `--locations` additionally compares every step's `(file, line)`, not just the
-// counts. That is a stricter comparison than the counts, and it currently FAILS
-// on most fixtures -- for reasons that have nothing to do with wasm; see the
-// note above the reporting section.
+// counts, in two directions:
+//   * the native container against the module's stream -- this DIFFERS on most
+//     fixtures, for reasons that have nothing to do with wasm; see the note
+//     above the reporting section;
+//   * the module's container against the stream it was built from -- this must
+//     be clean, and a difference there would be this code's fault.
 //
 // The wasm side is given nothing but the fixture's `src/**.nr` text and its
 // `Prover.toml` -- it compiles the program itself, and hands back a `.ct`
@@ -25,12 +28,17 @@
 // discrepancy in what the page would show.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-
-import { writeFileSync } from 'node:fs';
 
 import { loadTracer, summarize, looksLikeCtfs } from './tracer.mjs';
 
@@ -242,10 +250,10 @@ for (const fixture of fixtures) {
 const pad = (s, n) => String(s).padEnd(n);
 const num = (s, n) => String(s).padStart(n);
 console.log(
-  `${pad('fixture', 22)}${num('steps', 15)}${num('calls', 15)}${num('paths', 15)}${num('io', 15)}${num('.ct KiB', 10)}`,
+  `${pad('fixture', 22)}${num('steps', 17)}${num('calls', 17)}${num('paths', 17)}${num('io', 17)}${num('.ct KiB', 10)}`,
 );
-console.log(`${pad('', 22)}${num('native/wasm/.ct', 15).repeat(4)}`);
-console.log('-'.repeat(94));
+console.log(`${pad('', 22)}${num('native/wasm/.ct', 17).repeat(4)}`);
+console.log('-'.repeat(102));
 
 for (const row of rows) {
   if (row.note) {
@@ -253,7 +261,7 @@ for (const row of rows) {
     continue;
   }
   const cells = KEYS.map((k) =>
-    num(`${row.native[k]}/${row.wasm[k]}/${row.ctCounts ? row.ctCounts[k] : '?'}`, 15),
+    num(`${row.native[k]}/${row.wasm[k]}/${row.ctCounts ? row.ctCounts[k] : '?'}`, 17),
   ).join('');
   const flag = row.ctError
     ? `   <-- .ct UNREADABLE: ${row.ctError}`
@@ -263,7 +271,7 @@ for (const row of rows) {
   console.log(`${pad(row.fixture, 22)}${cells}${num((row.ctBytes / 1024).toFixed(0), 10)}${flag}`);
 }
 
-console.log('-'.repeat(94));
+console.log('-'.repeat(102));
 const compared = rows.filter((r) => !r.note).length;
 console.log(
   `${compared} fixtures compared, ${failures} mismatched.\n` +
