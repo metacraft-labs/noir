@@ -16,8 +16,10 @@
 //! ```
 
 pub mod compile;
+pub mod ctfs_sink;
 pub mod memory_sink;
 pub use compile::{DEFAULT_ENTRY_POINT, compile_source};
+pub use ctfs_sink::{CtfsSink, TeeSink};
 pub use memory_sink::{Capabilities, MemorySink, MemoryTrace};
 
 use std::collections::BTreeMap;
@@ -149,6 +151,15 @@ pub struct TraceRequest {
     /// Program name recorded in the trace.
     #[serde(default = "default_package_name")]
     pub package: String,
+    /// The `recording_id` to stamp into the container's metadata.
+    ///
+    /// `wasm32-unknown-unknown` has neither a wall clock nor a CSPRNG, so the
+    /// writer cannot mint a UUIDv7 itself; a browser host should pass one made
+    /// from `Date.now()` + `crypto.getRandomValues`. Omitting it leaves the
+    /// writer's deterministic placeholder, which is well-formed but identical
+    /// for every recording.
+    #[serde(default)]
+    pub recording_id: Option<String>,
 }
 
 fn default_entry_point() -> String {
@@ -182,6 +193,93 @@ pub fn trace_source(request: &TraceRequest) -> Result<MemoryTrace, TraceError> {
         .map_err(|e| TraceError::Execution(e.to_string()))?;
 
     Ok(sink.into_trace())
+}
+
+/// What came back alongside the container, so a host can say plainly what it
+/// is holding.
+#[derive(Debug, serde::Serialize)]
+pub struct ContainerInfo {
+    /// Byte length of the `.ct` container.
+    pub bytes: usize,
+    /// Whether the container carries column-aware steps. Always `false` for
+    /// the pure-Rust CTFS writer -- see [`ctfs_sink`].
+    pub column_aware: bool,
+    /// Whether column-aware steps were **requested** and dropped. The Noir
+    /// recorder always requests them, so this is the honest signal that the
+    /// container is weaker than the one `nargo trace` writes.
+    pub dropped_column_awareness: bool,
+    /// The `recording_id` stamped into the container, if the host supplied one.
+    pub recording_id: Option<String>,
+}
+
+/// A trace plus a description of the container built from it.
+///
+/// `trace` is flattened, so the JSON is a superset of what
+/// [`trace_source_to_json`] returns -- existing hosts keep reading `events` /
+/// `paths` / `capabilities` at the top level.
+#[derive(Debug, serde::Serialize)]
+pub struct TracedContainer {
+    #[serde(flatten)]
+    pub trace: MemoryTrace,
+    pub container: ContainerInfo,
+}
+
+/// Compile Noir **source**, trace it, and build a `.ct` CTFS container from
+/// the trace -- the whole pipeline, in memory, with no filesystem anywhere.
+///
+/// Returns the container bytes and the same event stream
+/// [`trace_source`] returns, produced in a single pass (see
+/// [`ctfs_sink::TeeSink`]).
+pub fn trace_source_to_container(
+    request: &TraceRequest,
+) -> Result<(Vec<u8>, TracedContainer), TraceError> {
+    let program = compile::compile_source(&request.files, &request.entry_point)
+        .map_err(TraceError::Compilation)?;
+
+    let format = if request.inputs_are_json { Format::Json } else { Format::Toml };
+    let input_map = format
+        .parse(&request.inputs, &program.abi)
+        .map_err(|e| TraceError::Inputs(e.to_string()))?;
+
+    let mut sink = TeeSink::new(&request.package, &[], request.recording_id.as_deref());
+    let options = TraceOptions::default();
+
+    noir_tracer::tracer_glue::begin_trace(&mut sink, "", &request.package, None);
+    trace_compiled_program(&program, &input_map, &options, &mut sink)?;
+    noir_tracer::tracer_glue::finish_trace(&mut sink)
+        .map_err(|e| TraceError::Execution(e.to_string()))?;
+
+    let dropped_column_awareness = sink.ctfs.dropped_column_awareness();
+    let bytes = sink
+        .ctfs
+        .take_container_bytes()
+        .ok_or_else(|| TraceError::Execution("the in-memory CTFS writer produced no container".to_string()))?;
+
+    let info = ContainerInfo {
+        bytes: bytes.len(),
+        column_aware: false,
+        dropped_column_awareness,
+        recording_id: request.recording_id.clone(),
+    };
+    Ok((bytes, TracedContainer { trace: sink.memory.into_trace(), container: info }))
+}
+
+/// Build a `.ct` container from a [`TraceRequest`] given as JSON, and frame it
+/// with its summary for a host that reads one byte buffer.
+///
+/// Layout: `[u32 LE summary_len][summary JSON, UTF-8][.ct container]`. The
+/// summary is a [`TracedContainer`]; the container is the rest of the buffer.
+pub fn trace_source_to_container_envelope(request_json: &str) -> Result<Vec<u8>, String> {
+    let request: TraceRequest = serde_json::from_str(request_json)
+        .map_err(|e| TraceError::Request(e.to_string()).to_string())?;
+    let (container, summary) = trace_source_to_container(&request).map_err(|e| e.to_string())?;
+    let summary_json = serde_json::to_vec(&summary).map_err(|e| e.to_string())?;
+
+    let mut out = Vec::with_capacity(4 + summary_json.len() + container.len());
+    out.extend_from_slice(&(summary_json.len() as u32).to_le_bytes());
+    out.extend_from_slice(&summary_json);
+    out.extend_from_slice(&container);
+    Ok(out)
 }
 
 /// Serialize a trace of a [`TraceRequest`] (given as JSON) to JSON.
@@ -329,11 +427,42 @@ pub mod abi {
         publish(result)
     }
 
+    /// Compile Noir **source**, trace it, and build a `.ct` CTFS container.
+    ///
+    /// `(ptr, len)` is a JSON [`super::TraceRequest`]. On success the result
+    /// buffer is `[u32 LE summary_len][summary JSON][.ct container]`; on
+    /// failure it is a UTF-8 message and [`ct_result_is_error`] is non-zero.
+    /// Lengths and freeing follow the same convention as [`ct_trace`].
+    ///
+    /// # Safety
+    /// `(ptr, len)` must describe an initialized UTF-8 buffer that stays valid
+    /// for the duration of the call.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn ct_trace_source_container(
+        request_ptr: *const u8,
+        request_len: usize,
+    ) -> *mut u8 {
+        let request = unsafe { std::slice::from_raw_parts(request_ptr, request_len) };
+
+        let result = match std::str::from_utf8(request) {
+            Ok(json) => super::trace_source_to_container_envelope(json),
+            Err(_) => Err("the request is not valid UTF-8".to_string()),
+        };
+
+        publish_bytes(result)
+    }
+
     /// Hand a result to the host: record its length and error flag, then leak
     /// the buffer for the host to read and `ct_free`.
     fn publish(result: Result<String, String>) -> *mut u8 {
+        publish_bytes(result.map(String::into_bytes))
+    }
+
+    /// [`publish`] for a result that is not necessarily text -- a `.ct`
+    /// container is arbitrary bytes.
+    fn publish_bytes(result: Result<Vec<u8>, String>) -> *mut u8 {
         let (bytes, is_error) = match result {
-            Ok(json) => (json.into_bytes(), false),
+            Ok(payload) => (payload, false),
             Err(message) => (message.into_bytes(), true),
         };
 

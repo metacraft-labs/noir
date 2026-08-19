@@ -170,7 +170,16 @@ noir_ast_fuzzer = { path = "tooling/ast_fuzzer" }
 # trace.json + trace_metadata.json + trace_paths.json triplet was
 # retired in the 2026-05 convention pass — see
 # `codetracer-specs/Trace-Files/CTFS-Migration-Guide.md`.
-codetracer_trace_types = { path = "../codetracer-trace-format/codetracer_trace_types" }
+#
+# NOTE (wasm `.ct` demo): these three paths point at the **`ctf-wt-wasm`
+# worktree** of `codetracer-trace-format` (branch `wasm/ctfs-writer`), not at
+# the workspace checkout.  That branch is what makes `CtfsTraceWriter` build
+# and run on `wasm32-unknown-unknown`.  All of them must resolve to the SAME
+# checkout: two copies of `codetracer_trace_types` on different paths are two
+# distinct types and `FullValueRecord` / `ValueRecord` will not unify.
+# `[patch.crates-io]` cannot express this -- it only retargets *registry*
+# dependencies -- so the paths are repointed directly.
+codetracer_trace_types = { path = "../ctf-wt-wasm/codetracer_trace_types" }
 # Use the Nim-FFI-backed writer so the produced .ct container uses the v4
 # multi-stream layout that `ct-print --full` understands.  The pure-Rust
 # writer (`codetracer_trace_writer`) emits a SplitBinary single-shard
@@ -178,7 +187,20 @@ codetracer_trace_types = { path = "../codetracer-trace-format/codetracer_trace_t
 # `_via_ct_print_full` testing impossible.  All sibling recorders
 # (Cairo, Leo, Circom, ...) use this dependency too — see
 # `codetracer-specs/Planned-Features/Smart-Contract-Languages/Noir-Aztec.status.org`.
-codetracer_trace_writer = { path = "../codetracer-trace-format/codetracer_trace_writer_nim", package = "codetracer_trace_writer_nim" }
+codetracer_trace_writer = { path = "../ctf-wt-wasm/codetracer_trace_writer_nim", package = "codetracer_trace_writer_nim" }
+# The **pure-Rust** CTFS writer, under a distinct alias so both writers can
+# coexist in one workspace.  This is the one that builds for
+# `wasm32-unknown-unknown`, and it is what lets the browser demo hand back a
+# real `.ct` container instead of an event-stream JSON dump.  It is NOT used
+# by `nargo trace`: the native container is still written by the Nim writer
+# above, byte-for-byte as before.
+#
+# What it costs: this writer has no column-bearing step encoder, so the
+# container it produces is **not column-aware** (`meta.dat` bits 4/6/7 are not
+# set and `line_lengths` are dropped).  `CtfsTraceWriter::dropped_column_awareness()`
+# reports when a caller asked for columns and did not get them; the wasm shell
+# surfaces that flag rather than letting the loss pass silently.
+codetracer_trace_writer_rs = { path = "../ctf-wt-wasm/codetracer_trace_writer", package = "codetracer_trace_writer" }
 
 # Arkworks
 ark-bn254 = { version = "^0.6.0", default-features = false, features = [

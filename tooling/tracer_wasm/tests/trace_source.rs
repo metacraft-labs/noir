@@ -84,6 +84,7 @@ fn request_for(fixture: &str) -> Option<TraceRequest> {
         inputs: std::fs::read_to_string(&inputs_path).expect("Prover.toml"),
         inputs_are_json: false,
         package: fixture.to_string(),
+        recording_id: None,
     })
 }
 
@@ -219,6 +220,7 @@ fn a_compile_error_is_reported_rather_than_panicking() {
         inputs: "x = \"1\"\n".to_string(),
         inputs_are_json: false,
         package: "broken".to_string(),
+        recording_id: None,
     };
 
     let error = trace_source(&request).expect_err("a type error should not compile");
@@ -243,6 +245,7 @@ fn an_entry_point_outside_a_directory_is_refused() {
         inputs: String::new(),
         inputs_are_json: false,
         package: "rootless".to_string(),
+        recording_id: None,
     };
 
     // Silently instrumenting the standard library would be far worse than a

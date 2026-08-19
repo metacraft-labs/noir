@@ -19,6 +19,11 @@ noirc_abi.workspace = true
 noirc_artifacts.workspace = true
 nargo.workspace = true
 codetracer_trace_types.workspace = true
+# The pure-Rust CTFS writer, which (on the `wasm/ctfs-writer` branch of
+# `codetracer-trace-format`) builds and runs on `wasm32-unknown-unknown`. This
+# is what turns the traced event stream into a real `.ct` container inside the
+# module. See `ctfs_sink.rs` for what it does and does not carry.
+codetracer_trace_writer_rs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
