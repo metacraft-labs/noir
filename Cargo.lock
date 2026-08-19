@@ -3841,6 +3841,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "noir_tracer_wasm"
+version = "1.0.0-beta.18"
+dependencies = [
+ "acvm",
+ "bn254_blackbox_solver",
+ "codetracer_trace_types",
+ "console_error_panic_hook",
+ "getrandom 0.2.16",
+ "getrandom 0.3.4",
+ "getrandom 0.4.0-rc.0",
+ "noir_tracer",
+ "noirc_abi",
+ "noirc_artifacts",
+ "noirc_driver",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "noir_wasm"
 version = "1.0.0-beta.18"
 dependencies = [

@@ -50,6 +50,12 @@ pub struct DefaultDebugForeignCallExecutor {
 }
 
 impl DefaultDebugForeignCallExecutor {
+    /// The `resolver_url` / `root_path` / `package_name` arguments configure the
+    /// HTTP oracle resolver, which only exists when `nargo`'s `rpc` feature is
+    /// on -- `DefaultForeignCallBuilder`'s corresponding fields are themselves
+    /// `#[cfg(feature = "rpc")]`. The signature is kept stable in both
+    /// configurations so callers do not have to be gated; without `rpc` the
+    /// three arguments are simply ignored (there is no resolver to configure).
     fn make<'a, W: 'a + std::io::Write>(
         output: W,
         resolver_url: Option<String>,
@@ -57,11 +63,17 @@ impl DefaultDebugForeignCallExecutor {
         root_path: Option<PathBuf>,
         package_name: String,
     ) -> impl DebugForeignCallExecutor + 'a {
+        #[cfg(not(feature = "rpc"))]
+        let _ = (&resolver_url, &root_path, &package_name);
+
         DefaultForeignCallBuilder {
             output,
             enable_mocks: true,
+            #[cfg(feature = "rpc")]
             resolver_url,
+            #[cfg(feature = "rpc")]
             root_path: root_path.clone(),
+            #[cfg(feature = "rpc")]
             package_name: Some(package_name),
         }
         .build()

@@ -22,11 +22,13 @@ use tracer_glue::{
 pub mod tail_diff_vecs;
 use tail_diff_vecs::tail_diff_vecs;
 
+pub mod sink;
+pub use sink::TraceSink;
+
 use acvm::acir::circuit::brillig::{BrilligBytecode, BrilligFunctionId};
 use acvm::{AcirField, BlackBoxFunctionSolver, FieldElement};
 use acvm::{acir::circuit::Circuit, acir::native_types::WitnessMap};
 use codetracer_trace_types::{Line, TypeKind};
-use codetracer_trace_writer::trace_writer::TraceWriter;
 use nargo::NargoError;
 use noir_debugger::context::{DebugCommandResult, DebugContext};
 use noir_debugger::foreign_calls::DefaultDebugForeignCallExecutor;
@@ -36,7 +38,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
-use tracing::debug;
+use tracing::{debug, error, warn};
 
 /// The result from step_debugger: the debugger either paused at a new location, reached the end of
 /// execution, or hit some kind of an error. Takes the error type as a parameter.
@@ -183,7 +185,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
 
             let source_locations = get_current_source_locations(&self.debug_context);
             if source_locations.is_empty() {
-                println!("Warning: no call stack");
+                warn!("no call stack");
                 continue;
             };
 
@@ -209,7 +211,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         }
     }
 
-    fn maybe_report_print_events(&self, tracer: &mut dyn TraceWriter) {
+    fn maybe_report_print_events(&self, tracer: &mut dyn TraceSink) {
         let mut s = self.print_output.borrow_mut();
         if !(*s).is_empty() {
             register_print(tracer, (*s).as_str());
@@ -217,13 +219,34 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         }
     }
 
-    fn is_closing_brace_location(location: &SourceLocation) -> bool {
+    /// Whether `location` points at a line that is nothing but a closing brace.
+    ///
+    /// The source text is taken from `DebugArtifact.file_map`, which the compiler
+    /// already populated with the exact text it compiled. This used to
+    /// `std::fs::read_to_string` the path on every call, which was
+    ///
+    /// * a wasm blocker (no filesystem), and
+    /// * a latent correctness bug: what is on disk now can disagree with what
+    ///   was compiled, and the paths handed to the recorder are workdir-stripped,
+    ///   so the read silently failed -- returning `false` -- whenever `nargo` was
+    ///   invoked from anywhere other than the package directory.
+    fn is_closing_brace_location(&self, location: &SourceLocation) -> bool {
         if location.line_number <= 0 {
             return false;
         }
 
-        let path = std::path::PathBuf::from(location.filepath.to_string());
-        let Ok(source) = std::fs::read_to_string(path) else {
+        let artifact = self.debug_context.debug_artifact();
+        // `location.filepath` is what `DebugArtifact::name(file_id)` produced,
+        // which is the workdir-stripped form; `DebugFile::path` is absolute.
+        // `Path::ends_with` matches whole components, so a relative suffix
+        // resolves without any string surgery.
+        let target = PathBuf::from(location.filepath.to_string());
+        let Some(source) = artifact
+            .file_map
+            .values()
+            .find(|file| file.path == target || file.path.ends_with(&target))
+            .map(|file| &file.source)
+        else {
             return false;
         };
 
@@ -236,7 +259,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
 
     fn ensure_trace_started(
         &mut self,
-        tracer: &mut dyn TraceWriter,
+        tracer: &mut dyn TraceSink,
         source_locations: &[SourceLocation],
     ) {
         if self.trace_started {
@@ -249,12 +272,12 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         let path = PathBuf::from(location.filepath.to_string());
         // Keep the historical entry step on line 1, but attach it to the
         // first real source file instead of the generated trace output path.
-        TraceWriter::start(tracer, &path, Line(1));
+        TraceSink::start(tracer, &path, Line(1));
         self.trace_started = true;
     }
 
     /// Propagates information about the current execution state to `tracer`.
-    fn update_record(&mut self, tracer: &mut dyn TraceWriter, source_locations: &[SourceLocation]) {
+    fn update_record(&mut self, tracer: &mut dyn TraceSink, source_locations: &[SourceLocation]) {
         self.ensure_trace_started(tracer, source_locations);
 
         let stack_frames = get_stack_frames(&self.debug_context);
@@ -293,7 +316,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         if index >= 0 && !returned_from_frame {
             let index = index as usize;
             let location = &source_locations[index];
-            let nested_closing_brace = index > 0 && Self::is_closing_brace_location(location);
+            let nested_closing_brace = index > 0 && self.is_closing_brace_location(location);
             if !nested_closing_brace {
                 self.maybe_report_print_events(tracer);
                 register_step(tracer, location);
@@ -309,6 +332,37 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
     }
 }
 
+/// Ambient state the recorder used to reach for directly, made explicit.
+///
+/// `trace_circuit` and [`tracer_glue::begin_trace`] previously called
+/// `std::env::current_dir()`, which is meaningless on a target with no process
+/// environment. The caller now supplies the value.
+#[derive(Clone, Debug, Default)]
+pub struct TraceOptions {
+    /// Prefix stripped from every source path the recorder registers, so the
+    /// trace carries package-relative paths. `None` registers paths verbatim.
+    ///
+    /// The native CLI passes `std::env::current_dir().ok()`, reproducing the
+    /// previous behaviour exactly.
+    pub workdir: Option<PathBuf>,
+}
+
+impl TraceOptions {
+    pub fn with_workdir(workdir: Option<PathBuf>) -> Self {
+        Self { workdir }
+    }
+
+    /// Apply the workdir stripping this recorder has always applied.
+    fn strip(&self, path: &std::path::Path) -> PathBuf {
+        match &self.workdir {
+            Some(workdir) => {
+                path.strip_prefix(workdir).map(|p| p.to_path_buf()).unwrap_or_else(|_| path.to_path_buf())
+            }
+            None => path.to_path_buf(),
+        }
+    }
+}
+
 pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
     blackbox_solver: &B,
     circuit: &[Circuit<FieldElement>],
@@ -316,7 +370,8 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
     initial_witness: WitnessMap<FieldElement>,
     unconstrained_functions: &[BrilligBytecode<FieldElement>],
     error_types: &BTreeMap<ErrorSelector, AbiErrorType>,
-    tracer: &mut dyn TraceWriter,
+    options: &TraceOptions,
+    tracer: &mut dyn TraceSink,
 ) -> Result<(), NargoError<FieldElement>> {
     let mut tracing_context = TracingContext::new(
         blackbox_solver,
@@ -327,19 +382,19 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
     );
 
     if tracing_context.debug_context.get_current_debug_location().is_none() {
-        println!("Warning: circuit contains no opcodes; generating no trace");
+        warn!("circuit contains no opcodes; generating no trace");
         return Ok(());
     }
 
     // Column-aware replay navigation: opt the writer into the
     // `DeltaColumn` (tag 0x07) encoding path *before* any Step event
     // is emitted (which includes the line-1 entry Step emitted by
-    // `TraceWriter::start` inside `ensure_trace_started`).  Sticky for
+    // `TraceSink::start` inside `ensure_trace_started`).  Sticky for
     // the lifetime of the trace; flips the `meta.dat` bit 4
     // (`FLAG_HAS_COLUMN_AWARE_STEPS`) consumed by ct-print and the
     // db-backend.  Mirrors the M-sol / M-evm / M-cairo / Leo
     // recorders.
-    TraceWriter::enable_column_aware_steps(tracer);
+    TraceSink::enable_column_aware_steps(tracer);
     // Advertise per-column breakpoint + motion capabilities so the
     // GUI can light up those affordances on Noir recordings.  Sets
     // meta.dat bits 6 and 7 (FLAG_SUPPORTS_COLUMN_BREAKPOINTS,
@@ -349,8 +404,8 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
     // both capabilities hold; see
     // `codetracer-trace-format-spec/internal-files.md` §"Column-
     // Aware Capability Flags".
-    TraceWriter::enable_column_breakpoints_support(tracer);
-    TraceWriter::enable_column_motions_support(tracer);
+    TraceSink::enable_column_breakpoints_support(tracer);
+    TraceSink::enable_column_motions_support(tracer);
 
     // Register every Noir source file the debugger knows about
     // together with its per-line byte-length table.  The Nim writer
@@ -371,7 +426,6 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
     // on a path with no `line_lengths`, surfacing the raw byte cursor
     // as a fake line.
     let debug_artifact = tracing_context.debug_context.debug_artifact();
-    let cwd = std::env::current_dir().ok();
     for debug_file in debug_artifact.file_map.values() {
         // Noir injects a synthetic `__debug/lib.nr` helper crate to
         // back its `__debug_*` builtins.  The debugger filters those
@@ -391,26 +445,14 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
         // event keyed against a path with no `line_lengths` table —
         // which makes the column decoder fall back to the raw byte
         // cursor as a fake line.
-        let path: PathBuf = match &cwd {
-            Some(cwd) => debug_file
-                .path
-                .strip_prefix(cwd)
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|_| debug_file.path.clone()),
-            None => debug_file.path.clone(),
-        };
+        let path: PathBuf = options.strip(&debug_file.path);
         let line_lengths = compute_line_lengths(&debug_file.source);
-        if let Err(err) =
-            TraceWriter::register_path_with_line_lengths(tracer, &path, &line_lengths)
-        {
-            println!(
-                "Warning: register_path_with_line_lengths failed for {}: {err}",
-                path.display()
-            );
+        if let Err(err) = TraceSink::register_path_with_line_lengths(tracer, &path, &line_lengths) {
+            warn!("register_path_with_line_lengths failed for {}: {err}", path.display());
         }
     }
 
-    let _ = TraceWriter::ensure_type_id(tracer, TypeKind::None, "None");
+    let _ = TraceSink::ensure_type_id(tracer, TypeKind::None, "None");
     loop {
         let source_locations = match tracing_context.step_debugger() {
             DebugStepResult::Finished => break,
@@ -453,7 +495,7 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
                     break;
                 }
                 _ => {
-                    println!("Error: {err}");
+                    error!("{err}");
                     break;
                 }
             },
@@ -478,7 +520,7 @@ fn handle_function_error<F, B: BlackBoxFunctionSolver<FieldElement>>(
     error_types: &BTreeMap<ErrorSelector, AbiErrorType>,
     err: &NargoError<F>,
     tracing_context: &mut TracingContext<B>,
-    tracer: &mut dyn TraceWriter,
+    tracer: &mut dyn TraceSink,
 ) where
     F: AcirField,
 {
