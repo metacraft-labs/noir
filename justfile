@@ -258,3 +258,35 @@ trace-wasm fixture="a_1_mul":
   node tooling/tracer_wasm/run_wasm.mjs \
     target/wasm32-unknown-unknown/release/noir_tracer_wasm.wasm \
     "$out/artifact.json" test_programs/trace/{{fixture}}/Prover.toml
+
+# Build the wasm module and stage it next to the demo page.
+#
+# The page is a plain static bundle: `index.html`, `tracer.mjs` and the module.
+# The module is built without default features, so it carries no wasm-bindgen
+# glue -- the page talks to the `ct_*` C ABI directly.
+build-web:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  (cd tooling/tracer_wasm && cargo build --release --no-default-features)
+  cp target/wasm32-unknown-unknown/release/noir_tracer_wasm.wasm tooling/tracer_wasm/web/
+  echo "staged tooling/tracer_wasm/web/noir_tracer_wasm.wasm"
+
+# Serve the demo page. wasm needs a real origin and the `application/wasm`
+# MIME type, so `file://` will not work.
+serve-web port="8730": build-web
+  @echo "http://127.0.0.1:{{port}}/"
+  cd tooling/tracer_wasm/web && python3 -m http.server {{port}} --bind 127.0.0.1
+
+# Drive the demo page in headless Chromium: click Trace, read the counts it
+# renders, and check them against the native `nargo trace` numbers.
+check-web: build-web
+  node tooling/tracer_wasm/web/check_web.mjs
+
+# Trace every `test_programs/trace` fixture from SOURCE inside wasm and compare
+# each result with the `.ct` container native `nargo trace` produces.
+compare-web-traces:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cargo build -p nargo_cli --bin nargo
+  just build-web
+  node tooling/tracer_wasm/web/compare_fixtures.mjs

@@ -185,7 +185,10 @@ pub fn trace_source(request: &TraceRequest) -> Result<MemoryTrace, TraceError> {
 }
 
 /// Serialize a trace of a [`TraceRequest`] (given as JSON) to JSON.
-fn trace_source_to_json(request_json: &str) -> Result<String, String> {
+///
+/// Public because it is the whole of what the wasm entry points do; a native
+/// host that wants the same string-in/string-out shape can call it directly.
+pub fn trace_source_to_json(request_json: &str) -> Result<String, String> {
     let request: TraceRequest = serde_json::from_str(request_json)
         .map_err(|e| TraceError::Request(e.to_string()).to_string())?;
     let trace = trace_source(&request).map_err(|e| e.to_string())?;
@@ -193,7 +196,7 @@ fn trace_source_to_json(request_json: &str) -> Result<String, String> {
 }
 
 /// Serialize a trace of `artifact_json` / `inputs` to JSON.
-fn trace_to_json(
+pub fn trace_to_json(
     artifact_json: &str,
     inputs: &str,
     inputs_are_json: bool,

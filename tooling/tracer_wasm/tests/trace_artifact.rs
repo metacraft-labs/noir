@@ -73,7 +73,11 @@ fn debug_artifact_for(test_name: &str, fixture: &str) -> Option<(String, String)
         return None;
     }
 
-    let tmp = std::env::temp_dir().join(format!("noir_tracer_wasm_{fixture}"));
+    // Scoped to the calling test, not just the fixture: cargo runs these tests
+    // in parallel, several of them ask for the same fixture, and sharing one
+    // `artifact.json` between concurrent `nargo` processes yields a
+    // half-overwritten file that fails to parse as "trailing characters".
+    let tmp = std::env::temp_dir().join(format!("noir_tracer_wasm_{test_name}_{fixture}"));
     std::fs::create_dir_all(&tmp).expect("temp dir");
     let artifact_path = tmp.join("artifact.json");
     let out = Command::new(&nargo)

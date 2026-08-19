@@ -226,6 +226,58 @@ const outcome = await evaluate(`
 console.log('\n--- what the browser rendered ---');
 console.log(JSON.stringify(outcome, null, 2));
 
+// Re-run with *different* source, to show the textarea genuinely drives the
+// compile. Without this the whole demo is consistent with the module ignoring
+// its input and replaying something baked in at build time.
+const EDITED_SOURCE = `fn main(x: u32, y: u32) {
+    let mut a = x;
+    a += y;
+    a += y;
+    assert(a == 11);
+}
+`;
+const edited = await evaluate(`
+  (async () => {
+    document.getElementById('source').value = ${JSON.stringify(EDITED_SOURCE)};
+    document.getElementById('inputs').value = 'x = "3"\\ny = "4"\\n';
+    document.getElementById('run').click();
+    for (let i = 0; i < 1200; i++) {
+      const status = document.getElementById('status');
+      if (status.classList.contains('bad')) return { ok: false, status: status.textContent };
+      if (status.textContent.startsWith('Traced in') && !document.getElementById('run').disabled) {
+        const counts = {};
+        for (const row of document.querySelectorAll('#counts tr')) {
+          const cells = row.querySelectorAll('td');
+          if (cells.length === 2) counts[cells[0].textContent] = Number(cells[1].textContent);
+        }
+        return { ok: true, status: status.textContent, counts };
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return { ok: false, status: 'timed out on the edited program' };
+  })()
+`);
+console.log('\n--- after editing the source in the page ---');
+console.log(JSON.stringify(edited, null, 2));
+
+// And a program that does not compile: the page must surface the diagnostic
+// rather than hang or show a stale result.
+const broken = await evaluate(`
+  (async () => {
+    document.getElementById('source').value = 'fn main(x: u32) { let y: Field = x; }';
+    document.getElementById('inputs').value = 'x = "1"\\n';
+    document.getElementById('run').click();
+    for (let i = 0; i < 600; i++) {
+      const status = document.getElementById('status');
+      if (status.classList.contains('bad')) return { ok: true, message: status.textContent };
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return { ok: false, message: 'a broken program did not produce an error' };
+  })()
+`);
+console.log('\n--- a program that does not compile ---');
+console.log(JSON.stringify(broken, null, 2));
+
 cdp.close();
 browser.kill();
 server.close();
@@ -243,6 +295,24 @@ for (const [key, want] of Object.entries(EXPECTED)) {
   if (outcome.counts[key] !== want) {
     fail(`${key}: the page rendered ${outcome.counts[key]}, native produces ${want}`);
   }
+}
+
+// The edited program must produce a *different* trace. If it did not, every
+// number above would be consistent with a module that ignores its input and
+// replays something baked in at build time -- which is the one thing this demo
+// exists to rule out.
+if (!edited.ok) fail(`editing the source failed: ${edited.status}`);
+if (edited.counts.steps === outcome.counts.steps) {
+  fail(
+    `editing the source did not change the trace (${edited.counts.steps} steps both times) — ` +
+      'the module may not be reading the textarea',
+  );
+}
+
+// A program that does not compile must surface the compiler's own diagnostic.
+if (!broken.ok) fail(broken.message);
+if (!/src\/main\.nr:\d+:\d+/.test(broken.message)) {
+  fail(`the compile error carried no source location: ${broken.message}`);
 }
 
 console.log('\nPASS: the browser compiled Noir source and traced it inside wasm,');
