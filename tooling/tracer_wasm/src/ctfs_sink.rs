@@ -119,10 +119,14 @@ impl TraceSink for CtfsSink {
     /// Emits, in order, the `<toplevel>` function (id 0), the entry `Step`,
     /// the `<toplevel>` `Call`, and the `None` type (id 0).
     fn start(&mut self, path: &Path, line: Line) {
-        let function_id = TraceWriter::ensure_function_id(&mut self.writer, "<toplevel>", path, line);
+        let function_id =
+            TraceWriter::ensure_function_id(&mut self.writer, "<toplevel>", path, line);
         debug_assert_eq!(function_id, TOP_LEVEL_FUNCTION_ID);
         let path_id = TraceWriter::ensure_path_id(&mut self.writer, path);
-        TraceWriter::add_event(&mut self.writer, TraceLowLevelEvent::Step(StepRecord { path_id, line }));
+        TraceWriter::add_event(
+            &mut self.writer,
+            TraceLowLevelEvent::Step(StepRecord { path_id, line }),
+        );
         TraceWriter::add_event(
             &mut self.writer,
             TraceLowLevelEvent::Call(CallRecord { function_id, args: vec![] }),
@@ -220,7 +224,10 @@ pub struct TeeSink {
 
 impl TeeSink {
     pub fn new(program: &str, args: &[String], recording_id: Option<&str>) -> Self {
-        TeeSink { memory: crate::MemorySink::new(), ctfs: CtfsSink::new(program, args, recording_id) }
+        TeeSink {
+            memory: crate::MemorySink::new(),
+            ctfs: CtfsSink::new(program, args, recording_id),
+        }
     }
 }
 
@@ -303,7 +310,10 @@ impl TraceSink for TeeSink {
     fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
         let record = self.memory.arg(name, value.clone());
         let other = self.ctfs.arg(name, value);
-        assert_eq!(record.variable_id, other.variable_id, "the two sinks disagree on the id of variable {name}");
+        assert_eq!(
+            record.variable_id, other.variable_id,
+            "the two sinks disagree on the id of variable {name}"
+        );
         record
     }
 

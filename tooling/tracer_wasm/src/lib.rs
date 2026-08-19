@@ -250,10 +250,9 @@ pub fn trace_source_to_container(
         .map_err(|e| TraceError::Execution(e.to_string()))?;
 
     let dropped_column_awareness = sink.ctfs.dropped_column_awareness();
-    let bytes = sink
-        .ctfs
-        .take_container_bytes()
-        .ok_or_else(|| TraceError::Execution("the in-memory CTFS writer produced no container".to_string()))?;
+    let bytes = sink.ctfs.take_container_bytes().ok_or_else(|| {
+        TraceError::Execution("the in-memory CTFS writer produced no container".to_string())
+    })?;
 
     let info = ContainerInfo {
         bytes: bytes.len(),

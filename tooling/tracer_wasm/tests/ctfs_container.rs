@@ -124,7 +124,8 @@ fn a_container_is_produced_from_source() {
 #[test]
 fn the_container_describes_the_same_trace_as_the_event_stream() {
     for fixture in ["a_1_mul", "a_2_function_calls", "a_3_two_files", "println", "slice"] {
-        let request = request_for(fixture).unwrap_or_else(|| panic!("{fixture} has no Prover.toml"));
+        let request =
+            request_for(fixture).unwrap_or_else(|| panic!("{fixture} has no Prover.toml"));
         let alone = trace_source(&request).unwrap_or_else(|e| panic!("{fixture}: {e}"));
         let (_, together) =
             trace_source_to_container(&request).unwrap_or_else(|e| panic!("{fixture}: {e}"));
@@ -154,8 +155,11 @@ fn ct_print_reads_the_container_and_agrees_on_the_counts() {
     let dir = std::env::temp_dir().join("noir_tracer_wasm_ctfs_container");
     std::fs::create_dir_all(&dir).expect("temp dir");
 
-    for fixture in ["a_1_mul", "a_2_function_calls", "a_3_two_files", "println", "slice", "zk_dungeon"] {
-        let request = request_for(fixture).unwrap_or_else(|| panic!("{fixture} has no Prover.toml"));
+    for fixture in
+        ["a_1_mul", "a_2_function_calls", "a_3_two_files", "println", "slice", "zk_dungeon"]
+    {
+        let request =
+            request_for(fixture).unwrap_or_else(|| panic!("{fixture} has no Prover.toml"));
         let (bytes, summary) =
             trace_source_to_container(&request).unwrap_or_else(|e| panic!("{fixture}: {e}"));
 
@@ -180,7 +184,11 @@ fn ct_print_reads_the_container_and_agrees_on_the_counts() {
         let events = decoded["events"].as_array().expect("ct-print --full lists events");
         let of_type = |t: &str| events.iter().filter(|e| e["type"] == t).count();
 
-        assert_eq!(of_type("Step"), steps(&summary.trace), "{fixture}: ct-print disagrees on steps");
+        assert_eq!(
+            of_type("Step"),
+            steps(&summary.trace),
+            "{fixture}: ct-print disagrees on steps"
+        );
         // ct-print counts the `<toplevel>` call; `calls()` does not.
         assert_eq!(
             of_type("Call") - 1,
