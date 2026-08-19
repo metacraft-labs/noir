@@ -1,6 +1,7 @@
 use crate::{SourceLocation, StackFrame, stack_frame::Variable};
 
 use acvm::{BlackBoxFunctionSolver, FieldElement};
+use fm::codespan_files::Files;
 use nargo::errors::Location;
 use noir_debugger::context::{DebugContext, DebugLocation};
 
@@ -80,7 +81,11 @@ fn convert_debugger_location<B: BlackBoxFunctionSolver<FieldElement>>(
     debug_context: &DebugContext<B>,
     location: Location,
 ) -> SourceLocation {
-    let filepath = match debug_context.get_filepath_for_location(location) {
+    // These three all come straight off the `DebugArtifact`; there is no need
+    // for the debugger to forward them.
+    let debug_artifact = debug_context.debug_artifact();
+
+    let filepath = match debug_artifact.name(location.file) {
         Ok(filepath) => filepath,
         Err(error) => {
             println!("Warning: could not get filepath for source location: {error}");
@@ -88,7 +93,7 @@ fn convert_debugger_location<B: BlackBoxFunctionSolver<FieldElement>>(
         }
     };
 
-    let line_number = match debug_context.get_line_for_location(location) {
+    let line_number = match debug_artifact.location_line_index(location) {
         Ok(line) => line as isize + 1,
         Err(error) => {
             println!("Warning: could not get line for source location: {error}");
@@ -101,6 +106,6 @@ fn convert_debugger_location<B: BlackBoxFunctionSolver<FieldElement>>(
     // an unknown sentinel so the rest of the location is still usable
     // for the line-only Step fallback.
     let column_number =
-        debug_context.get_column_for_location(location).ok().map(|column| column as isize);
+        debug_artifact.location_column_number(location).ok().map(|column| column as isize);
     SourceLocation { filepath, line_number, column_number }
 }

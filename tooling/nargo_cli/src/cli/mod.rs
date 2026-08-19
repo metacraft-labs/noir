@@ -29,7 +29,6 @@ mod expand_cmd;
 mod export_cmd;
 mod fetch_cmd;
 mod fmt_cmd;
-mod fs;
 mod fuzz_cmd;
 mod generate_completion_script_cmd;
 mod info_cmd;

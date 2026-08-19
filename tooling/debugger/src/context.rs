@@ -10,8 +10,8 @@ use acvm::pwg::{
 };
 use acvm::{AcirField, BlackBoxFunctionSolver, FieldElement};
 
-use codespan_reporting::files::{Error, Files, SimpleFile};
-use fm::{FileId, PathString};
+use codespan_reporting::files::{Files, SimpleFile};
+use fm::FileId;
 use nargo::NargoError;
 use nargo::errors::{ExecutionError, Location, ResolvedOpcodeLocation, execution_error_from};
 use noirc_artifacts::debug::{DebugArtifact, DebugFile, DebugInfo, StackFrame};
@@ -554,31 +554,15 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
             .collect()
     }
 
-    pub fn get_filepath_for_location(&self, location: Location) -> Result<PathString, Error> {
-        self.debug_artifact.name(location.file)
-    }
-
-    pub fn get_line_for_location(&self, location: Location) -> Result<usize, Error> {
-        self.debug_artifact.location_line_index(location)
-    }
-
-    /// Returns the 1-indexed column number where `location` starts.
+    /// Borrow the underlying [`DebugArtifact`].
     ///
-    /// Used by the codetracer-noir recorder to emit column-aware Step
-    /// events (`register_step_with_column`) so the replay surfaces the
-    /// real cursor position for multiple statements that share a line.
-    /// `DebugArtifact::location_column_number` walks the file's
-    /// line-index table, so callers should expect an `Err` for
-    /// synthetic (no-source) locations.
-    pub fn get_column_for_location(&self, location: Location) -> Result<usize, Error> {
-        self.debug_artifact.location_column_number(location)
-    }
-
-    /// Borrow the underlying `DebugArtifact` so the recorder can walk
-    /// `file_map` to register every Noir source path's per-line byte
-    /// lengths up front (CTFS `paths.dat` Layout A).  Without that
-    /// table the writer cannot encode columns at all, even though
-    /// column-aware mode is enabled.
+    /// Everything a caller might want per-location — the file name, the line
+    /// index, the 1-indexed column — is already on `DebugArtifact` itself
+    /// (`name`, `location_line_index`, `location_column_number`), so this is
+    /// the only accessor needed; the recorder also walks `file_map` through it
+    /// to register every Noir source path's per-line byte lengths up front
+    /// (CTFS `paths.dat` Layout A), without which the writer cannot encode
+    /// columns at all.
     pub fn debug_artifact(&self) -> &DebugArtifact {
         self.debug_artifact
     }

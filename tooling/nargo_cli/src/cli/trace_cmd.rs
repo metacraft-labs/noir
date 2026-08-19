@@ -8,13 +8,13 @@ use nargo_toml::{PackageSelection, get_package_manifest, resolve_workspace_from_
 use noir_tracer::tracer_glue::begin_trace;
 use noir_tracer::tracer_glue::finish_trace;
 use noirc_abi::InputMap;
-use noirc_abi::input_parser::Format;
 use noirc_artifacts::debug::DebugArtifact;
 use noirc_artifacts::program::CompiledProgram;
 use noirc_driver::{CompileOptions, NOIR_ARTIFACT_VERSION_STRING};
 use noirc_frontend::graph::CrateName;
 
-use super::fs::inputs::read_inputs_from_file;
+use noir_artifact_cli::fs::inputs::read_inputs_from_file;
+
 use crate::errors::CliError;
 
 use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
@@ -85,8 +85,10 @@ fn trace_program_and_decode(
     out_dir: &str,
 ) -> Result<(), CliError> {
     // Parse the initial witness values from Prover.toml
-    let (inputs_map, _) =
-        read_inputs_from_file(&package.root_dir, prover_name, Format::Toml, &program.abi)?;
+    let (inputs_map, _) = read_inputs_from_file(
+        &package.root_dir.join(prover_name).with_extension("toml"),
+        &program.abi,
+    )?;
 
     trace_program(&program, &package.name, &inputs_map, out_dir)
 }
