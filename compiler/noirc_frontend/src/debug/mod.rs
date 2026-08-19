@@ -310,49 +310,83 @@ impl DebugInstrumenter {
         }
     }
 
-    /// Instrument a compound assignment (`x += y`, `arr[i] *= y`, …) by
-    /// rewriting it to the plain assignment it is equivalent to,
-    /// `x = x + y`, and instrumenting that.
+    /// Instrument a compound assignment (`x += y`, `p.x *= y`, …).
     ///
-    /// The parser used to perform this desugaring itself, so
+    /// The parser used to desugar `x <op>= y` into `x = x <op> y` itself, so
     /// [`Self::walk_assign_statement`] saw every compound assignment as an
-    /// [`ast::StatementKind::Assign`]. Once `AssignOp` became its own
-    /// statement kind — desugared later, in the elaborator — compound
-    /// assignments stopped being instrumented at all, which made the debugger
-    /// and the trace recorder report a **stale value** for every variable
-    /// updated with `+=`/`*=`/… rather than reporting nothing (so the
-    /// breakage was silent).
+    /// [`ast::StatementKind::Assign`] and emitted the `__debug_var_assign`
+    /// call that keeps the debugger's view of the variable current. `AssignOp`
+    /// is now its own statement kind, desugared later in the elaborator, and
+    /// this pass had no arm for it — so compound assignments stopped being
+    /// instrumented at all and every variable updated with `+=`/`*=`/… kept
+    /// its previous value in the debugger and in recorded traces, silently.
     ///
-    /// Caveat, inherited from the desugaring the parser used to do: an
-    /// lvalue index sub-expression is evaluated twice, so `arr[f()] += 1`
-    /// calls `f()` twice under `--instrument-debug`. The elaborator's own
-    /// `elaborate_assign_op` avoids this by reusing the elaborated lvalue,
-    /// which is not available this early. Only debug-instrumented builds are
-    /// affected.
+    /// Two things this desugaring must preserve, both pinned by
+    /// `test_programs/execution_success/op_assign_desugaring`:
+    ///
+    /// * **the right-hand side is evaluated before the lvalue is read**, so
+    ///   `i += { i = 10; 1 }` yields 11 and not 1. The rhs is therefore bound
+    ///   to a temporary first, exactly as `Elaborator::elaborate_assign_op`
+    ///   does;
+    /// * **an lvalue index sub-expression is evaluated exactly once**, so
+    ///   `x[{ x[0] += 2; 0 }] += 3` runs its index block once. Reading the
+    ///   lvalue back a second time is what would break this, and it cannot be
+    ///   avoided at this stage: the elaborator reuses the *elaborated* lvalue,
+    ///   which does not exist yet here. So compound assignments through an
+    ///   [`ast::LValue::Index`] are left uninstrumented — the assignment still
+    ///   happens, the debugger just does not observe it. `Path` and
+    ///   `MemberAccess` lvalues have no sub-expressions to re-evaluate and are
+    ///   instrumented normally, which covers `x += 1` and `p.x += 1`.
     fn walk_assign_op_statement(
         &mut self,
         assign_op_stmt: &ast::AssignOpStatement,
         location: Location,
-    ) -> ast::Statement {
+    ) -> Option<ast::Statement> {
+        if lvalue_has_index(&assign_op_stmt.lvalue) {
+            return None;
+        }
+
         let operator_location = assign_op_stmt.op.location();
         let expression_location = assign_op_stmt.expression.location;
+        let rhs_ident = ident("__debug_op_rhs", expression_location);
 
-        let desugared = ast::AssignStatement {
-            lvalue: assign_op_stmt.lvalue.clone(),
-            expression: ast::Expression {
+        // `<rhs>` is bound before the lvalue is read, so any side effect it has
+        // is observed by the lvalue.
+        let bind_rhs = ast::Statement {
+            kind: ast::StatementKind::new_let(
+                ast::Pattern::Identifier(rhs_ident.clone()),
+                None,
+                assign_op_stmt.expression.clone(),
+                vec![],
+            ),
+            location: expression_location,
+        };
+        let apply_op = ast::Statement {
+            kind: ast::StatementKind::Expression(ast::Expression {
                 kind: ast::ExpressionKind::Infix(Box::new(ast::InfixExpression {
                     lhs: assign_op_stmt.lvalue.as_expression(),
                     operator: Located::from(
                         operator_location,
                         assign_op_stmt.op.contents.to_binary_op_kind(),
                     ),
-                    rhs: assign_op_stmt.expression.clone(),
+                    rhs: id_expr(&rhs_ident),
                 })),
+                location: expression_location,
+            }),
+            location: expression_location,
+        };
+
+        let desugared = ast::AssignStatement {
+            lvalue: assign_op_stmt.lvalue.clone(),
+            expression: ast::Expression {
+                kind: ast::ExpressionKind::Block(ast::BlockExpression {
+                    statements: vec![bind_rhs, apply_op],
+                }),
                 location: expression_location,
             },
         };
 
-        self.walk_assign_statement(&desugared, location)
+        Some(self.walk_assign_statement(&desugared, location))
     }
 
     fn walk_assign_statement(
@@ -566,7 +600,11 @@ impl DebugInstrumenter {
                 *stmt = self.walk_assign_statement(assign_stmt, stmt.location);
             }
             ast::StatementKind::AssignOp(assign_op_stmt) => {
-                *stmt = self.walk_assign_op_statement(assign_op_stmt, stmt.location);
+                if let Some(instrumented) =
+                    self.walk_assign_op_statement(assign_op_stmt, stmt.location)
+                {
+                    *stmt = instrumented;
+                }
             }
             ast::StatementKind::Expression(expr) => {
                 self.walk_expr(expr);
@@ -769,6 +807,19 @@ fn build_debug_call_stmt(fname: &str, fn_id: DebugFnId, location: Location) -> a
         arguments: vec![uint_expr(u128::from(fn_id.0), location)],
     }));
     ast::Statement { kind: ast::StatementKind::Semi(ast::Expression { kind, location }), location }
+}
+
+/// Whether an lvalue reaches its target through an index expression, which
+/// cannot be re-evaluated safely. See [`DebugInstrumenter::walk_assign_op_statement`].
+fn lvalue_has_index(lvalue: &ast::LValue) -> bool {
+    match lvalue {
+        ast::LValue::Index { .. } => true,
+        ast::LValue::MemberAccess { object, .. } => lvalue_has_index(object),
+        ast::LValue::Path(_) => false,
+        // A dereference target is an arbitrary expression, and the existing
+        // assign instrumentation does not track dereferences anyway.
+        ast::LValue::Dereference(..) | ast::LValue::Interned(..) => true,
+    }
 }
 
 fn pattern_vars(pattern: &ast::Pattern) -> Vec<(ast::Ident, bool)> {
