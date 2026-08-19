@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Noir tracer — source to trace, in WebAssembly</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #16181d;
+        --muted: #5c6270;
+        --line: #d8dce4;
+        --panel: #f6f7f9;
+        --accent: #2f6f4f;
+        --bad: #a3302a;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #16181d;
+          --fg: #e6e8ec;
+          --muted: #9aa1b0;
+          --line: #333844;
+          --panel: #1e212a;
+          --accent: #6fbf90;
+          --bad: #e08b85;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0 auto;
+        padding: 2rem 1.25rem 4rem;
+        max-width: 62rem;
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      h1 { font-size: 1.4rem; margin: 0 0 .35rem; }
+      h2 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
+      p.lede { color: var(--muted); margin: 0 0 1.5rem; max-width: 52rem; }
+      code, pre, textarea { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; }
+      .cols { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; }
+      @media (max-width: 46rem) { .cols { grid-template-columns: 1fr; } }
+      label { display: block; font-weight: 600; font-size: .8rem; margin-bottom: .3rem; }
+      label span { font-weight: 400; color: var(--muted); }
+      textarea {
+        width: 100%; padding: .6rem .7rem; border: 1px solid var(--line); border-radius: 6px;
+        background: var(--panel); color: var(--fg); font-size: 13px; line-height: 1.5; resize: vertical;
+      }
+      #source { height: 15rem; }
+      #inputs { height: 15rem; }
+      .row { display: flex; gap: .75rem; align-items: center; margin-top: 1rem; flex-wrap: wrap; }
+      button {
+        font: inherit; font-weight: 600; padding: .5rem 1.1rem; border-radius: 6px;
+        border: 1px solid var(--accent); background: var(--accent); color: var(--bg); cursor: pointer;
+      }
+      button.secondary { background: transparent; color: var(--fg); border-color: var(--line); }
+      button:disabled { opacity: .5; cursor: default; }
+      #status { color: var(--muted); font-size: .875rem; }
+      #status.bad { color: var(--bad); }
+      pre {
+        background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+        padding: .7rem .8rem; overflow-x: auto; font-size: 12.5px; margin: 0;
+      }
+      table { border-collapse: collapse; font-size: .875rem; }
+      td, th { text-align: left; padding: .28rem .9rem .28rem 0; border-bottom: 1px solid var(--line); }
+      th { font-weight: 600; color: var(--muted); font-size: .78rem; }
+      .hidden { display: none; }
+      .note { font-size: .8rem; color: var(--muted); margin: .5rem 0 0; }
+      .pill {
+        display: inline-block; font-size: .72rem; padding: .1rem .45rem; border-radius: 99px;
+        border: 1px solid var(--line); color: var(--muted); margin-left: .4rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Noir source &rarr; execution trace, entirely in WebAssembly</h1>
+    <p class="lede">
+      The text in the box below is a JavaScript string. It is copied into the linear memory of a
+      single <code>wasm32-unknown-unknown</code> module and compiled <em>there</em> — the Noir
+      compiler, its standard library and the ACVM/Brillig interpreter are all inside the module — and
+      the module hands back the execution trace. There is no server doing any of this: the page is
+      static files, and the module is instantiated with an empty import object, so it has no way to
+      call out.
+    </p>
+
+    <div class="cols">
+      <div>
+        <label for="source">Noir source <span>— becomes <code>src/main.nr</code></span></label>
+        <textarea id="source" spellcheck="false"></textarea>
+      </div>
+      <div>
+        <label for="inputs">Inputs <span>— <code>Prover.toml</code></span></label>
+        <textarea id="inputs" spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="run" disabled>Trace</button>
+      <button id="download" class="secondary hidden">Download trace</button>
+      <span id="status">Loading the WebAssembly module…</span>
+    </div>
+
+    <div id="results" class="hidden">
+      <h2>What the module produced</h2>
+      <table id="counts"></table>
+      <p class="note" id="module-note"></p>
+
+      <h2>Steps</h2>
+      <pre id="steps"></pre>
+
+      <h2>Trace, as the module returned it <span class="pill">first 60 lines</span></h2>
+      <pre id="raw"></pre>
+    </div>
+
+    <script type="module">
+      import { loadTracer, summarize, errorEvents } from './tracer.mjs';
+
+      const EXAMPLE_SOURCE = `// Test unsafe integer multiplication with overflow: 12^8 = 429 981 696
+// The circuit should handle properly the growth of the bit size
+fn main(mut x: u32, y: u32, z: u32) {
+    x *= y;
+    x *= x; //144
+    x *= x; //20736
+    x *= x; //429 981 696
+    assert(x == z);
+}
+`;
+      const EXAMPLE_INPUTS = `x = "3"\ny = "4"\nz = "429981696"\n`;
+
+      const $ = (id) => document.getElementById(id);
+      const sourceEl = $('source');
+      const inputsEl = $('inputs');
+      const statusEl = $('status');
+      const runEl = $('run');
+      const downloadEl = $('download');
+
+      sourceEl.value = EXAMPLE_SOURCE;
+      inputsEl.value = EXAMPLE_INPUTS;
+
+      function setStatus(text, bad = false) {
+        statusEl.textContent = text;
+        statusEl.classList.toggle('bad', bad);
+      }
+
+      let tracer;
+      try {
+        const response = await fetch('./noir_tracer_wasm.wasm');
+        if (!response.ok) {
+          throw new Error(`${response.status} ${response.statusText} — did you run \`just build-web\`?`);
+        }
+        const bytes = await response.arrayBuffer();
+        tracer = await loadTracer(bytes);
+        setStatus(
+          `Module ready (${(bytes.byteLength / 1e6).toFixed(1)} MB, ` +
+            `${tracer.imports.length === 0 ? 'no imports' : tracer.imports.length + ' imports'}).`,
+        );
+        runEl.disabled = false;
+      } catch (error) {
+        setStatus(`Could not load the module: ${error.message}`, true);
+      }
+
+      let lastDownload = null;
+
+      runEl.addEventListener('click', () => {
+        runEl.disabled = true;
+        downloadEl.classList.add('hidden');
+        $('results').classList.add('hidden');
+        setStatus('Compiling and tracing inside wasm…');
+
+        // Yield a frame so the status paints before the (synchronous) wasm call.
+        requestAnimationFrame(() => {
+          const started = performance.now();
+          let trace;
+          try {
+            trace = tracer.traceSource({
+              files: { 'src/main.nr': sourceEl.value },
+              entry_point: 'src/main.nr',
+              inputs: inputsEl.value,
+              inputs_are_json: false,
+              package: 'web_demo',
+            });
+          } catch (error) {
+            setStatus(error.message, true);
+            $('results').classList.add('hidden');
+            runEl.disabled = false;
+            return;
+          }
+          const elapsed = performance.now() - started;
+
+          render(trace, elapsed);
+          runEl.disabled = false;
+        });
+      });
+
+      function render(trace, elapsed) {
+        const counts = summarize(trace);
+        const errors = errorEvents(trace);
+
+        setStatus(
+          `Traced in ${elapsed.toFixed(0)} ms — ${counts.steps} steps, ${counts.calls} calls.` +
+            (errors.length ? ` ${errors.length} error event(s).` : ''),
+        );
+
+        $('counts').innerHTML =
+          '<tr><th>quantity</th><th>count</th></tr>' +
+          ['steps', 'calls', 'paths', 'functions', 'varnames', 'types', 'values', 'io_events']
+            .map((k) => `<tr><td>${k}</td><td>${counts[k]}</td></tr>`)
+            .join('');
+
+        $('module-note').textContent =
+          `Paths registered: ${trace.paths.join(', ')}. ` +
+          `Column-aware steps: ${trace.capabilities.column_aware_steps}. ` +
+          `Total low-level events: ${counts.events_total}.`;
+
+        // A legible walk of the recorded steps: line, then the variables live at
+        // that point. This is the trace, decoded, rather than a claim about it.
+        const varnames = [];
+        const lines = [];
+        for (const event of trace.events) {
+          if (typeof event !== 'object') continue;
+          if ('VariableName' in event) varnames.push(event.VariableName);
+          if ('Step' in event) {
+            const step = event.Step;
+            lines.push(`line ${String(step.line).padStart(4)}  ${trace.paths[step.path_id] ?? '?'}`);
+          }
+        }
+        $('steps').textContent = lines.join('\n') || '(no steps)';
+
+        const raw = JSON.stringify(trace, null, 1).split('\n');
+        $('raw').textContent =
+          raw.slice(0, 60).join('\n') + (raw.length > 60 ? `\n… ${raw.length - 60} more lines` : '');
+
+        lastDownload = {
+          blob: new Blob([JSON.stringify(trace)], { type: 'application/json' }),
+          name: 'web_demo.trace.json',
+        };
+        downloadEl.textContent = `Download ${lastDownload.name}`;
+        downloadEl.classList.remove('hidden');
+        $('results').classList.remove('hidden');
+      }
+
+      downloadEl.addEventListener('click', () => {
+        if (!lastDownload) return;
+        const url = URL.createObjectURL(lastDownload.blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = lastDownload.name;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      });
+
+      // Let a headless harness drive the same path the button does.
+      window.__tracer = { tracer, render };
+    </script>
+  </body>
+</html>

@@ -341,14 +341,22 @@ impl<'local> SsaBuilder<'local> {
 }
 
 // Helper to time SSA passes
+//
+// The clock is read only when the timings are actually going to be printed.
+// Reading it unconditionally would discard the result in the common case, and
+// on `wasm32-unknown-unknown` it is worse than wasteful: `chrono::Utc::now()`
+// resolves to `js_sys::Date`, which turns a wall clock into a hard requirement
+// on wasm-bindgen's JS glue. Guarding it lets a host that has no clock to offer
+// still run every SSA pass.
 pub(super) fn time<T>(name: &str, print_timings: bool, f: impl FnOnce() -> T) -> T {
+    if !print_timings {
+        return f();
+    }
+
     let start_time = chrono::Utc::now().time();
     let result = f();
-
-    if print_timings {
-        let end_time = chrono::Utc::now().time();
-        println_to_stdout!("{name}: {} ms", (end_time - start_time).num_milliseconds());
-    }
+    let end_time = chrono::Utc::now().time();
+    println_to_stdout!("{name}: {} ms", (end_time - start_time).num_milliseconds());
 
     result
 }

@@ -15,8 +15,12 @@
 //! cd tooling/tracer_wasm && cargo build --release
 //! ```
 
+pub mod compile;
 pub mod memory_sink;
+pub use compile::{DEFAULT_ENTRY_POINT, compile_source};
 pub use memory_sink::{Capabilities, MemorySink, MemoryTrace};
+
+use std::collections::BTreeMap;
 
 use acvm::FieldElement;
 use bn254_blackbox_solver::Bn254BlackBoxSolver;
@@ -46,6 +50,8 @@ pub enum TraceError {
     Inputs(String),
     Abi(String),
     Execution(String),
+    Compilation(String),
+    Request(String),
 }
 
 impl std::fmt::Display for TraceError {
@@ -55,6 +61,8 @@ impl std::fmt::Display for TraceError {
             TraceError::Inputs(m) => write!(f, "could not parse the program inputs: {m}"),
             TraceError::Abi(m) => write!(f, "could not encode the inputs against the ABI: {m}"),
             TraceError::Execution(m) => write!(f, "tracing failed: {m}"),
+            TraceError::Compilation(m) => write!(f, "{m}"),
+            TraceError::Request(m) => write!(f, "could not read the trace request: {m}"),
         }
     }
 }
@@ -121,6 +129,69 @@ pub fn trace_artifact(
     Ok(sink.into_trace())
 }
 
+/// Everything a host must supply to go from Noir source to a trace.
+///
+/// This crosses the wasm boundary as a single JSON object rather than as a
+/// widening list of `(ptr, len)` pairs, so that adding a knob does not change
+/// the C ABI.
+#[derive(serde::Deserialize)]
+pub struct TraceRequest {
+    /// Path-to-source for every file in the program. Relative paths; these are
+    /// what the trace reports as the program's source locations.
+    pub files: BTreeMap<String, String>,
+    /// Which of `files` is the crate root. Defaults to [`DEFAULT_ENTRY_POINT`].
+    #[serde(default = "default_entry_point")]
+    pub entry_point: String,
+    /// The text of a `Prover.toml` (or the equivalent JSON).
+    pub inputs: String,
+    #[serde(default)]
+    pub inputs_are_json: bool,
+    /// Program name recorded in the trace.
+    #[serde(default = "default_package_name")]
+    pub package: String,
+}
+
+fn default_entry_point() -> String {
+    DEFAULT_ENTRY_POINT.to_string()
+}
+
+fn default_package_name() -> String {
+    "trace".to_string()
+}
+
+/// Compile Noir **source** and trace it -- the whole pipeline, in memory.
+///
+/// This is [`trace_artifact`] with the missing front half attached: no
+/// previously-compiled artifact is required, so a host needs nothing but the
+/// program text and its inputs.
+pub fn trace_source(request: &TraceRequest) -> Result<MemoryTrace, TraceError> {
+    let program = compile::compile_source(&request.files, &request.entry_point)
+        .map_err(TraceError::Compilation)?;
+
+    let format = if request.inputs_are_json { Format::Json } else { Format::Toml };
+    let input_map = format
+        .parse(&request.inputs, &program.abi)
+        .map_err(|e| TraceError::Inputs(e.to_string()))?;
+
+    let mut sink = MemorySink::new();
+    let options = TraceOptions::default();
+
+    noir_tracer::tracer_glue::begin_trace(&mut sink, "", &request.package, None);
+    trace_compiled_program(&program, &input_map, &options, &mut sink)?;
+    noir_tracer::tracer_glue::finish_trace(&mut sink)
+        .map_err(|e| TraceError::Execution(e.to_string()))?;
+
+    Ok(sink.into_trace())
+}
+
+/// Serialize a trace of a [`TraceRequest`] (given as JSON) to JSON.
+fn trace_source_to_json(request_json: &str) -> Result<String, String> {
+    let request: TraceRequest = serde_json::from_str(request_json)
+        .map_err(|e| TraceError::Request(e.to_string()).to_string())?;
+    let trace = trace_source(&request).map_err(|e| e.to_string())?;
+    serde_json::to_string(&trace).map_err(|e| e.to_string())
+}
+
 /// Serialize a trace of `artifact_json` / `inputs` to JSON.
 fn trace_to_json(
     artifact_json: &str,
@@ -138,6 +209,14 @@ fn trace_to_json(
 pub fn trace(artifact_json: &str, inputs: &str, inputs_are_json: bool) -> Result<String, String> {
     console_error_panic_hook::set_once();
     trace_to_json(artifact_json, inputs, inputs_are_json)
+}
+
+/// JS entry point taking Noir **source**. `request_json` is a [`TraceRequest`].
+#[cfg(all(target_arch = "wasm32", feature = "js"))]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn trace_source_json(request_json: &str) -> Result<String, String> {
+    console_error_panic_hook::set_once();
+    trace_source_to_json(request_json)
 }
 
 /// The bare-engine entry points.
@@ -222,6 +301,31 @@ pub mod abi {
             _ => Err("inputs are not valid UTF-8".to_string()),
         };
 
+        publish(result)
+    }
+
+    /// Compile Noir **source** and trace it. `(ptr, len)` is a JSON
+    /// [`super::TraceRequest`]; the result follows the same convention as
+    /// [`ct_trace`].
+    ///
+    /// # Safety
+    /// `(ptr, len)` must describe an initialized UTF-8 buffer that stays valid
+    /// for the duration of the call.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn ct_trace_source(request_ptr: *const u8, request_len: usize) -> *mut u8 {
+        let request = unsafe { std::slice::from_raw_parts(request_ptr, request_len) };
+
+        let result = match std::str::from_utf8(request) {
+            Ok(json) => super::trace_source_to_json(json),
+            Err(_) => Err("the request is not valid UTF-8".to_string()),
+        };
+
+        publish(result)
+    }
+
+    /// Hand a result to the host: record its length and error flag, then leak
+    /// the buffer for the host to read and `ct_free`.
+    fn publish(result: Result<String, String>) -> *mut u8 {
         let (bytes, is_error) = match result {
             Ok(json) => (json.into_bytes(), false),
             Err(message) => (message.into_bytes(), true),

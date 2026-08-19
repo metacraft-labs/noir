@@ -22,6 +22,14 @@ codetracer_trace_types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+# The compile half: turning Noir *source* into a `CompiledProgram` without a
+# filesystem. `noirc_driver` embeds the standard library with `rust-embed`, so
+# no part of this reaches for a path on disk.
+fm.workspace = true
+noirc_driver.workspace = true
+noirc_errors.workspace = true
+noirc_frontend = { workspace = true, features = ["bn254"] }
+
 [features]
 # The `wasm-bindgen` binding, for a JS host. On by default.
 #
@@ -49,3 +57,9 @@ console_error_panic_hook = { workspace = true, optional = true }
 getrandom = { workspace = true, features = ["wasm_js"] }
 getrandom_v2 = { package = "getrandom", version = "^0.2.0", features = ["js"] }
 getrandom_v4 = { package = "getrandom", version = "0.4.0-rc.0", features = ["wasm_js"] }
+# Another unused dependency held only for its feature: `debug-embed` makes
+# `rust-embed` bake the stdlib sources into the binary in dev builds too, not
+# just release ones. Without it a debug wasm build would try to read
+# `noir_stdlib/src` off a filesystem that does not exist. Same idiom as
+# `compiler/wasm`.
+rust-embed = { workspace = true, features = ["debug-embed"] }
