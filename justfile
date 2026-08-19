@@ -190,3 +190,27 @@ stdlib_docs:
   cd noir_stdlib && nargo doc
   rm -rf noir_stdlib/docs
   mv noir_stdlib/target/docs noir_stdlib/docs
+# Check that the wasm-facing crates still build for wasm32-unknown-unknown.
+#
+# Each crate is entered with `cd` on purpose: its own `.cargo/config.toml`
+# carries the target and the `--cfg getrandom_backend="wasm_js"` rustflag, and
+# cargo only discovers those from the invocation directory.
+check-wasm:
+  cd compiler/wasm && cargo check
+  cd acvm-repo/acvm_js && cargo check
+  cd tooling/noirc_abi_wasm && cargo check
+  cd tooling/tracer_wasm && cargo check
+
+# Build the tracer's wasm module and run a fixture through it, checking the
+# result against the `.ct` container the native `nargo trace` produces.
+trace-wasm fixture="a_1_mul":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cargo build -p nargo_cli --bin nargo
+  (cd tooling/tracer_wasm && cargo build --release --no-default-features)
+  out=$(mktemp -d)
+  ./target/debug/nargo --program-dir test_programs/trace/{{fixture}} trace \
+    --out-dir "$out" --emit-debug-artifact "$out/artifact.json"
+  node tooling/tracer_wasm/run_wasm.mjs \
+    target/wasm32-unknown-unknown/release/noir_tracer_wasm.wasm \
+    "$out/artifact.json" test_programs/trace/{{fixture}}/Prover.toml
