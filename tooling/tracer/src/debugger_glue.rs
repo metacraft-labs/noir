@@ -100,9 +100,7 @@ fn convert_debugger_location<B: BlackBoxFunctionSolver<FieldElement>>(
     // backing) return an error; treat that as "no column" rather than
     // an unknown sentinel so the rest of the location is still usable
     // for the line-only Step fallback.
-    let column_number = debug_context
-        .get_column_for_location(location)
-        .ok()
-        .map(|column| column as isize);
+    let column_number =
+        debug_context.get_column_for_location(location).ok().map(|column| column as isize);
     SourceLocation { filepath, line_number, column_number }
 }

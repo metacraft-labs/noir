@@ -400,8 +400,7 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
             None => debug_file.path.clone(),
         };
         let line_lengths = compute_line_lengths(&debug_file.source);
-        if let Err(err) =
-            TraceWriter::register_path_with_line_lengths(tracer, &path, &line_lengths)
+        if let Err(err) = TraceWriter::register_path_with_line_lengths(tracer, &path, &line_lengths)
         {
             println!(
                 "Warning: register_path_with_line_lengths failed for {}: {err}",

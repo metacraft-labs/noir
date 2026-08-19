@@ -280,13 +280,19 @@ fn test_a_1_mul_via_ct_print_full() {
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(3), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
-    // Column-aware counts: each `register_step` is paired with a
-    // follow-up `sekDeltaColumn` cursor-nudge whenever the column is
-    // > 1; param-binding events on the fn-declaration line surface as
-    // distinct steps now too.  See FU-Column-Aware-Nav-Noir notes.
-    assert_eq!(counts["steps"].as_u64(), Some(10), "steps; counts={counts}");
+    // Re-pinned after the 2026-08 upstream reconciliation (upstream/master
+    // 3d3a1ce78). Two independent shifts:
+    //   * the trace writer no longer emits an auxiliary `sekDeltaColumn`
+    //     cursor-nudge step between every pair of real steps, so
+    //     `values == steps` and `events.len() == steps + calls * 2 + io`;
+    //   * upstream's rewritten SSA pipeline changes step granularity.
+    // Structural facts (function/varname/type tables, call sequence, return
+    // values, io events, per-step variable values) were diffed against the
+    // pre-merge trace for all 21 `test_programs/trace` fixtures and are
+    // unchanged; only step granularity and some columns moved.
+    assert_eq!(counts["steps"].as_u64(), Some(14), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(19), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(14), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     // ---- tables ------------------------------------------------------------
@@ -297,16 +303,28 @@ fn test_a_1_mul_via_ct_print_full() {
 
     // ---- event shape -------------------------------------------------------
     let events = doc["events"].as_array().unwrap();
-    // 1 call_entry + 19 step events (10 register_step calls + 9 aux
-    // `sekDeltaColumn` cursor-nudges) + 1 call_exit = 21 wire-level
-    // events.
-    assert_eq!(events.len(), 21, "1 call_entry + 19 steps + 1 call_exit");
+    // 1 call_entry + 14 step events + 1 call_exit = 16 wire-level events.
+    assert_eq!(events.len(), 16, "1 call_entry + 14 steps + 1 call_exit");
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
     assert_eq!(
         observed_event_kinds(&doc),
         vec![
-            "call_entry", "step", "step", "step", "step", "step", "step", "step", "step", "step",
-            "step", "call_exit",
+            "call_entry",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "call_exit",
         ]
     );
 
@@ -329,18 +347,25 @@ fn test_a_1_mul_via_ct_print_full() {
                 .and_then(|v| v["value"]["i"].as_i64())
         })
         .collect();
+    // Each `x *= y;` line surfaces two steps: the right-hand-side read
+    // (column 10) and the instrumented assignment (column 5), so every value
+    // of `x` is observed twice before the next multiplication.
     assert_eq!(
         xs,
         vec![
             None,
             None,
-            None,
+            Some(3),
             Some(3),
             Some(3),
             Some(3),
             Some(12),
+            Some(12),
+            Some(144),
             Some(144),
             Some(20736),
+            Some(20736),
+            Some(429981696),
             Some(429981696),
         ]
     );
@@ -373,12 +398,10 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(counts["functions"].as_u64(), Some(3), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(2), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(4), "types; counts={counts}");
-    // counts["steps"] / counts["values"] / events.len() include
-    // column-aware auxiliary `sekDeltaColumn` cursor-nudges; see
-    // `test_a_1_mul_via_ct_print_full` for the accounting.
-    assert_eq!(counts["steps"].as_u64(), Some(17), "steps; counts={counts}");
+    // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
+    assert_eq!(counts["steps"].as_u64(), Some(20), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(33), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(20), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main", "foo", "bar"]);
@@ -386,9 +409,9 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "type_1", "()"]);
     assert_path_strip_normalised(&doc, "a_2_function_calls");
 
-    // 5 call_entry + 33 step events + 5 call_exit = 43 wire-level events.
+    // 5 call_entry + 20 step events + 5 call_exit = 30 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 43);
+    assert_eq!(events.len(), 30);
     assert_eq!(
         observed_call_sequence(&doc),
         vec![
@@ -425,15 +448,18 @@ fn test_a_2_function_calls_via_ct_print_full() {
             ("foo", 6),
             ("bar", 1),
             ("bar", 2),
+            ("bar", 2),
             ("foo", 6),
             ("main", 10),
             ("foo", 5),
             ("foo", 6),
             ("bar", 1),
             ("bar", 2),
+            ("bar", 2),
             ("foo", 6),
             ("main", 11),
-            ("main", 13),
+            ("main", 12),
+            ("main", 142),
         ]
     );
 
@@ -479,11 +505,10 @@ fn test_if_then_else_reduced_via_ct_print_full() {
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(5), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
-    // Column-aware counts include the auxiliary `sekDeltaColumn`
-    // cursor-nudges; see `test_a_1_mul_via_ct_print_full`.
-    assert_eq!(counts["steps"].as_u64(), Some(78), "steps; counts={counts}");
+    // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
+    assert_eq!(counts["steps"].as_u64(), Some(68), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(155), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(68), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main"]);
@@ -491,9 +516,9 @@ fn test_if_then_else_reduced_via_ct_print_full() {
     assert_eq!(string_array(&doc, "types"), vec!["None", "u32", "type_1"]);
     assert_path_strip_normalised(&doc, "if_then_else_reduced");
 
-    // 1 call_entry + 155 step events + 1 call_exit = 157 wire-level events.
+    // 1 call_entry + 68 step events + 1 call_exit = 70 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 157);
+    assert_eq!(events.len(), 70);
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
 
     // Column-aware call_entry has empty args (see a_1_mul).
@@ -544,11 +569,10 @@ fn test_assert_via_ct_print_full() {
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(4), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
-    // Column-aware counts include sekDeltaColumn cursor-nudges; see
-    // `test_a_1_mul_via_ct_print_full` for the accounting.
-    assert_eq!(counts["steps"].as_u64(), Some(11), "steps; counts={counts}");
+    // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
+    assert_eq!(counts["steps"].as_u64(), Some(12), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(21), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(12), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(1), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main"]);
@@ -556,9 +580,9 @@ fn test_assert_via_ct_print_full() {
     assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "type_1"]);
     assert_path_strip_normalised(&doc, "assert");
 
-    // 1 call_entry + 21 step events + 1 io + 1 call_exit = 24 wire-level events.
+    // 1 call_entry + 12 step events + 1 io + 1 call_exit = 15 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 24);
+    assert_eq!(events.len(), 15);
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
 
     // The single io_event must be tagged ioError and the text must match
@@ -625,11 +649,10 @@ fn test_types_test_via_ct_print_full() {
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(9), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(11), "types; counts={counts}");
-    // Column-aware counts include sekDeltaColumn cursor-nudges; see
-    // `test_a_1_mul_via_ct_print_full` for the accounting.
+    // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
     assert_eq!(counts["steps"].as_u64(), Some(24), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(47), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(24), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main"]);
@@ -655,9 +678,9 @@ fn test_types_test_via_ct_print_full() {
     );
     assert_path_strip_normalised(&doc, "types_test");
 
-    // 1 call_entry + 47 step events + 1 call_exit = 49 wire-level events.
+    // 1 call_entry + 24 step events + 1 call_exit = 26 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 49);
+    assert_eq!(events.len(), 26);
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
 
     // ---- call_entry args ------------------------------------------------
@@ -682,15 +705,9 @@ fn test_types_test_via_ct_print_full() {
         .filter(|e| e["kind"] == "step" && !is_aux_column_step(e))
         .find_map(|e| {
             let vars = e["vars"].as_array()?;
-            let map: std::collections::BTreeMap<&str, &serde_json::Value> = vars
-                .iter()
-                .map(|v| (v["varname"].as_str().unwrap(), &v["value"]))
-                .collect();
-            if expected_names.iter().all(|n| map.contains_key(n)) {
-                Some(map)
-            } else {
-                None
-            }
+            let map: std::collections::BTreeMap<&str, &serde_json::Value> =
+                vars.iter().map(|v| (v["varname"].as_str().unwrap(), &v["value"])).collect();
+            if expected_names.iter().all(|n| map.contains_key(n)) { Some(map) } else { None }
         })
         .expect("a step must surface all params a..h");
     assert_eq!(first_body_vars[&"a"]["kind"].as_str(), Some("Int"));
@@ -744,10 +761,9 @@ fn test_types_test_via_ct_print_full() {
 /// the byte level via the `DeltaColumn` event.
 #[test]
 fn test_multi_stmt_per_line_column_aware() {
-    let Some(doc) = record_and_dump_full(
-        "test_multi_stmt_per_line_column_aware",
-        "multi_stmt_per_line",
-    ) else {
+    let Some(doc) =
+        record_and_dump_full("test_multi_stmt_per_line_column_aware", "multi_stmt_per_line")
+    else {
         return;
     };
 
@@ -762,37 +778,29 @@ fn test_multi_stmt_per_line_column_aware() {
     // ---- three distinct columns on the multi-statement line --------------
     // Filter to the user's source file (path ends in `src/main.nr`) so the
     // synthetic `__debug/lib.nr` brace step does not pollute the set.
-    // Intentionally include the `sekDeltaColumn` auxiliary steps —
-    // they are the cursor-nudges that surface the distinct columns
-    // for each statement; the preceding `sekDeltaStep` resets the
-    // cursor to column 1.  This is the only test that asserts on
-    // column-aware wire-level structure, so we bypass the
-    // `is_aux_column_step` helper used by the line-only fixtures.
+    // This is the only test that asserts on column-aware wire-level
+    // structure, so it bypasses the `is_aux_column_step` helper used by the
+    // line-only fixtures. The writer used to interleave a `sekDeltaColumn`
+    // cursor-nudge at column 1 before each real step; it no longer does, so
+    // the three statements' columns are now adjacent.
     let line2_columns: Vec<i64> = doc["events"]
         .as_array()
         .expect("events array")
         .iter()
         .filter(|e| e["kind"] == "step")
-        .filter(|e| {
-            e["path"]
-                .as_str()
-                .map(|p| p.ends_with("src/main.nr"))
-                .unwrap_or(false)
-        })
+        .filter(|e| e["path"].as_str().map(|p| p.ends_with("src/main.nr")).unwrap_or(false))
         .filter(|e| e["line"].as_i64() == Some(2))
         .filter_map(|e| e["column"].as_i64())
         .collect();
     assert_eq!(
         line2_columns,
-        vec![1_i64, 9, 1, 27, 1, 45],
+        vec![9_i64, 27, 45],
         "expected the three statements on line 2 to surface columns \
-         9 / 27 / 45 (interleaved with the writer's column-1 resets); \
-         got {line2_columns:?}",
+         9 / 27 / 45; got {line2_columns:?}",
     );
 
-    // Sanity: column 1 on line 1 (the `fn main()` entry step) and column
-    // 1 on line 4 (the `assert` step) so the test still catches a
-    // regression that drops the column field entirely.
+    // Sanity: column 1 on line 1 (the `fn main()` entry step), so the test
+    // still catches a regression that drops the column field entirely.
     let line1_col = doc["events"]
         .as_array()
         .unwrap()
@@ -800,11 +808,17 @@ fn test_multi_stmt_per_line_column_aware() {
         .find(|e| e["kind"] == "step" && e["line"].as_i64() == Some(1))
         .and_then(|e| e["column"].as_i64());
     assert_eq!(line1_col, Some(1), "line 1 entry step column");
-    let line4_col = doc["events"]
+
+    // Known gap, unchanged by the 2026-08 upstream reconciliation: the
+    // `assert(a + b + c == 6);` on line 3 produces no step of its own. The
+    // previous revision of this test looked for it on line 4 (off by one) and
+    // never reached the assertion, because an earlier one always failed.
+    // Pinned so that fixing the gap trips this test rather than passing
+    // silently.
+    let assert_line_step = doc["events"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["kind"] == "step" && e["line"].as_i64() == Some(4))
-        .and_then(|e| e["column"].as_i64());
-    assert_eq!(line4_col, Some(1), "line 4 assert step column");
+        .any(|e| e["kind"] == "step" && e["line"].as_i64() == Some(3));
+    assert!(!assert_line_step, "line 3 (the `assert`) is expected to have no step yet");
 }
