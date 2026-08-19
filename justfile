@@ -60,6 +60,18 @@ cargo-clippy-args := if ci == "1" { "-Dwarnings" } else { "" }
 clippy:
     cargo clippy --all-targets --workspace --locked --release -- {{ cargo-clippy-args }}
 
+# Checks that the crates meant to run in a browser still build for Wasm.
+#
+# `noir_debugger` is checked without default features because its REPL and DAP
+# front-ends are native-only; what has to stay portable is the stepping core.
+# It is checked together with `noir_wasm` so that it inherits the `getrandom`
+# `wasm_js` backend that crate declares, the same way a `cdylib` embedding it
+# would.
+check-wasm:
+    RUSTFLAGS='--cfg getrandom_backend="wasm_js"' \
+      cargo check --locked --target wasm32-unknown-unknown \
+      --no-default-features -p noir_wasm -p noir_debugger
+
 cargo := if use-cross != "" { "cross" } else { "cargo" }
 
 [private]
