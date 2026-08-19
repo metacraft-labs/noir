@@ -3661,12 +3661,13 @@ dependencies = [
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "getrandom 0.4.2",
+ "nargo",
  "noir_tracer",
  "noirc_abi",
  "noirc_artifacts",
- "noirc_driver",
  "serde",
  "serde_json",
+ "uuid",
  "wasm-bindgen",
 ]
 

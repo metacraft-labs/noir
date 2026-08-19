@@ -152,7 +152,7 @@ noir_lsp = { path = "tooling/lsp" }
 # debugger's interactive front-ends (and, through them, `nargo/rpc` ->
 # jsonrpsee/tokio/mio, which will not build for wasm) can inherit the dependency
 # without Cargo rejecting a `default-features = false` override.  Members that
-# want the full debugger opt in with `features = ["cli"]`.
+# want the full debugger opt in with `features = ["repl", "dap"]`.
 noir_debugger = { path = "tooling/debugger", default-features = false }
 noir_tracer = { path = "tooling/tracer" }
 noir_tracer_wasm = { path = "tooling/tracer_wasm" }

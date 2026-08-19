@@ -11,9 +11,10 @@ use noir_tracer::tracer_glue::begin_trace;
 use noir_tracer::tracer_glue::finish_trace;
 use noirc_abi::InputMap;
 use noirc_artifacts::debug::DebugArtifact;
-use noirc_artifacts::program::CompiledProgram;
+use noirc_artifacts::program::{CompiledProgram, ProgramArtifact};
 use noirc_driver::{CompileOptions, NOIR_ARTIFACT_VERSION_STRING};
 use noirc_frontend::graph::CrateName;
+use std::path::PathBuf;
 
 use noir_artifact_cli::fs::inputs::read_inputs_from_file;
 
@@ -47,6 +48,15 @@ pub(crate) struct TraceCommand {
     /// Directory where to store the `<package>.ct` CTFS container.
     #[clap(long, short)]
     out_dir: String,
+
+    /// Also write the debug-instrumented `ProgramArtifact` to this path.
+    ///
+    /// This is the artifact a platform-agnostic tracer host (for instance the
+    /// `noir_tracer_wasm` module running in a browser) consumes: it carries the
+    /// `__debug_*` instrumentation that `nargo compile` does NOT produce, since
+    /// the source-level instrumenter only runs on the debugging compile path.
+    #[clap(long)]
+    emit_debug_artifact: Option<PathBuf>,
 }
 
 pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliError> {
@@ -76,6 +86,15 @@ pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliErro
 
     let compiled_program =
         compile_bin_package_for_debugging(&workspace, package, &compile_options)?;
+
+    if let Some(path) = &args.emit_debug_artifact {
+        let artifact: ProgramArtifact = compiled_program.clone().into();
+        let json = serde_json::to_string(&artifact)
+            .map_err(|err| CliError::Generic(format!("serializing the debug artifact: {err}")))?;
+        std::fs::write(path, json).map_err(|err| {
+            CliError::Generic(format!("writing the debug artifact to {}: {err}", path.display()))
+        })?;
+    }
 
     trace_program_and_decode(compiled_program, package, &args.prover_name, &args.out_dir)
 }
