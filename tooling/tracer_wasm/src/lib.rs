@@ -29,6 +29,8 @@ use noirc_artifacts::program::{CompiledProgram, ProgramArtifact};
 // These are dependencies only so that their wasm-enabling features get turned
 // on for the whole build graph; nothing here calls them. Same idiom as
 // `compiler/wasm` and `acvm-repo/acvm_js`.
+#[cfg(all(target_arch = "wasm32", feature = "js"))]
+use console_error_panic_hook as _;
 #[cfg(target_arch = "wasm32")]
 use getrandom as _;
 #[cfg(target_arch = "wasm32")]
@@ -119,12 +121,117 @@ pub fn trace_artifact(
     Ok(sink.into_trace())
 }
 
-/// JS entry point. Returns the trace as a JSON string.
-#[cfg(target_arch = "wasm32")]
+/// Serialize a trace of `artifact_json` / `inputs` to JSON.
+fn trace_to_json(
+    artifact_json: &str,
+    inputs: &str,
+    inputs_are_json: bool,
+) -> Result<String, String> {
+    let trace = trace_artifact(artifact_json, inputs, inputs_are_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&trace).map_err(|e| e.to_string())
+}
+
+/// JS entry point (the `js` feature). Returns the trace as a JSON string.
+#[cfg(all(target_arch = "wasm32", feature = "js"))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn trace(artifact_json: &str, inputs: &str, inputs_are_json: bool) -> Result<String, String> {
     console_error_panic_hook::set_once();
-    let trace =
-        trace_artifact(artifact_json, inputs, inputs_are_json).map_err(|e| e.to_string())?;
-    serde_json::to_string(&trace).map_err(|e| e.to_string())
+    trace_to_json(artifact_json, inputs, inputs_are_json)
+}
+
+/// The bare-engine entry points.
+///
+/// Built without the `js` feature the module has **no imports at all**, so it
+/// instantiates in any WebAssembly engine -- `wasmtime`, or
+/// `WebAssembly.instantiate(bytes)` with no import object. Strings cross the
+/// boundary as `(ptr, len)` pairs in linear memory.
+///
+/// Usage: `ct_alloc` two buffers, copy the artifact JSON and the inputs into
+/// them, call `ct_trace`, then read `ct_result_len` bytes from the returned
+/// pointer and `ct_free` everything.
+#[cfg(target_arch = "wasm32")]
+pub mod abi {
+    use std::alloc::{Layout, alloc, dealloc};
+
+    /// Reserve `len` bytes in the module's linear memory.
+    ///
+    /// # Safety
+    /// The caller must eventually pass the returned pointer and the same `len`
+    /// to [`ct_free`].
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn ct_alloc(len: usize) -> *mut u8 {
+        if len == 0 {
+            return std::ptr::null_mut();
+        }
+        let layout = Layout::from_size_align(len, 1).expect("valid layout");
+        unsafe { alloc(layout) }
+    }
+
+    /// Release a buffer previously returned by [`ct_alloc`] or [`ct_trace`].
+    ///
+    /// # Safety
+    /// `ptr`/`len` must come from one of those calls and not be used again.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn ct_free(ptr: *mut u8, len: usize) {
+        if ptr.is_null() || len == 0 {
+            return;
+        }
+        let layout = Layout::from_size_align(len, 1).expect("valid layout");
+        unsafe { dealloc(ptr, layout) };
+    }
+
+    /// Byte length of the buffer the last [`ct_trace`] call returned.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ct_result_len() -> usize {
+        RESULT_LEN.with(|c| c.get())
+    }
+
+    /// Non-zero if the last [`ct_trace`] call returned an error message rather
+    /// than a trace.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ct_result_is_error() -> u32 {
+        RESULT_IS_ERROR.with(|c| u32::from(c.get()))
+    }
+
+    thread_local! {
+        static RESULT_LEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static RESULT_IS_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Trace a program. Returns a pointer to UTF-8 bytes; the length is
+    /// [`ct_result_len`] and [`ct_result_is_error`] says which of the two shapes
+    /// (trace JSON / error message) it holds.
+    ///
+    /// # Safety
+    /// Both `(ptr, len)` pairs must describe initialized UTF-8 buffers that stay
+    /// valid for the duration of the call.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn ct_trace(
+        artifact_ptr: *const u8,
+        artifact_len: usize,
+        inputs_ptr: *const u8,
+        inputs_len: usize,
+        inputs_are_json: u32,
+    ) -> *mut u8 {
+        let artifact = unsafe { std::slice::from_raw_parts(artifact_ptr, artifact_len) };
+        let inputs = unsafe { std::slice::from_raw_parts(inputs_ptr, inputs_len) };
+
+        let result = match (std::str::from_utf8(artifact), std::str::from_utf8(inputs)) {
+            (Ok(a), Ok(i)) => super::trace_to_json(a, i, inputs_are_json != 0),
+            _ => Err("inputs are not valid UTF-8".to_string()),
+        };
+
+        let (bytes, is_error) = match result {
+            Ok(json) => (json.into_bytes(), false),
+            Err(message) => (message.into_bytes(), true),
+        };
+
+        RESULT_LEN.with(|c| c.set(bytes.len()));
+        RESULT_IS_ERROR.with(|c| c.set(is_error));
+
+        let mut boxed = bytes.into_boxed_slice();
+        let ptr = boxed.as_mut_ptr();
+        std::mem::forget(boxed);
+        ptr
+    }
 }
