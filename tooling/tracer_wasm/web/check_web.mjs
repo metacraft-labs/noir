@@ -203,15 +203,21 @@ const outcome = await evaluate(`
       if (status.classList.contains('bad')) return { ok: false, status: status.textContent };
       if (!document.getElementById('results').classList.contains('hidden')) {
         const counts = {};
+        const cells_text = {};
         for (const row of document.querySelectorAll('#counts tr')) {
           const cells = row.querySelectorAll('td');
-          if (cells.length === 2) counts[cells[0].textContent] = Number(cells[1].textContent);
+          if (cells.length === 2) {
+            counts[cells[0].textContent] = Number(cells[1].textContent);
+            cells_text[cells[0].textContent] = cells[1].textContent;
+          }
         }
         return {
           ok: true,
           status: status.textContent,
           counts,
+          cells_text,
           note: document.getElementById('module-note').textContent,
+          containerNote: document.getElementById('container-note').textContent,
           stepLines: document.getElementById('steps').textContent.split('\\n').length,
           downloadLabel: document.getElementById('download').textContent,
           downloadHidden: document.getElementById('download').classList.contains('hidden'),
@@ -227,8 +233,8 @@ console.log('\n--- what the browser rendered ---');
 console.log(JSON.stringify(outcome, null, 2));
 
 // Actually take the download, rather than believing a visible button. This is
-// the delivery path a `.ct` container will travel once one can be produced from
-// wasm, so it is worth knowing it works end to end.
+// the whole deliverable: the file the browser hands back must be a real `.ct`
+// container, and it is checked below by handing it to `ct-print`.
 const downloadDir = await import('node:fs/promises').then((fs) =>
   fs.mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'noir-web-dl-')),
 );
@@ -247,11 +253,18 @@ for (let i = 0; i < 100 && !downloaded; i++) {
   else await new Promise((r) => setTimeout(r, 100));
 }
 if (!downloaded) fail('clicking the download button produced no file');
-const downloadedTrace = JSON.parse(readSync(downloaded, 'utf8'));
+const downloadedBytes = readSync(downloaded);
 console.log(
   `\ndownloaded ${downloaded.split('/').pop()} (${statSync(downloaded).size} bytes), ` +
-    `${downloadedTrace.events.length} events, paths ${JSON.stringify(downloadedTrace.paths)}`,
+    `first 5 bytes ${[...downloadedBytes.subarray(0, 5)].map((b) => b.toString(16).padStart(2, '0')).join(' ')}`,
 );
+if (!downloaded.endsWith('.ct')) fail(`the download is not a .ct file: ${downloaded}`);
+// The CTFS magic. Not proof it decodes -- `ct-print` below is that -- but it
+// fails here, with a clear message, if the bytes are not a container at all.
+const CTFS_MAGIC = [0xc0, 0xde, 0x72, 0xac, 0xe2];
+if (!CTFS_MAGIC.every((b, i) => downloadedBytes[i] === b)) {
+  fail('the downloaded file does not start with the CTFS magic c0 de 72 ac e2');
+}
 
 // Re-run with *different* source, to show the textarea genuinely drives the
 // compile. Without this the whole demo is consistent with the module ignoring
@@ -342,5 +355,63 @@ if (!/src\/main\.nr:\d+:\d+/.test(broken.message)) {
   fail(`the compile error carried no source location: ${broken.message}`);
 }
 
-console.log('\nPASS: the browser compiled Noir source and traced it inside wasm,');
-console.log('      and the counts match native `nargo trace`.');
+// The page must say plainly that the container is not column-aware, rather
+// than let the loss pass silently. This is the honest-reporting assertion:
+// the writer reports the dropped request and the UI has to surface it.
+if (!/^no —/.test(outcome.cells_text['column-aware'] ?? '')) {
+  fail(
+    'the page did not state that column-awareness was dropped: ' +
+      JSON.stringify(outcome.cells_text['column-aware']),
+  );
+}
+
+// --- read the downloaded container back, with a different implementation ----
+//
+// `ct-print` is the Nim decoder from `codetracer-trace-format-nim`. It is a
+// separate transcription of the format, so agreeing with it is two
+// implementations meeting rather than a round trip through one.
+//
+// It must be the build from branch `wasm/nim-to-wasm`: the stock reader cannot
+// decode ANY container the pure-Rust `CtfsTraceWriter` produces (it does not
+// skip the writer's 8-byte `HEADERV1` prefix, treats an unpledged zstd frame
+// size as a size, and requires a `text` key on booleans that the Rust
+// `ValueRecord::Bool` does not carry).
+const CT_PRINT =
+  process.env.CODETRACER_CT_PRINT ??
+  join(WEB_DIR, '..', '..', '..', '..', 'ctfnim-wt-wasm', 'ct-print');
+if (existsSync(CT_PRINT)) {
+  const { spawnSync } = await import('node:child_process');
+  const printed = spawnSync(CT_PRINT, ['--full', downloaded], { encoding: 'utf8', maxBuffer: 1 << 28 });
+  if (printed.status !== 0) {
+    fail(`ct-print could not read the downloaded container: ${printed.stderr || printed.stdout}`);
+  }
+  const decoded = JSON.parse(printed.stdout);
+  const kinds = {};
+  for (const event of decoded.events) kinds[event.type] = (kinds[event.type] ?? 0) + 1;
+  console.log(
+    `\nct-print --full read the browser's container: ${kinds.Step ?? 0} steps, ` +
+      `${(kinds.Call ?? 0) - 1} calls, ${decoded.paths.length} paths, ` +
+      `${decoded.events.length} events, program "${decoded.metadata.program}"`,
+  );
+
+  // The last thing rendered was the *broken* program, so compare against the
+  // numbers the page showed when this container was produced -- the first run.
+  if ((kinds.Step ?? 0) !== outcome.counts.steps) {
+    fail(`ct-print read ${kinds.Step} steps out of the container; the page showed ${outcome.counts.steps}`);
+  }
+  if ((kinds.Call ?? 0) - 1 !== outcome.counts.calls) {
+    fail(`ct-print read ${(kinds.Call ?? 0) - 1} calls out of the container; the page showed ${outcome.counts.calls}`);
+  }
+  if (decoded.paths.length !== outcome.counts.paths) {
+    fail(`ct-print read ${decoded.paths.length} paths out of the container; the page showed ${outcome.counts.paths}`);
+  }
+} else {
+  console.log(
+    `\nSKIP: ${CT_PRINT} is missing, so the downloaded container was not decoded.\n` +
+      '      Build it from codetracer-trace-format-nim branch `wasm/nim-to-wasm`\n' +
+      '      (`nix develop --command nimble buildCtPrint`) or set CODETRACER_CT_PRINT.',
+  );
+}
+
+console.log('\nPASS: the browser compiled Noir source, traced it inside wasm, and handed back');
+console.log('      a .ct container whose counts match native `nargo trace`.');

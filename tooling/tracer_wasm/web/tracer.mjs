@@ -73,6 +73,45 @@ export async function loadTracer(wasmBytes) {
       return finish(result);
     },
 
+    /// Compile Noir source, trace it, and get back a real `.ct` CTFS
+    /// container built inside the module.
+    ///
+    /// Returns `{ trace, container: { bytes, ... }, ct }` where `ct` is a
+    /// `Uint8Array` of the container itself and `trace` is the same event
+    /// stream `traceSource` returns -- both produced in a single pass, so the
+    /// counts shown next to a download describe the file being downloaded.
+    ///
+    /// The module frames the two as `[u32 LE summary_len][summary JSON][.ct]`,
+    /// because a `.ct` is arbitrary bytes and cannot ride inside JSON.
+    traceSourceContainer(request) {
+      const [ptr, len] = writeString(JSON.stringify(request));
+      let result;
+      try {
+        result = takeResult(exports.ct_trace_source_container(ptr, len));
+      } finally {
+        exports.ct_free(ptr, len);
+      }
+      if (result.isError) {
+        throw new Error(decoder.decode(result.bytes));
+      }
+
+      const summaryLen = new DataView(
+        result.bytes.buffer,
+        result.bytes.byteOffset,
+        4,
+      ).getUint32(0, true);
+      const summary = JSON.parse(decoder.decode(result.bytes.subarray(4, 4 + summaryLen)));
+      const ct = result.bytes.subarray(4 + summaryLen);
+
+      if (ct.length !== summary.container.bytes) {
+        throw new Error(
+          `the module framed ${ct.length} container bytes but reported ${summary.container.bytes}`,
+        );
+      }
+      const { container, ...trace } = summary;
+      return { trace, container, ct };
+    },
+
     /// Trace an already-compiled program. `artifactJson` is a `ProgramArtifact`
     /// as `nargo trace --emit-debug-artifact` writes it. The page does not use
     /// this, but it is what lets a comparison run both halves of the pipeline
@@ -127,6 +166,33 @@ export function summarize(trace) {
     events_total: trace.events.length,
     kinds,
   };
+}
+
+/// The CTFS container magic, so a caller can check it is holding a `.ct`
+/// rather than trusting the length alone. Matches `ct-print`'s own check.
+export const CTFS_MAGIC = [0xc0, 0xde, 0x72, 0xac, 0xe2];
+
+/// True if `bytes` starts with the CTFS magic.
+export function looksLikeCtfs(bytes) {
+  return CTFS_MAGIC.every((b, i) => bytes[i] === b);
+}
+
+/// A UUIDv7 for the recording id.
+///
+/// The module cannot mint one: `wasm32-unknown-unknown` has neither a wall
+/// clock nor a CSPRNG. Supplying it is the host's job, and doing it here is
+/// what stops every recording from sharing one identity.
+export function recordingId(now = Date.now(), random = crypto.getRandomValues(new Uint8Array(10))) {
+  const bytes = new Uint8Array(16);
+  const ms = BigInt(now);
+  for (let i = 0; i < 6; i += 1) {
+    bytes[i] = Number((ms >> BigInt(8 * (5 - i))) & 0xffn);
+  }
+  bytes.set(random, 6);
+  bytes[6] = (bytes[6] & 0x0f) | 0x70; // version 7
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 /// The error events the program produced, e.g. a failed `assert`.

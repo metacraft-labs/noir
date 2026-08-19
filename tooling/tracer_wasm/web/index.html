@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Noir tracer — source to trace, in WebAssembly</title>
+    <title>Noir tracer — source to a .ct container, in WebAssembly</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -74,14 +74,15 @@
     </style>
   </head>
   <body>
-    <h1>Noir source &rarr; execution trace, entirely in WebAssembly</h1>
+    <h1>Noir source &rarr; a <code>.ct</code> trace container, entirely in WebAssembly</h1>
     <p class="lede">
       The text in the box below is a JavaScript string. It is copied into the linear memory of a
       single <code>wasm32-unknown-unknown</code> module and compiled <em>there</em> — the Noir
-      compiler, its standard library and the ACVM/Brillig interpreter are all inside the module — and
-      the module hands back the execution trace. There is no server doing any of this: the page is
-      static files, and the module is instantiated with an empty import object, so it has no way to
-      call out.
+      compiler, its standard library and the ACVM/Brillig interpreter are all inside the module —
+      the module executes it, and hands back a complete <code>.ct</code> CodeTracer container,
+      assembled in that same linear memory. There is no server doing any of this: the page is static
+      files, and the module is instantiated with an empty import object, so it has no way to call
+      out.
     </p>
 
     <div class="cols">
@@ -97,7 +98,8 @@
 
     <div class="row">
       <button id="run" disabled>Trace</button>
-      <button id="download" class="secondary hidden">Download trace</button>
+      <button id="download" class="secondary hidden">Download .ct</button>
+      <button id="download-json" class="secondary hidden">Download the event stream</button>
       <span id="status">Loading the WebAssembly module…</span>
     </div>
 
@@ -105,15 +107,18 @@
       <h2>What the module produced</h2>
       <table id="counts"></table>
       <p class="note" id="module-note"></p>
+      <p class="note" id="container-note"></p>
       <p class="note">
-        <strong>What this download is not, yet:</strong> a <code>.ct</code> CTFS container. The
-        module returns the low-level event stream — the same events, in the same order, that the
-        container writer would buffer — and the download is that stream as JSON. No <code>.ct</code>
-        writer can currently be reached from <code>wasm32-unknown-unknown</code>: the Nim writer
-        links a static library, and the pure-Rust one gates its CTFS writer behind
-        <code>#[cfg(not(target_arch = "wasm32"))]</code> and pulls in C <code>zstd</code>. Making one
-        reach wasm is being done separately; when it lands, this button hands you the container
-        instead, and nothing else on this page changes.
+        <strong>One thing this container does not carry: columns.</strong> It is written by the
+        pure-Rust <code>CtfsTraceWriter</code>, the only <code>.ct</code> writer that builds for
+        <code>wasm32-unknown-unknown</code> today. That writer has no column-bearing step encoder —
+        no <code>paths.dat</code> Layout&nbsp;A line-length table, no <code>sekDeltaColumn</code>
+        opcode — so it does not set the <code>meta.dat</code> capability bits either, because
+        advertising a capability the bytes do not carry would make a reader ask for columns and
+        decode garbage rather than fail. The Noir recorder <em>does</em> request column-aware steps
+        on every trace, and the writer reports that the request was dropped; that is the
+        <code>column-aware</code> row above. Native <code>nargo trace</code>, which uses the Nim
+        writer, still produces the column-aware container.
       </p>
 
       <h2>Steps</h2>
@@ -124,7 +129,7 @@
     </div>
 
     <script type="module">
-      import { loadTracer, summarize, errorEvents } from './tracer.mjs';
+      import { loadTracer, summarize, errorEvents, looksLikeCtfs, recordingId } from './tracer.mjs';
 
       const EXAMPLE_SOURCE = `// Test unsafe integer multiplication with overflow: 12^8 = 429 981 696
 // The circuit should handle properly the growth of the bit size
@@ -144,6 +149,7 @@ fn main(mut x: u32, y: u32, z: u32) {
       const statusEl = $('status');
       const runEl = $('run');
       const downloadEl = $('download');
+      const downloadJsonEl = $('download-json');
 
       sourceEl.value = EXAMPLE_SOURCE;
       inputsEl.value = EXAMPLE_INPUTS;
@@ -171,24 +177,29 @@ fn main(mut x: u32, y: u32, z: u32) {
       }
 
       let lastDownload = null;
+      let lastJsonDownload = null;
 
       runEl.addEventListener('click', () => {
         runEl.disabled = true;
         downloadEl.classList.add('hidden');
+        downloadJsonEl.classList.add('hidden');
         $('results').classList.add('hidden');
-        setStatus('Compiling and tracing inside wasm…');
+        setStatus('Compiling, tracing and writing the container inside wasm…');
 
         // Yield a frame so the status paints before the (synchronous) wasm call.
         requestAnimationFrame(() => {
           const started = performance.now();
-          let trace;
+          let result;
           try {
-            trace = tracer.traceSource({
+            result = tracer.traceSourceContainer({
               files: { 'src/main.nr': sourceEl.value },
               entry_point: 'src/main.nr',
               inputs: inputsEl.value,
               inputs_are_json: false,
               package: 'web_demo',
+              // The module has no clock and no CSPRNG, so the recording's
+              // identity has to come from here.
+              recording_id: recordingId(),
             });
           } catch (error) {
             setStatus(error.message, true);
@@ -198,30 +209,42 @@ fn main(mut x: u32, y: u32, z: u32) {
           }
           const elapsed = performance.now() - started;
 
-          render(trace, elapsed);
+          render(result.trace, elapsed, result);
           runEl.disabled = false;
         });
       });
 
-      function render(trace, elapsed) {
+      function render(trace, elapsed, result = null) {
         const counts = summarize(trace);
         const errors = errorEvents(trace);
+        const ct = result?.ct ?? null;
 
         setStatus(
-          `Traced in ${elapsed.toFixed(0)} ms — ${counts.steps} steps, ${counts.calls} calls.` +
+          `Traced in ${elapsed.toFixed(0)} ms — ${counts.steps} steps, ${counts.calls} calls` +
+            (ct ? `, ${ct.length.toLocaleString()} bytes of .ct.` : '.') +
             (errors.length ? ` ${errors.length} error event(s).` : ''),
         );
 
-        $('counts').innerHTML =
-          '<tr><th>quantity</th><th>count</th></tr>' +
-          ['steps', 'calls', 'paths', 'functions', 'varnames', 'types', 'values', 'io_events']
-            .map((k) => `<tr><td>${k}</td><td>${counts[k]}</td></tr>`)
-            .join('');
+        const rows = ['steps', 'calls', 'paths', 'functions', 'varnames', 'types', 'values', 'io_events']
+          .map((k) => `<tr><td>${k}</td><td>${counts[k]}</td></tr>`);
+        if (result) {
+          rows.push(
+            `<tr><td>.ct container</td><td>${result.container.bytes.toLocaleString()} bytes</td></tr>`,
+            `<tr><td>column-aware</td><td>${result.container.column_aware ? 'yes' : 'no — requested and dropped, see below'}</td></tr>`,
+          );
+        }
+        $('counts').innerHTML = '<tr><th>quantity</th><th>count</th></tr>' + rows.join('');
 
         $('module-note').textContent =
           `Paths registered: ${trace.paths.join(', ')}. ` +
-          `Column-aware steps: ${trace.capabilities.column_aware_steps}. ` +
+          `Column-aware steps requested by the recorder: ${trace.capabilities.column_aware_steps}. ` +
           `Total low-level events: ${counts.events_total}.`;
+
+        $('container-note').textContent = ct
+          ? `The container starts with the CTFS magic ${looksLikeCtfs(ct) ? 'c0 de 72 ac e2' : '(MISSING!)'}` +
+            `, recording id ${result.container.recording_id ?? '(none supplied)'}. ` +
+            'Read it with: ct-print --full <file>'
+          : '';
 
         // A legible walk of the recorded steps: line, then the variables live at
         // that point. This is the trace, decoded, rather than a claim about it.
@@ -241,24 +264,37 @@ fn main(mut x: u32, y: u32, z: u32) {
         $('raw').textContent =
           raw.slice(0, 60).join('\n') + (raw.length > 60 ? `\n… ${raw.length - 60} more lines` : '');
 
-        lastDownload = {
+        lastDownload = ct
+          ? {
+              blob: new Blob([ct], { type: 'application/octet-stream' }),
+              name: 'web_demo.ct',
+            }
+          : null;
+        lastJsonDownload = {
           blob: new Blob([JSON.stringify(trace)], { type: 'application/json' }),
           name: 'web_demo.trace.json',
         };
-        downloadEl.textContent = `Download ${lastDownload.name}`;
-        downloadEl.classList.remove('hidden');
+        if (lastDownload) {
+          downloadEl.textContent = `Download ${lastDownload.name}`;
+          downloadEl.classList.remove('hidden');
+        }
+        downloadJsonEl.textContent = `Download ${lastJsonDownload.name}`;
+        downloadJsonEl.classList.remove('hidden');
         $('results').classList.remove('hidden');
       }
 
-      downloadEl.addEventListener('click', () => {
-        if (!lastDownload) return;
-        const url = URL.createObjectURL(lastDownload.blob);
+      function save(download) {
+        if (!download) return;
+        const url = URL.createObjectURL(download.blob);
         const anchor = document.createElement('a');
         anchor.href = url;
-        anchor.download = lastDownload.name;
+        anchor.download = download.name;
         anchor.click();
         URL.revokeObjectURL(url);
-      });
+      }
+
+      downloadEl.addEventListener('click', () => save(lastDownload));
+      downloadJsonEl.addEventListener('click', () => save(lastJsonDownload));
 
       // Let a headless harness drive the same path the button does.
       window.__tracer = { tracer, render };
