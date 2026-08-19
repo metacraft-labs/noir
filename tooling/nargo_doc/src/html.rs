@@ -13,6 +13,7 @@ use crate::{
         has_uri::HasUri,
         id_to_info::{ItemInfo, compute_id_to_info},
         markdown_utils::{fix_markdown, markdown_summary},
+        search_index::{compute_search_index, render_search_index_js},
         trait_impls::gather_all_trait_impls,
     },
     items::{
@@ -29,6 +30,7 @@ mod has_class;
 mod has_uri;
 mod id_to_info;
 mod markdown_utils;
+mod search_index;
 mod trait_impls;
 
 /// Returns a list of (path, contents) representing the HTML files for the given crates.
@@ -90,6 +92,7 @@ impl HTMLCreator {
     fn process_workspace(&mut self, workspace: &Workspace) {
         self.create_styles();
         self.create_js();
+        self.create_search_index(workspace);
         self.create_all_items(workspace);
         self.create_index(workspace);
 
@@ -112,6 +115,16 @@ impl HTMLCreator {
         let contents = include_str!("nargo_doc.js");
         self.output.push_str(contents);
         self.push_file(PathBuf::from("nargo_doc.js"));
+
+        let contents = include_str!("search.js");
+        self.output.push_str(contents);
+        self.push_file(PathBuf::from("search.js"));
+    }
+
+    fn create_search_index(&mut self, workspace: &Workspace) {
+        let entries = compute_search_index(workspace);
+        self.output.push_str(&render_search_index_js(&entries));
+        self.push_file(PathBuf::from("search-index.js"));
     }
 
     fn create_all_items(&mut self, workspace: &Workspace) {
@@ -120,8 +133,7 @@ impl HTMLCreator {
         self.sidebar_start();
         self.render_all_items_sidebar(&all_items);
         self.sidebar_end();
-        self.main_start(false);
-        self.h1(&format!("All items in {}", workspace.name));
+        self.main_start(false, &format!("All items in {}", workspace.name));
         self.render_all_items_list("Structs", "struct", &all_items.structs);
         self.render_all_items_list("Traits", "trait", &all_items.traits);
         self.render_all_items_list("Type aliases", "type", &all_items.type_aliases);
@@ -197,8 +209,7 @@ impl HTMLCreator {
         self.sidebar_start();
         self.sidebar_end();
 
-        self.main_start(false);
-        self.h1(&format!("{} documentation", workspace.name));
+        self.main_start(false, &format!("{} documentation", workspace.name));
         self.render_list("Crates", "crates", false, 0, &crates);
         self.main_end();
         self.html_end();
@@ -213,8 +224,7 @@ impl HTMLCreator {
         self.sidebar_start();
         self.render_crate_sidebar(workspace, krate);
         self.sidebar_end();
-        self.main_start(false);
-        self.h1(&format!("Crate <span class=\"crate\">{}</span>", krate.name));
+        self.main_start(false, &format!("Crate <span class=\"crate\">{}</span>", krate.name));
         self.render_comments(krate.root_module.comments.as_ref(), 1);
         self.render_items(&krate.root_module.items, false, 0);
         self.main_end();
@@ -469,8 +479,10 @@ impl HTMLCreator {
         self.sidebar_start();
         self.render_module_sidebar(parent_module, module);
         self.sidebar_end();
-        self.main_start(false);
-        self.h1(&format!("{kind} <span id=\"mod\" class=\"module\">{}</span>", module.name));
+        self.main_start(
+            false,
+            &format!("{kind} <span id=\"mod\" class=\"module\">{}</span>", module.name),
+        );
         self.render_comments(module.comments.as_ref(), 1);
         self.render_items(&module.items, false, 0);
         self.main_end();
@@ -538,8 +550,10 @@ impl HTMLCreator {
         self.render_struct_sidebar(struct_);
         self.render_module_contents_sidebar(parent_module, 0);
         self.sidebar_end();
-        self.main_start(true);
-        self.h1(&format!("Struct <span id=\"struct\" class=\"struct\">{}</span>", struct_.name));
+        self.main_start(
+            true,
+            &format!("Struct <span id=\"struct\" class=\"struct\">{}</span>", struct_.name),
+        );
         self.render_struct_code(struct_);
         self.render_comments(struct_.comments.as_ref(), 1);
         self.render_struct_fields(&struct_.fields);
@@ -600,8 +614,10 @@ impl HTMLCreator {
         self.render_trait_sidebar(trait_);
         self.render_module_contents_sidebar(parent_module, 0);
         self.sidebar_end();
-        self.main_start(true);
-        self.h1(&format!("Trait <span id=\"trait\" class=\"trait\">{}</span>", trait_.name));
+        self.main_start(
+            true,
+            &format!("Trait <span id=\"trait\" class=\"trait\">{}</span>", trait_.name),
+        );
         self.render_trait_code(trait_);
         self.render_comments(trait_.comments.as_ref(), 1);
         self.render_trait_methods("Required methods", &trait_.required_methods);
@@ -689,8 +705,7 @@ impl HTMLCreator {
         self.sidebar_start();
         self.render_module_contents_sidebar(parent_module, 0);
         self.sidebar_end();
-        self.main_start(true);
-        self.h1(&format!("Type alias <span class=\"type\">{}</span>", alias.name));
+        self.main_start(true, &format!("Type alias <span class=\"type\">{}</span>", alias.name));
         self.render_type_alias_code(alias);
         self.render_comments(alias.comments.as_ref(), 1);
         self.main_end();
@@ -703,8 +718,7 @@ impl HTMLCreator {
         self.sidebar_start();
         self.render_module_contents_sidebar(parent_module, 0);
         self.sidebar_end();
-        self.main_start(true);
-        self.h1(&format!("Function <span class=\"fn\">{}</span>", function.name));
+        self.main_start(true, &format!("Function <span class=\"fn\">{}</span>", function.name));
         let as_header = false;
         let link = false;
         let output_id = false;
@@ -719,8 +733,7 @@ impl HTMLCreator {
         self.sidebar_start();
         self.render_module_contents_sidebar(parent_module, 0);
         self.sidebar_end();
-        self.main_start(true);
-        self.h1(&format!("Global <span class=\"global\">{}</span>", global.name));
+        self.main_start(true, &format!("Global <span class=\"global\">{}</span>", global.name));
         self.render_global_code(global);
         self.render_comments(global.comments.as_ref(), 1);
         self.main_end();
@@ -734,11 +747,13 @@ impl HTMLCreator {
         self.render_primitive_sidebar(primitive);
         self.render_module_contents_sidebar(parent_module, 0);
         self.sidebar_end();
-        self.main_start(true);
-        self.h1(&format!(
-            "Primitive type <span id=\"primitive\" class=\"primitive\">{}</span>",
-            primitive.kind
-        ));
+        self.main_start(
+            true,
+            &format!(
+                "Primitive type <span id=\"primitive\" class=\"primitive\">{}</span>",
+                primitive.kind
+            ),
+        );
         self.render_comments(primitive.comments.as_ref(), 1);
         self.render_impls(&primitive.impls);
 
@@ -776,7 +791,8 @@ impl HTMLCreator {
 
     fn render_struct_code(&mut self, struct_: &Struct) {
         self.output.push_str("<pre><code>");
-        self.output.push_str(&format!("pub struct {}", struct_.name));
+        let comptime = if struct_.comptime { "comptime " } else { "" };
+        self.output.push_str(&format!("pub {}struct {}", comptime, struct_.name));
         self.render_generics(&struct_.generics);
         if struct_.fields.is_empty() {
             if struct_.has_private_fields {
@@ -839,7 +855,12 @@ impl HTMLCreator {
         self.render_generics(&impl_.generics);
         self.output.push(' ');
         self.render_type(&impl_.r#type);
+        let indent = 0;
+        self.render_where_clause(&impl_.where_clause, indent);
         self.output.push_str("</code></h3>\n\n");
+
+        self.render_comments(impl_.comments.as_ref(), 3);
+
         let output_id = true;
 
         self.self_type = Some(impl_.r#type.clone());
@@ -990,7 +1011,8 @@ impl HTMLCreator {
 
     fn render_type_alias_code(&mut self, alias: &TypeAlias) {
         self.output.push_str("<pre><code>");
-        self.output.push_str(&format!("pub type {}", alias.name));
+        let comptime = if alias.comptime { "comptime " } else { "" };
+        self.output.push_str(&format!("pub {}type {}", comptime, alias.name));
         self.render_generics(&alias.generics);
         self.output.push_str(" = ");
         self.render_type(&alias.r#type);
@@ -1106,18 +1128,19 @@ impl HTMLCreator {
             self.output.push_str("comptime ");
         }
         self.output.push_str("fn ");
-        if link {
-            self.output.push_str(&format!("<a href=\"#{}\">", function.name));
-        }
-        if color_name {
-            self.output.push_str("<span class=\"fn\">");
-            self.output.push_str(&function.name);
-            self.output.push_str("</span>");
-        } else {
-            self.output.push_str(&function.name);
-        }
-        if link {
-            self.output.push_str("</a>");
+        // Put the `fn` color class on the link itself (rather than a nested span) so the hover
+        // underline, which takes the link's color, matches the name's color.
+        match (link, color_name) {
+            (true, true) => self
+                .output
+                .push_str(&format!("<a href=\"#{0}\" class=\"fn\">{0}</a>", function.name)),
+            (true, false) => {
+                self.output.push_str(&format!("<a href=\"#{0}\">{0}</a>", function.name));
+            }
+            (false, true) => {
+                self.output.push_str(&format!("<span class=\"fn\">{}</span>", function.name));
+            }
+            (false, false) => self.output.push_str(&function.name),
         }
         self.render_generics(&function.generics);
         self.output.push('(');
@@ -1224,11 +1247,11 @@ impl HTMLCreator {
     }
 
     fn render_type(&mut self, typ: &Type) {
-        if let Some(self_type) = &self.self_type {
-            if self_type == typ {
-                self.output.push_str("Self");
-                return;
-            }
+        if let Some(self_type) = &self.self_type
+            && self_type == typ
+        {
+            self.output.push_str("Self");
+            return;
         }
 
         match typ {
@@ -1427,7 +1450,7 @@ impl HTMLCreator {
 
         let mut lines = comments.lines().map(|line| line.to_string()).collect::<Vec<_>>();
         for link in links.iter().rev() {
-            let target = &link.target;
+            let Some(target) = &link.target else { continue };
             let name = &link.name;
             let id = target.id();
             let anchor = target
@@ -1440,19 +1463,14 @@ impl HTMLCreator {
                     }
                 })
                 .unwrap_or_default();
-            let mut line = lines[link.line].to_string();
-            if let Some(id) = id {
-                if let Some(ItemInfo {
-                    path: _,
-                    uri,
-                    class: _,
-                    visibility: ItemVisibility::Public,
-                }) = self.id_to_info.get(id)
-                {
-                    let nesting = "../".repeat(self.current_path.len());
-                    let replacement = format!("[{name}]({nesting}{uri}{anchor})");
-                    line.replace_range(link.start..link.end, &replacement);
-                }
+            let mut line = lines[link.line].clone();
+            if let Some(id) = id
+                && let Some(ItemInfo { path: _, uri, class: _, visibility: ItemVisibility::Public }) =
+                    self.id_to_info.get(id)
+            {
+                let nesting = "../".repeat(self.current_path.len());
+                let replacement = format!("[{name}]({nesting}{uri}{anchor})");
+                line.replace_range(link.start..link.end, &replacement);
             }
             if let Some(primitive_type) = target.primitive_type() {
                 let nesting = "../".repeat(self.current_path.len());
@@ -1497,8 +1515,7 @@ impl HTMLCreator {
     fn get_all_trait_impls(&self, trait_: &Trait) -> Vec<TraitImpl> {
         self.all_trait_impls
             .get(&trait_.id)
-            .map(|impls| impls.iter().cloned().collect())
-            .unwrap_or_else(|| trait_.trait_impls.clone())
+            .map_or_else(|| trait_.trait_impls.clone(), |impls| impls.iter().cloned().collect())
     }
 
     fn html_start(&mut self, title: &str, short_title: &str) {
@@ -1522,14 +1539,14 @@ impl HTMLCreator {
         }
 
         let nesting = self.current_path.len();
-        self.output.push_str(&format!(
-            "<link rel=\"stylesheet\" href=\"{}styles.css\">\n",
-            "../".repeat(nesting)
-        ));
-        self.output.push_str(&format!(
-            "<script defer src=\"{}nargo_doc.js\"></script>\n",
-            "../".repeat(nesting)
-        ));
+        let root = "../".repeat(nesting);
+        self.output.push_str(&format!("<link rel=\"stylesheet\" href=\"{root}styles.css\">\n"));
+        // `docRoot` lets the search results link to pages relative to the documentation root
+        // from any page, regardless of how deeply nested it is.
+        self.output.push_str(&format!("<script>window.docRoot = \"{root}\";</script>\n"));
+        self.output.push_str(&format!("<script defer src=\"{root}search-index.js\"></script>\n"));
+        self.output.push_str(&format!("<script defer src=\"{root}nargo_doc.js\"></script>\n"));
+        self.output.push_str(&format!("<script defer src=\"{root}search.js\"></script>\n"));
         self.output.push_str(&format!("<title>{title} documentation</title>\n"));
         self.output.push_str("</head>\n");
         self.output.push_str("<body>\n");
@@ -1546,12 +1563,26 @@ impl HTMLCreator {
         self.output.push_str("</html>\n");
     }
 
-    fn main_start(&mut self, last_breadcrumb_is_link: bool) {
+    fn main_start(&mut self, last_breadcrumb_is_link: bool, heading: &str) {
         self.output.push_str("<main>\n");
         self.render_breadcrumbs(last_breadcrumb_is_link);
+        // The heading and the search toggle share a flex row, so the toggle lines up with the
+        // item's name. Activating search reveals the input below and replaces the page content
+        // with the results.
+        self.output.push_str("<div class=\"heading-row\">\n");
+        self.output.push_str(&format!("<h1 class=\"heading-content\">{heading}</h1>\n"));
+        self.output.push_str("<button id=\"search-toggle\" type=\"button\">Search</button>\n");
+        self.output.push_str("</div>\n");
+        self.output.push_str(
+            "<input id=\"search-input\" type=\"search\" placeholder=\"Type 's' or '/' to search\" \
+             autocomplete=\"off\" spellcheck=\"false\" aria-label=\"Search\" hidden>\n",
+        );
+        self.output.push_str("<div id=\"search-results\" hidden></div>\n");
+        self.output.push_str("<div id=\"page-content\">\n");
     }
 
     fn main_end(&mut self) {
+        self.output.push_str("</div>\n");
         self.output.push_str("</main>\n");
     }
 
@@ -1610,10 +1641,10 @@ fn get_reexports(items: &[(ItemVisibility, Item)]) -> Vec<&Reexport> {
     items
         .iter()
         .filter_map(|(visibility, item)| {
-            if visibility == &ItemVisibility::Public {
-                if let Item::Reexport(reexport) = item {
-                    return Some(reexport);
-                }
+            if visibility == &ItemVisibility::Public
+                && let Item::Reexport(reexport) = item
+            {
+                return Some(reexport);
             }
             None
         })
@@ -1624,12 +1655,12 @@ fn get_modules(items: &[(ItemVisibility, Item)]) -> Vec<&Module> {
     items
         .iter()
         .filter_map(|(visibility, item)| {
-            if visibility == &ItemVisibility::Public {
-                if let Item::Module(module) = item {
-                    if !module.is_contract && module.has_public_items() {
-                        return Some(module);
-                    }
-                }
+            if visibility == &ItemVisibility::Public
+                && let Item::Module(module) = item
+                && !module.is_contract
+                && module.has_public_items()
+            {
+                return Some(module);
             }
             None
         })
@@ -1640,12 +1671,12 @@ fn get_contracts(items: &[(ItemVisibility, Item)]) -> Vec<&Module> {
     items
         .iter()
         .filter_map(|(visibility, item)| {
-            if visibility == &ItemVisibility::Public {
-                if let Item::Module(module) = item {
-                    if module.is_contract && module.has_public_items() {
-                        return Some(module);
-                    }
-                }
+            if visibility == &ItemVisibility::Public
+                && let Item::Module(module) = item
+                && module.is_contract
+                && module.has_public_items()
+            {
+                return Some(module);
             }
             None
         })
@@ -1656,10 +1687,10 @@ fn get_structs(items: &[(ItemVisibility, Item)]) -> Vec<&Struct> {
     items
         .iter()
         .filter_map(|(visibility, item)| {
-            if visibility == &ItemVisibility::Public {
-                if let Item::Struct(struct_) = item {
-                    return Some(struct_);
-                }
+            if visibility == &ItemVisibility::Public
+                && let Item::Struct(struct_) = item
+            {
+                return Some(struct_);
             }
             None
         })
@@ -1670,10 +1701,10 @@ fn get_traits(items: &[(ItemVisibility, Item)]) -> Vec<&Trait> {
     items
         .iter()
         .filter_map(|(visibility, item)| {
-            if visibility == &ItemVisibility::Public {
-                if let Item::Trait(trait_) = item {
-                    return Some(trait_);
-                }
+            if visibility == &ItemVisibility::Public
+                && let Item::Trait(trait_) = item
+            {
+                return Some(trait_);
             }
             None
         })
@@ -1684,10 +1715,10 @@ fn get_type_aliases(items: &[(ItemVisibility, Item)]) -> Vec<&TypeAlias> {
     items
         .iter()
         .filter_map(|(visibility, item)| {
-            if visibility == &ItemVisibility::Public {
-                if let Item::TypeAlias(alias) = item {
-                    return Some(alias);
-                }
+            if visibility == &ItemVisibility::Public
+                && let Item::TypeAlias(alias) = item
+            {
+                return Some(alias);
             }
             None
         })
@@ -1698,10 +1729,10 @@ fn get_primitive_types(items: &[(ItemVisibility, Item)]) -> Vec<&PrimitiveType> 
     items
         .iter()
         .filter_map(|(visibility, item)| {
-            if visibility == &ItemVisibility::Public {
-                if let Item::PrimitiveType(primitive_type) = item {
-                    return Some(primitive_type);
-                }
+            if visibility == &ItemVisibility::Public
+                && let Item::PrimitiveType(primitive_type) = item
+            {
+                return Some(primitive_type);
             }
             None
         })
@@ -1712,10 +1743,10 @@ fn get_globals(items: &[(ItemVisibility, Item)]) -> Vec<&Global> {
     items
         .iter()
         .filter_map(|(visibility, item)| {
-            if visibility == &ItemVisibility::Public {
-                if let Item::Global(global) = item {
-                    return Some(global);
-                }
+            if visibility == &ItemVisibility::Public
+                && let Item::Global(global) = item
+            {
+                return Some(global);
             }
             None
         })
@@ -1726,10 +1757,10 @@ fn get_functions(items: &[(ItemVisibility, Item)]) -> Vec<&Function> {
     items
         .iter()
         .filter_map(|(visibility, item)| {
-            if visibility == &ItemVisibility::Public {
-                if let Item::Function(function) = item {
-                    return Some(function);
-                }
+            if visibility == &ItemVisibility::Public
+                && let Item::Function(function) = item
+            {
+                return Some(function);
             }
             None
         })
@@ -1807,7 +1838,7 @@ fn generics_to_string(generics: &[Generic]) -> String {
             string.push_str(", ");
         }
         if let Some(numeric) = &generic.numeric {
-            string.push_str(&format!("let {}: {}", generic.name, &type_to_string(numeric, None)));
+            string.push_str(&format!("let {}: {}", generic.name, type_to_string(numeric, None)));
         } else {
             string.push_str(&generic.name);
         }
@@ -1817,10 +1848,10 @@ fn generics_to_string(generics: &[Generic]) -> String {
 }
 
 fn type_to_string(typ: &Type, self_type: Option<&Type>) -> String {
-    if let Some(self_type) = self_type {
-        if self_type == typ {
-            return "Self".to_string();
-        }
+    if let Some(self_type) = self_type
+        && self_type == typ
+    {
+        return "Self".to_string();
     }
 
     match typ {

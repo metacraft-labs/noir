@@ -4,11 +4,12 @@
 //! Dominator trees are useful for tasks such as identifying back-edges in loop analysis or
 //! calculating dominance frontiers.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
 
-use super::{
-    basic_block::BasicBlockId, cfg::ControlFlowGraph, function::Function, post_order::PostOrder,
-};
+#[cfg(test)]
+use super::function::Function;
+use super::{basic_block::BasicBlockId, cfg::ControlFlowGraph, post_order::PostOrder};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// Dominator tree node. We keep one of these per reachable block.
@@ -47,8 +48,11 @@ pub(crate) struct DominatorTree {
     /// reachable block, and no nodes for unreachable blocks.
     nodes: HashMap<BasicBlockId, DominatorTreeNode>,
 
-    /// Subsequent calls to `dominates` are cached to speed up access
-    cache: HashMap<(BasicBlockId, BasicBlockId), bool>,
+    /// Subsequent calls to `dominates` are cached to speed up access.
+    ///
+    /// Wrapped in a `RefCell` so that `dominates` can memoize behind a shared `&self` reference,
+    /// keeping it a logically-pure query that callers don't need to hold a `&mut` borrow to use.
+    cache: RefCell<HashMap<(BasicBlockId, BasicBlockId), bool>>,
 }
 
 /// Methods for querying the dominator tree.
@@ -69,7 +73,8 @@ impl DominatorTree {
     /// This returns `None` if `block_id` is not reachable from the entry block, or if it is the
     /// entry block which has no dominators.
     pub(crate) fn immediate_dominator(&self, block_id: BasicBlockId) -> Option<BasicBlockId> {
-        self.nodes.get(&block_id).and_then(|node| node.immediate_dominator)
+        let node = self.nodes.get(&block_id)?;
+        node.immediate_dominator
     }
 
     /// Compare two blocks relative to the reverse post-order.
@@ -93,13 +98,13 @@ impl DominatorTree {
     /// This function panics if either of the blocks are unreachable.
     ///
     /// A block is considered to dominate itself.
-    pub(crate) fn dominates(&mut self, block_a_id: BasicBlockId, block_b_id: BasicBlockId) -> bool {
-        if let Some(res) = self.cache.get(&(block_a_id, block_b_id)) {
+    pub(crate) fn dominates(&self, block_a_id: BasicBlockId, block_b_id: BasicBlockId) -> bool {
+        if let Some(res) = self.cache.borrow().get(&(block_a_id, block_b_id)) {
             return *res;
         }
 
         let result = self.dominates_helper(block_a_id, block_b_id);
-        self.cache.insert((block_a_id, block_b_id), result);
+        self.cache.borrow_mut().insert((block_a_id, block_b_id), result);
         result
     }
 
@@ -151,7 +156,7 @@ impl DominatorTree {
     /// This method should be used for when we want to compute a post-dominator tree.
     /// A post-dominator tree just expects the control flow graph to be reversed.
     pub(crate) fn with_cfg_and_post_order(cfg: &ControlFlowGraph, post_order: &PostOrder) -> Self {
-        let mut dom_tree = DominatorTree { nodes: HashMap::default(), cache: HashMap::default() };
+        let mut dom_tree = DominatorTree { nodes: HashMap::default(), cache: RefCell::default() };
         dom_tree.compute_dominator_tree(cfg, post_order);
         dom_tree
     }
@@ -161,9 +166,10 @@ impl DominatorTree {
     /// This approach computes the control flow graph and post-order internally and then
     /// discards them. If either should be retained reuse it is better to instead pre-compute them
     /// and build the dominator tree with `DominatorTree::with_cfg_and_post_order`.
+    #[cfg(test)]
     pub(crate) fn with_function(func: &Function) -> Self {
         let cfg = ControlFlowGraph::with_function(func);
-        let post_order = PostOrder::with_function(func);
+        let post_order = PostOrder::with_cfg(&cfg);
         Self::with_cfg_and_post_order(&cfg, &post_order)
     }
 
@@ -219,7 +225,7 @@ impl DominatorTree {
             changed = false;
             for &block_id in entry_free_post_order.iter().rev() {
                 let immediate_dominator = self.compute_immediate_dominator(block_id, cfg);
-                changed = self
+                changed |= self
                     .nodes
                     .get_mut(&block_id)
                     .expect("Assigned in first pass")
@@ -278,7 +284,7 @@ impl DominatorTree {
             }
         }
 
-        debug_assert_eq!(block_a_id, block_b_id, "Unreachable block passed to common_dominator?");
+        assert_eq!(block_a_id, block_b_id, "Unreachable block passed to common_dominator?");
         block_a_id
     }
 
@@ -308,9 +314,34 @@ impl DominatorTree {
     /// a dominator tree (standard CFG) or a post-dominator tree (reversed CFG).
     /// Calling this method on a dominator tree will return a function's dominance frontiers,
     /// while on a post-dominator tree the method will return the function's reverse (or post) dominance frontiers.
+    ///
+    /// Note: this variant filters out back-edges, so loop headers are NOT included in the
+    /// frontier of loop body blocks. Use `compute_dominance_frontiers_with_back_edges` for
+    /// the standard definition needed by SSA construction (block parameter placement).
     pub(crate) fn compute_dominance_frontiers(
-        &mut self,
+        &self,
         cfg: &ControlFlowGraph,
+    ) -> HashMap<BasicBlockId, HashSet<BasicBlockId>> {
+        self.compute_dominance_frontiers_inner(cfg, false)
+    }
+
+    /// Compute dominance frontiers using the standard definition (Cytron et al. 1991).
+    ///
+    /// Unlike `compute_dominance_frontiers`, this includes loop headers in the frontier of
+    /// loop body blocks. This matches the standard definition: DF(X) = { Y | ∃ pred Z of Y:
+    /// X dom Z ∧ X !sdom Y }. The standard definition is required for correct block parameter
+    /// placement during SSA construction (e.g., in mem2reg).
+    pub(crate) fn compute_dominance_frontiers_with_back_edges(
+        &self,
+        cfg: &ControlFlowGraph,
+    ) -> HashMap<BasicBlockId, HashSet<BasicBlockId>> {
+        self.compute_dominance_frontiers_inner(cfg, true)
+    }
+
+    fn compute_dominance_frontiers_inner(
+        &self,
+        cfg: &ControlFlowGraph,
+        include_back_edges: bool,
     ) -> HashMap<BasicBlockId, HashSet<BasicBlockId>> {
         let mut dominance_frontiers: HashMap<BasicBlockId, HashSet<BasicBlockId>> =
             HashMap::default();
@@ -338,7 +369,11 @@ impl DominatorTree {
                     // Checking if the current block dominates the predecessor;
                     // for example a loop header has the loop body as one of its predecessors, which it dominates,
                     // but we don't consider following back-edges as alternative paths on which we reach the header first.
-                    if self.dominates(block_id, runner) {
+                    //
+                    // When `include_back_edges` is true (standard SSA definition), we skip this check
+                    // so loop headers ARE included in the frontier of loop body blocks. This is needed
+                    // for correct block parameter placement in mem2reg.
+                    if !include_back_edges && self.dominates(block_id, runner) {
                         break;
                     }
                     dominance_frontiers.entry(runner).or_default().insert(block_id);
@@ -390,7 +425,7 @@ mod tests {
                 call_stack: CallStackId::root(),
             },
         );
-        let mut dom_tree = DominatorTree::with_function(&func);
+        let dom_tree = DominatorTree::with_function(&func);
         assert!(dom_tree.dominates(block0_id, block0_id));
     }
 
@@ -415,7 +450,7 @@ mod tests {
         let block2_id = builder.insert_block();
         let block3_id = builder.insert_block();
 
-        builder.terminate_with_jmpif(cond, block2_id, block3_id);
+        builder.terminate_with_jmpif_no_args(cond, block2_id, block3_id);
         builder.switch_to_block(block1_id);
         builder.terminate_with_jmp(block2_id, vec![]);
         builder.switch_to_block(block2_id);
@@ -449,7 +484,7 @@ mod tests {
     // unreachable, performing this query indicates an internal compiler error.
     #[test]
     fn unreachable_node_asserts() {
-        let (mut dt, b0, _b1, b2, b3) = unreachable_node_setup();
+        let (dt, b0, _b1, b2, b3) = unreachable_node_setup();
 
         assert!(dt.dominates(b0, b0));
         assert!(dt.dominates(b0, b2));
@@ -467,42 +502,42 @@ mod tests {
     #[test]
     #[should_panic]
     fn unreachable_node_panic_b0_b1() {
-        let (mut dt, b0, b1, _b2, _b3) = unreachable_node_setup();
+        let (dt, b0, b1, _b2, _b3) = unreachable_node_setup();
         dt.dominates(b0, b1);
     }
 
     #[test]
     #[should_panic]
     fn unreachable_node_panic_b1_b0() {
-        let (mut dt, b0, b1, _b2, _b3) = unreachable_node_setup();
+        let (dt, b0, b1, _b2, _b3) = unreachable_node_setup();
         dt.dominates(b1, b0);
     }
 
     #[test]
     #[should_panic]
     fn unreachable_node_panic_b1_b1() {
-        let (mut dt, _b0, b1, _b2, _b3) = unreachable_node_setup();
+        let (dt, _b0, b1, _b2, _b3) = unreachable_node_setup();
         dt.dominates(b1, b1);
     }
 
     #[test]
     #[should_panic]
     fn unreachable_node_panic_b1_b2() {
-        let (mut dt, _b0, b1, b2, _b3) = unreachable_node_setup();
+        let (dt, _b0, b1, b2, _b3) = unreachable_node_setup();
         dt.dominates(b1, b2);
     }
 
     #[test]
     #[should_panic]
     fn unreachable_node_panic_b1_b3() {
-        let (mut dt, _b0, b1, _b2, b3) = unreachable_node_setup();
+        let (dt, _b0, b1, _b2, b3) = unreachable_node_setup();
         dt.dominates(b1, b3);
     }
 
     #[test]
     #[should_panic]
     fn unreachable_node_panic_b3_b1() {
-        let (mut dt, _b0, b1, b2, _b3) = unreachable_node_setup();
+        let (dt, _b0, b1, b2, _b3) = unreachable_node_setup();
         dt.dominates(b2, b1);
     }
 
@@ -531,7 +566,7 @@ mod tests {
     }
 
     fn check_dom_matrix(
-        mut dom_tree: DominatorTree,
+        dom_tree: DominatorTree,
         blocks: Vec<BasicBlockId>,
         dominance_matrix: Vec<Vec<bool>>,
     ) {
@@ -631,7 +666,7 @@ mod tests {
     #[test]
     fn dom_frontiers_backwards_layout() {
         let func = backwards_layout_setup();
-        let mut dt = DominatorTree::with_function(&func);
+        let dt = DominatorTree::with_function(&func);
 
         let cfg = ControlFlowGraph::with_function(&func);
         let dom_frontiers = dt.compute_dominance_frontiers(&cfg);
@@ -641,7 +676,7 @@ mod tests {
     #[test]
     fn post_dom_frontiers_backwards_layout() {
         let func = backwards_layout_setup();
-        let mut post_dom = DominatorTree::with_function_post_dom(&func);
+        let post_dom = DominatorTree::with_function_post_dom(&func);
 
         let cfg = ControlFlowGraph::with_function(&func);
         let dom_frontiers = post_dom.compute_dominance_frontiers(&cfg);
@@ -667,9 +702,9 @@ mod tests {
             jmp b1(u32 0)
           b1(v3: u32):
             v8 = lt v3, u32 4
-            jmpif v8 then: b2, else: b3
+            jmpif v8 then: b2(), else: b3()
           b2():
-            jmpif v5 then: b4, else: b5
+            jmpif v5 then: b4(), else: b5()
           b3():
             return
           b4():
@@ -769,7 +804,7 @@ mod tests {
         let cfg = ControlFlowGraph::with_function(main);
         let post_order = PostOrder::with_cfg(&cfg);
 
-        let mut dt = DominatorTree::with_cfg_and_post_order(&cfg, &post_order);
+        let dt = DominatorTree::with_cfg_and_post_order(&cfg, &post_order);
         let dom_frontiers = dt.compute_dominance_frontiers(&cfg);
 
         let blocks = vecmap(0..6, Id::<BasicBlock>::test_new);
@@ -802,7 +837,7 @@ mod tests {
           b0(v0: u1):
             jmp b1()
           b1():
-            jmpif v0 then: b1, else: b2
+            jmpif v0 then: b1(), else: b2()
           b2():
             return
         }
@@ -813,7 +848,7 @@ mod tests {
         let cfg = ControlFlowGraph::with_function(main);
         let post_order = PostOrder::with_cfg(&cfg);
 
-        let mut dt = DominatorTree::with_cfg_and_post_order(&cfg, &post_order);
+        let dt = DominatorTree::with_cfg_and_post_order(&cfg, &post_order);
         let dom_frontiers = dt.compute_dominance_frontiers(&cfg);
 
         assert!(dom_frontiers.is_empty());
@@ -828,7 +863,7 @@ mod tests {
         let reversed_cfg = cfg.reverse();
         let post_order = PostOrder::with_cfg(&reversed_cfg);
 
-        let mut post_dom = DominatorTree::with_cfg_and_post_order(&reversed_cfg, &post_order);
+        let post_dom = DominatorTree::with_cfg_and_post_order(&reversed_cfg, &post_order);
         let post_dom_frontiers = post_dom.compute_dominance_frontiers(&reversed_cfg);
 
         let blocks = vecmap(0..6, Id::<BasicBlock>::test_new);

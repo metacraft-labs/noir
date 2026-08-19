@@ -7,6 +7,8 @@ on:
     paths: [docs/**]
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   publish-docs:
     name: Publish docs
@@ -16,24 +18,31 @@ jobs:
 
     steps:
       - name: Checkout release branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: taiki-e/install-action@just
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22.15.0'
+          cache: 'yarn'
+          cache-dependency-path: 'docs/yarn.lock'
 
-      - name: Install Yarn dependencies
-        uses: ./.github/actions/setup
-
-      - name: Install deps
-        run: just install-js-tools
+      - name: Install docs dependencies
+        working-directory: docs
+        run: yarn install --immutable
 
       - name: Query active docs versions
-        run: yarn workspace docs version::stables
+        working-directory: docs
+        run: yarn version::stables
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build docs for deploying
-        run: yarn workspaces foreach -Rpt --from docs run build
+        working-directory: docs
+        run: yarn build
 
       - name: Deploy to Netlify
-        uses: nwtgck/actions-netlify@v3.0
+        uses: nwtgck/actions-netlify@d22a32a27c918fe470bbc562e984f80ec48c2668 # v4.0.0
         with:
           publish-dir: "./docs/build"
           production-branch: master

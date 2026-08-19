@@ -11,8 +11,8 @@ use noirc_frontend::{
 };
 
 use crate::{
-    errors::CompileError, insert_all_files_for_workspace_into_file_manager, ops::optimize_program,
-    package::Package, parse_all, prepare_package, workspace::Workspace,
+    errors::CompileError, insert_all_files_for_workspace_into_file_manager, package::Package,
+    parse_all, prepare_package, workspace::Workspace,
 };
 
 use super::{compile_program, compile_program_with_debug_instrumenter, report_errors};
@@ -56,7 +56,7 @@ pub fn get_test_function_for_debug(
     };
 
     let test_function_has_arguments =
-        !context.def_interner.function_meta(&test_function.id).function_signature().0.is_empty();
+        !context.def_interner.function_meta(&test_function.id).parameters.is_empty();
 
     if test_function_has_arguments {
         return Err(String::from("Cannot debug tests with arguments"));
@@ -71,7 +71,6 @@ pub fn compile_test_fn_for_debugging(
 ) -> Result<CompiledProgram, noirc_driver::CompileError> {
     let compiled_program =
         compile_no_check(context, &compile_options, test_def.function.id, None, false)?;
-    let compiled_program = optimize_program(compiled_program);
     Ok(compiled_program)
 }
 
@@ -109,10 +108,10 @@ pub fn compile_bin_package_for_debugging(
     report_errors(
         compilation_result,
         &workspace_file_manager,
+        &parsed_files,
         compile_options.deny_warnings,
         compile_options.silence_warnings,
     )
-    .map(optimize_program)
 }
 
 pub fn compile_options_for_debugging(
@@ -170,7 +169,7 @@ fn instrument_package_files(
     let entry_path_parent = package
         .entry_path
         .parent()
-        .unwrap_or_else(|| panic!("The entry path is expected to be a single file within a directory and so should have a parent {:?}", package.entry_path));
+        .unwrap_or_else(|| panic!("The entry path is expected to be a single file within a directory and so should have a parent {}", package.entry_path.display()));
 
     let mut debug_instrumenter = DebugInstrumenter::default();
 
@@ -180,7 +179,7 @@ fn instrument_package_files(
         for ancestor in file_path.ancestors() {
             if ancestor == entry_path_parent {
                 // file is in package
-                debug_instrumenter.instrument_module(&mut parsed_file.0, *file_id);
+                debug_instrumenter.instrument_module(&mut parsed_file.0);
             }
         }
     }

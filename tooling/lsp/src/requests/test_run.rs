@@ -1,5 +1,3 @@
-use std::future::{self, Future};
-
 use crate::insert_all_files_for_workspace_into_file_manager;
 use async_lsp::{ErrorCode, ResponseError};
 use nargo::{
@@ -18,8 +16,8 @@ use crate::{
 pub(crate) fn on_test_run_request(
     state: &mut LspState,
     params: NargoTestRunParams,
-) -> impl Future<Output = Result<NargoTestRunResult, ResponseError>> + use<> {
-    future::ready(on_test_run_request_inner(state, params))
+) -> Result<NargoTestRunResult, ResponseError> {
+    on_test_run_request_inner(state, params)
 }
 
 fn on_test_run_request_inner(
@@ -68,7 +66,7 @@ fn on_test_run_request_inner(
                     message: Some("The project failed to compile".into()),
                 };
                 return Ok(result);
-            };
+            }
 
             let test_functions = context.get_all_test_functions_in_crate_matching(
                 &crate_id,

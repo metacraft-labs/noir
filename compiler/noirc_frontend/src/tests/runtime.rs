@@ -1,14 +1,14 @@
 //! Noir supports multiple runtime environments. This module contains tests related to runtime boundaries and entry point creation.
 //! "Runtime boundaries" can refer to calls across the unconstrained/constrained boundary, valid attributes in vanilla programs vs. contracts, defining program entry points, etc.
 
-use crate::tests::{assert_no_errors, check_errors};
+use crate::tests::{assert_no_errors, check_errors, check_monomorphization_error};
 
 #[test]
 fn cannot_call_unconstrained_function_outside_of_unsafe() {
     let src = r#"
     fn main() {
         foo();
-        ^^^^^ Call to unconstrained function is unsafe and must be in an unconstrained function or unsafe block
+        ^^^^^ Call to unconstrained function from constrained function is unsafe and must be in an unconstrained function or unsafe block
     }
 
     unconstrained fn foo() {}
@@ -22,13 +22,13 @@ fn cannot_call_unconstrained_first_class_function_outside_of_unsafe() {
     fn main() {
         let func = foo;
         func();
-        ^^^^^^ Call to unconstrained function is unsafe and must be in an unconstrained function or unsafe block
+        ^^^^^^ Call to unconstrained function from constrained function is unsafe and must be in an unconstrained function or unsafe block
         inner(func);
     }
 
     fn inner(x: unconstrained fn() -> ()) {
         x();
-        ^^^ Call to unconstrained function is unsafe and must be in an unconstrained function or unsafe block
+        ^^^ Call to unconstrained function from constrained function is unsafe and must be in an unconstrained function or unsafe block
     }
 
     unconstrained fn foo() {}
@@ -67,7 +67,7 @@ fn missing_unsafe_block_when_needing_type_annotations() {
     impl<let N: u32> BigNumTrait for BigNum<N> {
         fn __is_zero(self) -> bool {
             self.__is_zero_impl()
-            ^^^^^^^^^^^^^^^^^^^ Call to unconstrained function is unsafe and must be in an unconstrained function or unsafe block
+            ^^^^^^^^^^^^^^^^^^^ Call to unconstrained function from constrained function is unsafe and must be in an unconstrained function or unsafe block
         }
     }
     "#;
@@ -281,6 +281,21 @@ fn deny_inline_attribute_on_unconstrained() {
 }
 
 #[test]
+fn deny_inline_attribute_on_unconstrained_trait_method() {
+    let src = r#"
+        pub trait Foo {
+            #[no_predicates]
+            ^^^^^^^^^^^^^^^^ misplaced #[no_predicates] attribute on unconstrained function foo. Only allowed on constrained functions
+            ~~~~~~~~~~~~~~~~ misplaced #[no_predicates] attribute
+            unconstrained fn foo(x: Field, y: Field) {
+                assert(x != y);
+            }
+        }
+    "#;
+    check_errors(src);
+}
+
+#[test]
 fn deny_fold_attribute_on_unconstrained() {
     let src = r#"
         #[fold]
@@ -318,13 +333,36 @@ fn deny_no_predicates_attribute_on_entry_point() {
 }
 
 #[test]
-fn deny_abi_attribute_outside_of_contract() {
+fn deny_abi_attribute_on_global_outside_contract() {
     let src = r#"
-
         #[abi(foo)]
         ^^^^^^^^^^^ #[abi(tag)] attributes can only be used in contracts
         ~~~~~~~~~~~ misplaced #[abi(tag)] attribute
         global foo: Field = 1;
+    "#;
+    check_errors(src);
+}
+
+#[test]
+fn allow_abi_attribute_on_global_inside_contract() {
+    let src = r#"
+    contract moo {
+        #[abi(foo)]
+        global foo: Field = 1;
+    }
+    "#;
+    assert_no_errors(src);
+}
+
+#[test]
+fn deny_abi_attribute_on_global_with_non_abi_type() {
+    let src = r#"
+    contract moo {
+        #[abi(foo)]
+        global foo: () = ();
+                    ^^ Globals marked with `#[abi(tag)]` must have an ABI-compatible type
+                    ~~ Unit is not a valid ABI type
+    }
     "#;
     check_errors(src);
 }
@@ -352,15 +390,13 @@ fn break_and_continue_in_constrained_fn() {
 
 #[test]
 fn disallows_test_attribute_on_impl_method() {
-    // TODO: improve the error location
     let src = "
         pub struct Foo { }
 
         impl Foo {
-
-#[test]
+            #[test]
+            ^^^^^^^ The `#[test]` attribute is disallowed on associated functions
             fn foo() { }
-               ^^^ The `#[test]` attribute is disallowed on `impl` methods
         }
     ";
     check_errors(src);
@@ -377,8 +413,88 @@ fn disallows_test_attribute_on_trait_impl_method() {
 
         impl Trait for Foo {
             #[test]
+            ^^^^^^^ The `#[test]` attribute is disallowed on associated functions
             fn foo() { }
-               ^^^ The `#[test]` attribute is disallowed on `impl` methods
+        }
+    ";
+    check_errors(src);
+}
+
+#[test]
+fn disallows_fuzz_attribute_on_impl_method() {
+    let src = "
+        pub struct Foo { }
+
+        impl Foo {
+            #[fuzz]
+            ^^^^^^^ The `#[fuzz]` attribute is disallowed on associated functions
+            fn foo(x: u32) { let _ = x; }
+        }
+    ";
+    check_errors(src);
+}
+
+#[test]
+fn disallows_fuzz_attribute_on_trait_impl_method() {
+    let src = "
+        pub trait Trait {
+            fn foo(x: u32);
+        }
+
+        pub struct Foo { }
+
+        impl Trait for Foo {
+            #[fuzz]
+            ^^^^^^^ The `#[fuzz]` attribute is disallowed on associated functions
+            fn foo(x: u32) { let _ = x; }
+        }
+    ";
+    check_errors(src);
+}
+
+#[test]
+fn disallows_test_attribute_on_trait_definition_method() {
+    let src = "
+        pub trait Trait {
+            #[test]
+            ^^^^^^^ The `#[test]` attribute is disallowed on associated functions
+            fn foo();
+        }
+    ";
+    check_errors(src);
+}
+
+#[test]
+fn disallows_test_attribute_on_trait_definition_default_method() {
+    let src = "
+        pub trait Trait {
+            #[test]
+            ^^^^^^^ The `#[test]` attribute is disallowed on associated functions
+            fn foo() { }
+        }
+    ";
+    check_errors(src);
+}
+
+#[test]
+fn disallows_fuzz_attribute_on_trait_definition_method() {
+    let src = "
+        pub trait Trait {
+            #[fuzz]
+            ^^^^^^^ The `#[fuzz]` attribute is disallowed on associated functions
+            fn foo(x: u32);
+        }
+    ";
+    check_errors(src);
+}
+
+#[test]
+fn disallows_fuzz_attribute_on_trait_definition_default_method() {
+    let src = "
+        pub trait Trait {
+            #[fuzz]
+            ^^^^^^^ The `#[fuzz]` attribute is disallowed on associated functions
+            fn foo(x: u32) { let _ = x; }
         }
     ";
     check_errors(src);
@@ -392,8 +508,8 @@ fn disallows_export_attribute_on_impl_method() {
 
         impl Foo {
             #[export]
-            fn foo() { }
-               ^^^ The `#[export]` attribute is disallowed on `impl` methods
+            pub fn foo() { }
+                   ^^^ The `#[export]` attribute is disallowed on `impl` methods
         }
     ";
     check_errors(src);
@@ -431,4 +547,82 @@ fn regression_10413() {
               ~~ Unit is not a valid entry point type
     ";
     check_errors(src);
+}
+
+#[test]
+fn user_defined_verify_proof_with_type_is_allowed_in_brillig() {
+    // User-defined functions having verify_proof_with_type name should not error.
+    // The lint only applies to std::verify_proof_with_type from the standard library.
+    let src = r#"
+    unconstrained fn main() {
+        let verification_key: [Field; 114] = [0; 114];
+        let proof: [Field; 94] = [0; 94];
+        let public_inputs: [Field; 1] = [0];
+        let key_hash: Field = 0;
+        let proof_type: u32 = 0;
+
+        // This is OK: it's a user-defined function, not std::verify_proof_with_type
+        verify_proof_with_type(verification_key, proof, public_inputs, key_hash, proof_type);
+    }
+
+    fn verify_proof_with_type<let N: u32, let M: u32, let K: u32>(
+        _verification_key: [Field; N],
+        _proof: [Field; M],
+        _public_inputs: [Field; K],
+        _key_hash: Field,
+        _proof_type: u32,
+    ) {}
+    "#;
+    assert_no_errors(src);
+}
+
+#[test]
+fn cannot_return_vector_from_unconstrained_to_constrained() {
+    let src = r#"
+    unconstrained fn clear() -> [u32] {
+        @[1, 2, 3]
+    }
+
+    fn main() {
+        // Safety: testing
+        let _x = unsafe { clear() };
+                          ^^^^^^^ Vectors cannot be returned from an unconstrained runtime to a constrained runtime
+    }
+    "#;
+    check_errors(src);
+}
+
+#[test]
+fn regression_10259() {
+    let src = r#"
+    unconstrained fn foo<T>(x: T) -> T {
+        x
+    }
+
+    fn bar<T>(x: T) -> T {
+        // Safety: testing
+        unsafe {
+            foo(x)
+            ^^^^^^ Vector `[Field]` cannot be returned from an unconstrained runtime to a constrained runtime
+        }
+    }
+
+    fn main(x: Field) {
+        let xs = @[x, x + 1, x + 2];
+        let _ = bar(xs);
+    }
+    "#;
+    check_monomorphization_error(src);
+}
+
+/// Globals are evaluated in a `comptime` context so they can call unconstrained functions without `unsafe` blocks
+#[test]
+fn call_unconstrained_function_in_lambda_in_global() {
+    let src = r#"
+    pub global foo: fn() = || bar();
+    unconstrained fn bar() {}
+
+    fn main() {}
+    "#;
+    assert_no_errors(src);
 }

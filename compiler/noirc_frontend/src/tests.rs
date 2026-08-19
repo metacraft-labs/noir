@@ -7,7 +7,10 @@ mod assignment;
 mod bound_checks;
 mod cast;
 mod control_flow;
+mod deeply_nested;
+mod entry_point_size;
 mod enums;
+mod expand;
 mod expressions;
 mod functions;
 mod globals;
@@ -23,6 +26,7 @@ mod runtime;
 mod structs;
 mod traits;
 mod turbofish;
+mod type_mismatch;
 mod unused_items;
 mod visibility;
 
@@ -32,11 +36,11 @@ mod visibility;
 use std::collections::{HashMap, HashSet};
 
 use crate::elaborator::{FrontendOptions, UnstableFeature};
-use crate::hir::comptime::InterpreterError;
+use crate::error_reporting::{self};
 use crate::hir::printer::display_crate;
-use crate::test_utils::{get_program, get_program_with_options};
+use crate::test_utils::{GetProgramOptions, get_program, get_program_with_options};
 
-use noirc_errors::reporter::report_all;
+use noirc_errors::reporter::ReportedErrors;
 use noirc_errors::{CustomDiagnostic, Span};
 
 use crate::hir::Context;
@@ -48,21 +52,34 @@ pub(crate) fn get_program_using_features(
     src: &str,
     features: &[UnstableFeature],
 ) -> (ParsedModule, Context<'static, 'static>, Vec<CompilationError>) {
-    let allow_parser_errors = false;
-    let mut options = FrontendOptions::test_default();
-    options.enabled_unstable_features = features;
-    get_program_with_options(src, allow_parser_errors, options)
+    get_program_with_options(
+        src,
+        GetProgramOptions {
+            frontend_options: FrontendOptions {
+                enabled_unstable_features: features,
+                ..FrontendOptions::test_default()
+            },
+            ..Default::default()
+        },
+    )
 }
 
 pub(crate) fn get_program_errors(src: &str) -> Vec<CompilationError> {
-    get_program(src).2
+    get_program_with_options(src, Default::default()).2
 }
 
-pub(crate) fn assert_no_errors(src: &str) -> Context<'_, '_> {
-    let (_, context, errors) = get_program(src);
+pub(crate) fn assert_no_errors(src: &str) -> Context<'static, 'static> {
+    assert_no_errors_using_features(src, FrontendOptions::test_default().enabled_unstable_features)
+}
+
+pub(crate) fn assert_no_errors_using_features(
+    src: &str,
+    features: &[UnstableFeature],
+) -> Context<'static, 'static> {
+    let (_, context, errors) = get_program_using_features(src, features);
     if !errors.is_empty() {
         let errors = errors.iter().map(CustomDiagnostic::from).collect::<Vec<_>>();
-        report_all(context.file_manager.as_file_map(), &errors, false, false);
+        report_all(&context, &errors, false, false);
         panic!("Expected no errors");
     }
     context
@@ -76,17 +93,33 @@ pub fn assert_no_errors_without_report(src: &str) -> Context<'_, '_> {
 
 fn assert_no_errors_and_to_string(src: &str) -> String {
     let context = assert_no_errors(src);
-    display_crate(
+    let expanded = display_crate(
         *context.crate_graph.root_crate_id(),
         &context.crate_graph,
         &context.def_maps,
         &context.def_interner,
-    )
+        context.file_manager.as_file_map(),
+    );
+
+    // The expanded source must compile on its own. A faithful expansion reconstructs the original
+    // module structure (and therefore its visibility), so re-elaborating the output should not
+    // surface new errors. This guards against expansions that, for example, hoist an `impl` out of
+    // its module and break access to a module-private item. Only hard errors are checked: the
+    // printer can legitimately produce code whose warnings (e.g. unused imports) differ from the
+    // original.
+    let errors = get_program_errors(&expanded);
+    let errors: Vec<_> =
+        errors.iter().map(CustomDiagnostic::from).filter(CustomDiagnostic::is_error).collect();
+    if !errors.is_empty() {
+        panic!("Expanded source failed to compile:\n\n{expanded}\n\nErrors: {errors:#?}");
+    }
+
+    expanded
 }
 
 /// Given a source file with annotated errors, like this
 ///
-/// fn main() -> pub i32 {
+/// fn `main()` -> pub i32 {
 ///                  ^^^ expected i32 because of return type
 ///     true
 ///     ~~~~ bool returned here
@@ -99,45 +132,87 @@ fn assert_no_errors_and_to_string(src: &str) -> String {
 /// this method will check that compiling the program without those error markers
 /// will produce errors at those locations and with/ those messages.
 fn check_errors(src: &str) {
-    let allow_parser_errors = false;
     let monomorphize = false;
     check_errors_with_options(
         src,
-        allow_parser_errors,
         monomorphize,
-        FrontendOptions::test_default(),
+        GetProgramOptions { allow_elaborator_errors: true, ..Default::default() },
+    );
+}
+
+/// Like [`check_errors`], but also runs the elaborator when the source has parser
+/// errors. Use this when the test case deliberately exercises behavior past a
+/// parse failure (e.g. the parser produced `StatementKind::Error` and we want to
+/// verify the elaborator/interpreter handle it gracefully).
+fn check_errors_allowing_parser_errors(src: &str) {
+    let monomorphize = false;
+    check_errors_with_options(
+        src,
+        monomorphize,
+        GetProgramOptions {
+            allow_elaborator_errors: true,
+            allow_parser_errors: true,
+            ..Default::default()
+        },
+    );
+}
+
+/// Check for errors, prefixing user code with some snippet from the stdlib.
+fn check_errors_with_stdlib<'a>(src: &str, stdlib_src: impl IntoIterator<Item = &'a str>) {
+    let stdlib_src: String = stdlib_src.into_iter().flat_map(|s| [s, "\n"]).collect();
+    let monomorphize = false;
+    check_errors_with_options(
+        &format!("{stdlib_src}\n\n{src}"),
+        monomorphize,
+        GetProgramOptions {
+            allow_elaborator_errors: true,
+            root_and_stdlib: true,
+            ..Default::default()
+        },
     );
 }
 
 fn check_errors_using_features(src: &str, features: &[UnstableFeature]) {
-    let allow_parser_errors = false;
     let monomorphize = false;
-    let options =
-        FrontendOptions { enabled_unstable_features: features, ..FrontendOptions::test_default() };
-    check_errors_with_options(src, allow_parser_errors, monomorphize, options);
-}
-
-pub(super) fn check_monomorphization_error(src: &str) {
-    check_monomorphization_error_using_features(src, &[]);
-}
-
-pub(super) fn check_monomorphization_error_using_features(src: &str, features: &[UnstableFeature]) {
-    let allow_parser_errors = false;
-    let monomorphize = true;
     check_errors_with_options(
         src,
-        allow_parser_errors,
         monomorphize,
-        FrontendOptions { enabled_unstable_features: features, ..FrontendOptions::test_default() },
+        GetProgramOptions {
+            allow_elaborator_errors: true,
+            frontend_options: FrontendOptions {
+                enabled_unstable_features: features,
+                ..FrontendOptions::test_default()
+            },
+            ..Default::default()
+        },
     );
 }
 
-fn check_errors_with_options(
+pub(super) fn check_monomorphization_error(src: &str) {
+    check_monomorphization_error_using_features(src, &[], false);
+}
+
+pub(super) fn check_monomorphization_error_using_features(
     src: &str,
-    allow_parser_errors: bool,
-    monomorphize: bool,
-    options: FrontendOptions,
+    features: &[UnstableFeature],
+    allow_elaborator_errors: bool,
 ) {
+    let monomorphize = true;
+    check_errors_with_options(
+        src,
+        monomorphize,
+        GetProgramOptions {
+            allow_elaborator_errors,
+            frontend_options: FrontendOptions {
+                enabled_unstable_features: features,
+                ..FrontendOptions::test_default()
+            },
+            ..Default::default()
+        },
+    );
+}
+
+fn check_errors_with_options(src: &str, monomorphize: bool, options: GetProgramOptions) {
     let lines = src.lines().collect::<Vec<_>>();
 
     // Here we'll hold just the lines that are code
@@ -195,20 +270,25 @@ fn check_errors_with_options(
     let secondary_spans_with_errors = to_message_map(secondary_spans_with_errors);
 
     let src = code_lines.join("\n");
-    let (_, mut context, errors) = get_program_with_options(&src, allow_parser_errors, options);
+    let (_, mut context, errors) = get_program_with_options(&src, options);
     let mut errors = errors.iter().map(CustomDiagnostic::from).collect::<Vec<_>>();
 
-    if monomorphize {
-        if !errors.is_empty() {
-            report_all(context.file_manager.as_file_map(), &errors, false, false);
-            panic!("Expected no errors before monomorphization");
-        }
+    if !options.allow_elaborator_errors && !errors.is_empty() {
+        report_all(&context, &errors, false, false);
+        panic!("Expected no elaborator errors");
+    }
 
+    if monomorphize {
         let main = context.get_main_function(context.root_crate_id()).unwrap_or_else(|| {
             panic!("get_monomorphized: test program contains no 'main' function")
         });
 
-        let result = crate::monomorphization::monomorphize(main, &mut context.def_interner, false);
+        let result = crate::monomorphization::monomorphize(
+            main,
+            &mut context.def_interner,
+            context.file_manager.as_file_map(),
+            false,
+        );
         match result {
             Ok(_) => {
                 if primary_spans_with_errors.is_empty() {
@@ -237,20 +317,20 @@ fn check_errors_with_options(
 
         let Some(expected_primaries) = primary_spans_with_errors.get(&span) else {
             if let Some(secondaries) = secondary_spans_with_errors.get(&span) {
-                report_all(context.file_manager.as_file_map(), &errors, false, false);
+                report_all(&context, &errors, false, false);
                 panic!(
                     "Error at {span:?} with message(s) {secondaries:?} is annotated as secondary but should be primary: {primary_message:?}"
                 );
             } else {
-                report_all(context.file_manager.as_file_map(), &errors, false, false);
+                report_all(&context, &errors, false, false);
                 panic!(
-                    "Couldn't find primary error at {span:?} with message {primary_message:?}.\nAll errors: {errors:?}"
+                    "Couldn't find primary error at {span:?} with message {primary_message:?}.\nAll errors: {errors:?}\nExpected primaries: {primary_spans_with_errors:?}\nExpected secondaries: {secondary_spans_with_errors:?}"
                 );
             }
         };
 
         if !expected_primaries.contains(primary_message) {
-            report_all(context.file_manager.as_file_map(), &errors, false, false);
+            report_all(&context, &errors, false, false);
             panic!(
                 "Primary error at {span:?} has unexpected message: {primary_message:?};\nShould be one of {expected_primaries:?}"
             );
@@ -266,7 +346,7 @@ fn check_errors_with_options(
 
             let span = secondary.location.span;
             let Some(expected_secondaries) = secondary_spans_with_errors.get(&span) else {
-                report_all(context.file_manager.as_file_map(), &errors, false, false);
+                report_all(&context, &errors, false, false);
                 if let Some(primaries) = primary_spans_with_errors.get(&span) {
                     panic!(
                         "Error at {span:?} with message(s) {primaries:?} is annotated as primary but should be secondary: {secondary_message:?}"
@@ -279,7 +359,7 @@ fn check_errors_with_options(
             };
 
             if !expected_secondaries.contains(secondary_message) {
-                report_all(context.file_manager.as_file_map(), &errors, false, false);
+                report_all(&context, &errors, false, false);
                 panic!(
                     "Secondary error at {span:?} has unexpected message: {secondary_message:?};\nShould be one of {expected_secondaries:?}"
                 );
@@ -290,12 +370,12 @@ fn check_errors_with_options(
     }
 
     if !all_primaries.is_empty() {
-        report_all(context.file_manager.as_file_map(), &errors, false, false);
+        report_all(&context, &errors, false, false);
         panic!("These primary errors didn't happen: {all_primaries:?}");
     }
 
     if !all_secondaries.is_empty() {
-        report_all(context.file_manager.as_file_map(), &errors, false, false);
+        report_all(&context, &errors, false, false);
         panic!("These secondary errors didn't happen: {all_secondaries:?}");
     }
 }
@@ -319,6 +399,21 @@ fn get_error_line_span_and_message(
     let span = Span::from((start + first_caret - 1) as u32..(start + last_caret) as u32);
     let error = line.trim().trim_start_matches(char).trim().to_string();
     Some((span, error))
+}
+
+pub(crate) fn report_all(
+    context: &Context,
+    diagnostics: &[CustomDiagnostic],
+    deny_warnings: bool,
+    silence_warnings: bool,
+) -> ReportedErrors {
+    error_reporting::report_all(
+        &context.file_manager,
+        &context.parsed_files,
+        diagnostics,
+        deny_warnings,
+        silence_warnings,
+    )
 }
 
 #[test]
@@ -354,15 +449,19 @@ fn wildcard_with_generic_argument() {
     struct Foo<T> {}
 
     pub fn println<T>(_input: T) { }
-    
+
     fn main() {
       let x: _<_> = "123";
+             ^ Cannot apply generics to a wildcard type
+             ~ The wildcard type `_` cannot take generic arguments
       let y: _<_> = Foo::<()> { };
+             ^ Cannot apply generics to a wildcard type
+             ~ The wildcard type `_` cannot take generic arguments
       println(x);
       println(y);
     }
     "#;
-    assert_no_errors(src);
+    check_errors(src);
 }
 
 #[test]
@@ -393,82 +492,4 @@ fn regression_10554() {
     }
     "#;
     check_monomorphization_error(src);
-}
-
-#[test]
-fn deeply_nested_expression_overflow() {
-    // Build a deeply expression: (((1 + 2) + 3) + 4) ... + 50
-    // This tests the interpreter's evaluation depth limit.
-    // If we use an expression too deep (like 100), then we will reach the parser recursion limit.
-    // We use fewer nesting levels (50) combined with recursive function calls
-    // to trigger the interpreter's EvaluationDepthOverflow error.
-    fn make_nested_expr(stem: &str) -> String {
-        let mut expr = String::from(stem);
-        for i in 2..=50 {
-            expr = format!("({expr} + {i})");
-        }
-        expr
-    }
-
-    let expr = make_nested_expr("if max_depth == 0 { 1 } else { foo(max_depth - 1) }");
-
-    let src = format!(
-        "
-      fn foo(max_depth: u32) -> u32 {{
-        {expr}
-      }}
-      fn main() {{
-          comptime {{
-              let _ = foo(5);
-          }}
-      }}
-      "
-    );
-
-    let errors = get_program_errors(&src);
-
-    for error in errors {
-        if matches!(
-            error,
-            CompilationError::InterpreterError(InterpreterError::EvaluationDepthOverflow { .. })
-        ) {
-            return;
-        }
-    }
-
-    panic!("should have got a EvaluationDepthOverflow error");
-}
-
-#[test]
-fn deeply_nested_expression_parser_overflow() {
-    use crate::parser::ParserErrorReason;
-
-    // Build expression: (((1 + 2) + 3) + 4) ... + 200
-    // This should hit the parser's maximum recursion depth limit
-    let mut expr = String::from("1");
-    for i in 2..=200 {
-        expr = format!("({expr} + {i})");
-    }
-
-    let src = format!(
-        "
-      fn main() {{
-          comptime {{
-              let _ = {expr};
-          }}
-      }}
-      "
-    );
-
-    let errors = get_program_errors(&src);
-
-    // We should get exactly one MaximumRecursionDepthExceeded error
-    assert_eq!(errors.len(), 1, "Expected exactly one error");
-
-    let has_depth_error = matches!(
-        &errors[0],
-        CompilationError::ParseError(parser_error)
-            if parser_error.reason() == Some(&ParserErrorReason::MaximumRecursionDepthExceeded)
-    );
-    assert!(has_depth_error, "Expected a MaximumRecursionDepthExceeded error");
 }

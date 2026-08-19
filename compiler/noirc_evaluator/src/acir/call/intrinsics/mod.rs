@@ -1,3 +1,4 @@
+use acvm::acir::{BlackBoxFunc, brillig::lengths::FlattenedLength};
 use iter_extended::vecmap;
 
 use crate::errors::RuntimeError;
@@ -41,22 +42,32 @@ impl Context<'_> {
                 // Vector arguments to blackbox functions would break the following logic (due to being split over two `ValueIds`)
                 // No blackbox functions currently take vector arguments so we have an assertion here to catch if this changes in the future.
                 assert!(
-                    !arguments.iter().any(|arg| matches!(dfg.type_of_value(*arg), Type::Vector(_))),
+                    !arguments
+                        .iter()
+                        .any(|arg| matches!(*dfg.type_of_value(*arg), Type::Vector(_))),
                     "ICE: Vector arguments passed to blackbox function"
                 );
 
                 let inputs = vecmap(arguments, |arg| self.convert_value(*arg, dfg));
 
-                let output_count = result_ids.iter().fold(0usize, |sum, result_id| {
-                    sum + dfg.type_of_value(*result_id).flattened_size() as usize
-                });
+                let output_count: FlattenedLength = result_ids
+                    .iter()
+                    .map(|result_id| dfg.type_of_value(*result_id).flattened_size())
+                    .sum();
+
+                // Only `RecursiveAggregation` consumes the side-effects predicate: it is
+                // injected as an extra witness input so aggregation can be conditionally
+                // executed. Other blackbox functions either take no predicate or receive
+                // one as an ordinary SSA-level argument (e.g. MSM, ECDSA).
+                let predicate = matches!(black_box, BlackBoxFunc::RecursiveAggregation)
+                    .then(|| self.predicate());
 
                 let vars = self.acir_context.black_box_function(
                     black_box,
                     inputs,
                     None,
                     output_count,
-                    Some(self.current_side_effects_enabled_var),
+                    predicate,
                 )?;
 
                 Ok(self.convert_vars_to_values(vars, dfg, result_ids))
@@ -65,7 +76,7 @@ impl Context<'_> {
                 let field = self.convert_value(arguments[0], dfg).into_var()?;
                 let radix = self.convert_value(arguments[1], dfg).into_var()?;
 
-                let Type::Array(result_type, array_length) = dfg.type_of_value(result_ids[0])
+                let Type::Array(result_type, array_length) = &*dfg.type_of_value(result_ids[0])
                 else {
                     unreachable!("ICE: ToRadix result must be an array");
                 };
@@ -73,18 +84,18 @@ impl Context<'_> {
                     result_type.len() == 1,
                     "ICE: ToRadix result type must have a single element type"
                 );
-                let Type::Numeric(numeric_type) = result_type[0] else {
+                let Type::Numeric(numeric_type) = &result_type[0] else {
                     unreachable!("ICE: ToRadix result element type must be numeric");
                 };
 
                 self.acir_context
-                    .radix_decompose(endian, field, radix, array_length, numeric_type)
+                    .radix_decompose(endian, field, radix, *array_length, *numeric_type)
                     .map(|array| vec![array])
             }
             Intrinsic::ToBits(endian) => {
                 let field = self.convert_value(arguments[0], dfg).into_var()?;
 
-                let Type::Array(result_type, array_length) = dfg.type_of_value(result_ids[0])
+                let Type::Array(result_type, array_length) = &*dfg.type_of_value(result_ids[0])
                 else {
                     unreachable!("ICE: ToBits result must be an array");
                 };
@@ -92,12 +103,12 @@ impl Context<'_> {
                     result_type.len() == 1,
                     "ICE: ToBits result type must have a single element type"
                 );
-                let Type::Numeric(numeric_type) = result_type[0] else {
+                let Type::Numeric(numeric_type) = &result_type[0] else {
                     unreachable!("ICE: ToBits result element type must be numeric");
                 };
 
                 self.acir_context
-                    .bit_decompose(endian, field, array_length, numeric_type)
+                    .bit_decompose(endian, field, *array_length, *numeric_type)
                     .map(|array| vec![array])
             }
             Intrinsic::AsVector => {
@@ -107,10 +118,10 @@ impl Context<'_> {
                     !array_type.is_nested_vector(),
                     "ICE: Nested vector used in ACIR generation"
                 );
-                let Type::Array(_, vector_length) = array_type else {
+                let Type::Array(_, vector_length) = &*array_type else {
                     unreachable!("Expected Array input for `as_vector` intrinsic");
                 };
-                let vector_length = self.acir_context.add_constant(vector_length);
+                let vector_length = self.acir_context.add_constant(vector_length.0);
                 let acir_value = self.convert_value(array_contents, dfg);
                 let result = self.read_array_with_type(acir_value, &array_type)?;
                 Ok(vec![
@@ -129,10 +140,10 @@ impl Context<'_> {
             Intrinsic::AsWitness => {
                 let arg = arguments[0];
                 let input = self.convert_value(arg, dfg).into_var()?;
-                Ok(self
-                    .acir_context
-                    .get_or_create_witness_var(input)
-                    .map(|val| self.convert_vars_to_values(vec![val], dfg, result_ids))?)
+                // `as_witness` exists only for its side effect of creating a witness for the
+                // input; it returns no values.
+                self.acir_context.get_or_create_witness_var(input)?;
+                Ok(Vec::new())
             }
             Intrinsic::DerivePedersenGenerators => Err(RuntimeError::AssertConstantFailed {
                 call_stack: self.acir_context.get_call_stack(),

@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    future::{self, Future},
     ops::Deref,
 };
 
@@ -23,10 +22,10 @@ use noirc_frontend::{
         AsTraitPath, AttributeTarget, BlockExpression, CallExpression, ConstructorExpression,
         Expression, ExpressionKind, ForLoopStatement, GenericTypeArgs, Ident, IdentOrQuotedType,
         IfExpression, ItemVisibility, LValue, Lambda, LetStatement, MemberAccessExpression,
-        MethodCallExpression, ModuleDeclaration, NoirFunction, NoirStruct, NoirTraitImpl, Path,
-        PathKind, Pattern, Statement, TraitBound, TraitImplItemKind, TypeImpl, TypePath,
-        UnresolvedGeneric, UnresolvedGenerics, UnresolvedType, UnresolvedTypeData, UseTree,
-        UseTreeKind, Visitor,
+        MethodCallExpression, ModuleDeclaration, NoirFunction, NoirStruct, NoirTrait,
+        NoirTraitImpl, Path, PathKind, Pattern, Statement, TraitBound, TraitImplItemKind, TypeImpl,
+        TypePath, UnresolvedGeneric, UnresolvedGenerics, UnresolvedType, UnresolvedTypeData,
+        UseTree, UseTreeKind, Visitor,
     },
     elaborator::PrimitiveType,
     graph::{CrateId, Dependency},
@@ -45,9 +44,11 @@ use noirc_frontend::{
 use sort_text::underscore_sort_text;
 
 use crate::{
-    LspState, requests::to_lsp_location,
+    LspState,
+    requests::{completion::completion_items::variable_completion_item, to_lsp_location},
     trait_impl_method_stub_generator::TraitImplMethodStubGenerator,
-    use_segment_positions::UseSegmentPositions, utils,
+    use_segment_positions::UseSegmentPositions,
+    utils,
 };
 
 use super::{TraitReexport, process_request};
@@ -56,37 +57,39 @@ mod auto_import;
 mod builtins;
 mod completion_items;
 mod kinds;
+mod params;
 mod sort_text;
 mod tests;
 
 pub(crate) fn on_completion_request(
     state: &mut LspState,
     params: CompletionParams,
-) -> impl Future<Output = Result<Option<CompletionResponse>, ResponseError>> + use<> {
-    let result = process_request(state, params.text_document_position.clone(), |args| {
+) -> Result<Option<CompletionResponse>, ResponseError> {
+    process_request(state, params.text_document_position.clone(), |args| {
         let file_id = args.location.file;
-        utils::position_to_byte_index(args.files, file_id, &params.text_document_position.position)
-            .and_then(|byte_index| {
-                let file = args.files.get_file(file_id).unwrap();
-                let source = file.source();
-                let byte = source.as_bytes().get(byte_index - 1).copied();
-                let (parsed_module, _errors) = noirc_frontend::parse_program(source, file_id);
+        let byte_index = utils::position_to_byte_index(
+            args.files,
+            file_id,
+            &params.text_document_position.position,
+        )?;
+        let file = args.files.get_file(file_id).unwrap();
+        let source = file.source();
+        let byte = source.as_bytes().get(byte_index - 1).copied();
+        let (parsed_module, _errors) = noirc_frontend::parse_program(source, file_id);
 
-                let mut finder = NodeFinder::new(
-                    args.files,
-                    file_id,
-                    source,
-                    byte_index,
-                    byte,
-                    args.crate_id,
-                    args.def_maps,
-                    args.dependencies(),
-                    args.interner,
-                );
-                finder.find(&parsed_module)
-            })
-    });
-    future::ready(result)
+        let mut finder = NodeFinder::new(
+            args.files,
+            file_id,
+            source,
+            byte_index,
+            byte,
+            args.crate_id,
+            args.def_maps,
+            args.dependencies(),
+            args.interner,
+        );
+        finder.find(&parsed_module)
+    })
 }
 
 struct NodeFinder<'a> {
@@ -110,11 +113,11 @@ struct NodeFinder<'a> {
     /// Type parameters in the current scope. These are collected when entering
     /// a struct, a function, etc., and cleared afterwards.
     type_parameters: HashSet<String>,
-    /// ModuleDefIds we already suggested, so we don't offer these for auto-import.
+    /// `ModuleDefIds` we already suggested, so we don't offer these for auto-import.
     suggested_module_def_ids: HashSet<ModuleDefId>,
     /// How many nested `mod` we are in deep
     nesting: usize,
-    /// The line where an auto_import must be inserted
+    /// The line where an `auto_import` must be inserted
     auto_import_line: usize,
     use_segment_positions: UseSegmentPositions,
     self_type: Option<Type>,
@@ -179,7 +182,7 @@ impl<'a> NodeFinder<'a> {
             let mut items = std::mem::take(&mut self.completion_items);
 
             // Show items that start with underscore last in the list
-            for item in items.iter_mut() {
+            for item in &mut items {
                 if item.label.starts_with('_') {
                     item.sort_text = Some(underscore_sort_text());
                 }
@@ -242,9 +245,20 @@ impl<'a> NodeFinder<'a> {
             return;
         }
 
+        // First try to autocomplete in the path generics
+        for segment in &path.segments {
+            if let Some(generics) = &segment.generics {
+                for generic in generics {
+                    generic.accept(self);
+                }
+            }
+        }
+
         let after_colons = self.byte == Some(b':');
 
         let mut idents: Vec<Ident> = Vec::new();
+
+        let mut found_segment_to_complete = false;
 
         // Find in which ident we are in, and in which part of it
         // (it could be that we are completing in the middle of an ident)
@@ -254,6 +268,7 @@ impl<'a> NodeFinder<'a> {
             // Check if we are at the end of the ident
             if self.byte_index == ident.span().end() as usize {
                 idents.push(ident.clone());
+                found_segment_to_complete = true;
                 break;
             }
 
@@ -272,15 +287,21 @@ impl<'a> NodeFinder<'a> {
                 );
                 idents.push(ident);
                 in_the_middle = true;
+                found_segment_to_complete = true;
                 break;
             }
 
             idents.push(ident.clone());
 
-            // Stop if the cursor is right after this ident and '::'
-            if after_colons && self.byte_index == ident.span().end() as usize + 2 {
+            // Stop if the cursor is right after this segment and '::'
+            if after_colons && self.byte_index == segment.location.span.end() as usize + 2 {
+                found_segment_to_complete = true;
                 break;
             }
+        }
+
+        if !found_segment_to_complete {
+            return;
         }
 
         if idents.len() < path.segments.len() {
@@ -433,11 +454,7 @@ impl<'a> NodeFinder<'a> {
                     None
                 };
 
-                self.completion_items.push(simple_completion_item(
-                    name,
-                    CompletionItemKind::VARIABLE,
-                    description,
-                ));
+                self.completion_items.push(variable_completion_item(name, description));
             }
         }
     }
@@ -505,11 +522,14 @@ impl<'a> NodeFinder<'a> {
 
         if after_colons {
             // We are right after "::"
-            segments.push(ident.clone());
+            if !ident.is_empty() {
+                segments.push(ident.clone());
+            }
+
+            let at_root = segments.is_empty();
 
             if let Some(module_id) = self.resolve_module(segments) {
                 let prefix = "";
-                let at_root = false;
                 self.complete_in_module(
                     module_id,
                     prefix,
@@ -518,7 +538,7 @@ impl<'a> NodeFinder<'a> {
                     function_completion_kind,
                     requested_items,
                 );
-            };
+            }
         } else {
             // We are right after the last segment
             let prefix = ident.to_string().to_case(Case::Snake);
@@ -882,6 +902,7 @@ impl<'a> NodeFinder<'a> {
         let Some(mut module_data) = def_map.get(module_id.local_id) else {
             return;
         };
+        let mut skip_prelude_items = false;
 
         if at_root {
             match path_kind {
@@ -890,17 +911,21 @@ impl<'a> NodeFinder<'a> {
                         return;
                     };
                     module_data = root_module_data;
+                    skip_prelude_items = true;
                 }
-                PathKind::Super => {
-                    let Some(parent) = module_data.parent else {
-                        return;
-                    };
-                    let Some(parent_module_data) = def_map.get(parent) else {
-                        return;
-                    };
-                    module_data = parent_module_data;
+                PathKind::Super(extras) => {
+                    for _ in 0..=extras {
+                        let Some(parent) = module_data.parent else {
+                            return;
+                        };
+                        let Some(parent_module_data) = def_map.get(parent) else {
+                            return;
+                        };
+                        module_data = parent_module_data;
+                    }
+                    skip_prelude_items = true;
                 }
-                PathKind::Dep => (),
+                PathKind::Absolute => (),
                 PathKind::Plain => (),
                 PathKind::Resolved(crate_id) => {
                     let def_map = &self.def_maps[&crate_id];
@@ -919,45 +944,31 @@ impl<'a> NodeFinder<'a> {
 
             if name_matches(name, prefix) {
                 let per_ns = module_data.find_name(ident);
-                if let Some((module_def_id, visibility, _)) = per_ns.types {
-                    if item_in_module_is_visible(
-                        self.def_maps,
-                        self.module_id,
-                        module_id,
-                        visibility,
-                    ) {
-                        let completion_items = self.module_def_id_completion_items(
-                            module_def_id,
-                            name.to_string(),
-                            function_completion_kind,
-                            function_kind,
-                            requested_items,
-                        );
-                        if !completion_items.is_empty() {
-                            self.completion_items.extend(completion_items);
-                            self.suggested_module_def_ids.insert(module_def_id);
-                        }
+                for item in per_ns.iter_items() {
+                    let module_def_id = item.id;
+                    if item.is_prelude && skip_prelude_items {
+                        continue;
                     }
-                }
 
-                if let Some((module_def_id, visibility, _)) = per_ns.values {
-                    if item_in_module_is_visible(
+                    if !item_in_module_is_visible(
                         self.def_maps,
                         self.module_id,
                         module_id,
-                        visibility,
+                        item.visibility,
                     ) {
-                        let completion_items = self.module_def_id_completion_items(
-                            module_def_id,
-                            name.to_string(),
-                            function_completion_kind,
-                            function_kind,
-                            requested_items,
-                        );
-                        if !completion_items.is_empty() {
-                            self.completion_items.extend(completion_items);
-                            self.suggested_module_def_ids.insert(module_def_id);
-                        }
+                        continue;
+                    }
+
+                    let completion_items = self.module_def_id_completion_items(
+                        module_def_id,
+                        name.to_string(),
+                        function_completion_kind,
+                        function_kind,
+                        requested_items,
+                    );
+                    if !completion_items.is_empty() {
+                        self.completion_items.extend(completion_items);
+                        self.suggested_module_def_ids.insert(module_def_id);
                     }
                 }
             }
@@ -993,7 +1004,9 @@ impl<'a> NodeFinder<'a> {
     }
 
     fn resolve_module(&self, segments: Vec<Ident>) -> Option<ModuleId> {
-        if let Some(ModuleDefId::ModuleId(module_id)) = self.resolve_path(segments) {
+        if segments.is_empty() {
+            Some(self.module_id)
+        } else if let Some(ModuleDefId::ModuleId(module_id)) = self.resolve_path(segments) {
             Some(module_id)
         } else {
             None
@@ -1005,10 +1018,10 @@ impl<'a> NodeFinder<'a> {
 
         // If we can't resolve a path through lookup, let's see if the last segment is bound to a type
         let location = Location::new(last_segment.span(), self.file);
-        if let Some(reference_id) = self.interner.find_referenced(location) {
-            if let Some(id) = module_def_id_from_reference_id(reference_id) {
-                return Some(id);
-            }
+        if let Some(reference_id) = self.interner.find_referenced(location)
+            && let Some(id) = module_def_id_from_reference_id(reference_id)
+        {
+            return Some(id);
         }
 
         None
@@ -1072,12 +1085,10 @@ impl<'a> NodeFinder<'a> {
             }
 
             let func_meta = self.interner.function_meta(&func_id);
-            let modifiers = self.interner.function_modifiers(&func_id);
 
             let mut generator = TraitImplMethodStubGenerator::new(
                 &name,
                 func_meta,
-                modifiers,
                 trait_,
                 noir_trait_impl,
                 self.interner,
@@ -1095,9 +1106,9 @@ impl<'a> NodeFinder<'a> {
             let stub = stub.strip_prefix("fn ").unwrap();
 
             let label = if func_meta.parameters.is_empty() {
-                format!("fn {}()", &name)
+                format!("fn {name}()")
             } else {
-                format!("fn {}(..)", &name)
+                format!("fn {name}(..)")
             };
 
             let completion_item = trait_impl_method_completion_item(label, stub);
@@ -1149,7 +1160,10 @@ impl<'a> NodeFinder<'a> {
                 let typ = self.get_lvalue_type(array)?;
                 get_array_element_type(typ)
             }
-            LValue::Dereference(lvalue, ..) => self.get_lvalue_type(lvalue),
+            LValue::Dereference(expr, ..) => {
+                let lvalue = LValue::from_expression(expr.as_ref().clone())?;
+                self.get_lvalue_type(&lvalue)
+            }
             LValue::Interned(..) => None,
         }
     }
@@ -1248,6 +1262,14 @@ impl Visitor for NodeFinder<'_> {
         false
     }
 
+    fn visit_parsed_module(&mut self, parsed_module: &ParsedModule) -> bool {
+        if self.try_complete_function_param_in_parsed_module(parsed_module) {
+            return false;
+        }
+
+        true
+    }
+
     fn visit_parsed_submodule(&mut self, parsed_sub_module: &ParsedSubModule, _span: Span) -> bool {
         // Switch `self.module_id` to the submodule
         let previous_module_id = self.module_id;
@@ -1269,12 +1291,16 @@ impl Visitor for NodeFinder<'_> {
             self.auto_import_line = (lsp_location.range.start.line + 1) as usize;
         }
 
+        // We are entering a child module so we shouldn't modify imports from a parent module
+        let previous_use_segment_positions = std::mem::take(&mut self.use_segment_positions);
+
         parsed_sub_module.accept_children(self);
 
         // Restore the old module before continuing
         self.module_id = previous_module_id;
         self.nesting -= 1;
         self.auto_import_line = old_auto_import_line;
+        self.use_segment_positions = previous_use_segment_positions;
 
         false
     }
@@ -1354,8 +1380,8 @@ impl Visitor for NodeFinder<'_> {
                     while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
                         cursor += 1;
                     }
-                    let char = bytes[cursor] as char;
-                    if char != '(' && char != '<' {
+                    let char = bytes.get(cursor).copied().map(char::from);
+                    if !matches!(char, Some('(') | Some('<')) {
                         self.suggest_trait_impl_function(noir_trait_impl, noir_function);
                         return false;
                     }
@@ -1371,6 +1397,10 @@ impl Visitor for NodeFinder<'_> {
     }
 
     fn visit_type_impl(&mut self, type_impl: &TypeImpl, _: Span) -> bool {
+        if self.try_complete_function_param_in_type_impl(type_impl) {
+            return false;
+        }
+
         for generic in &type_impl.generics {
             generic.accept(self);
         }
@@ -1411,6 +1441,14 @@ impl Visitor for NodeFinder<'_> {
         false
     }
 
+    fn visit_noir_trait(&mut self, trait_: &NoirTrait, _: Span) -> bool {
+        if self.try_complete_function_param_in_trait(trait_) {
+            return false;
+        }
+
+        true
+    }
+
     fn visit_trait_item_function(
         &mut self,
         name: &Ident,
@@ -1448,7 +1486,7 @@ impl Visitor for NodeFinder<'_> {
             body.accept(None, self);
 
             self.func_id = None;
-        };
+        }
 
         self.type_parameters = old_type_parameters;
 
@@ -1462,11 +1500,11 @@ impl Visitor for NodeFinder<'_> {
         // In this case we want to suggest items in foo but if they are functions
         // we don't want to insert arguments, because they are already there (even if
         // they could be wrong) just because inserting them would lead to broken code.
-        if let ExpressionKind::Variable(path) = &call_expression.func.kind {
-            if self.includes_span(path.location.span) {
-                self.find_in_path_impl(path, RequestedItems::AnyItems, true);
-                return false;
-            }
+        if let ExpressionKind::Variable(path) = &call_expression.func.kind
+            && self.includes_span(path.location.span)
+        {
+            self.find_in_path_impl(path, RequestedItems::AnyItems, true);
+            return false;
         }
 
         // Check if it's this case:
@@ -1614,17 +1652,17 @@ impl Visitor for NodeFinder<'_> {
         // If we have `foo.bar.>|<` we solve the type of `foo`, get the field `bar`,
         // then suggest methods of the resulting type.
         if self.byte == Some(b'.') && span.end() as usize == self.byte_index - 1 {
-            if let Some(typ) = self.get_lvalue_type(object) {
-                if let Some(typ) = get_field_type(&typ, field_name.as_str()) {
-                    let prefix = "";
-                    let self_prefix = false;
-                    self.complete_type_fields_and_methods(
-                        &typ,
-                        prefix,
-                        FunctionCompletionKind::NameAndParameters,
-                        self_prefix,
-                    );
-                }
+            if let Some(typ) = self.get_lvalue_type(object)
+                && let Some(typ) = get_field_type(&typ, field_name.as_str())
+            {
+                let prefix = "";
+                let self_prefix = false;
+                self.complete_type_fields_and_methods(
+                    &typ,
+                    prefix,
+                    FunctionCompletionKind::NameAndParameters,
+                    self_prefix,
+                );
             }
 
             return false;
@@ -1636,26 +1674,28 @@ impl Visitor for NodeFinder<'_> {
         // If we have `foo[index].>|<` we solve the type of `foo`, then get the array/vector element type,
         // then suggest methods of that type.
         if self.byte == Some(b'.') && span.end() as usize == self.byte_index - 1 {
-            if let Some(typ) = self.get_lvalue_type(array) {
-                if let Some(typ) = get_array_element_type(typ) {
-                    let prefix = "";
-                    let self_prefix = false;
-                    self.complete_type_fields_and_methods(
-                        &typ,
-                        prefix,
-                        FunctionCompletionKind::NameAndParameters,
-                        self_prefix,
-                    );
-                }
+            if let Some(typ) = self.get_lvalue_type(array)
+                && let Some(typ) = get_array_element_type(typ)
+            {
+                let prefix = "";
+                let self_prefix = false;
+                self.complete_type_fields_and_methods(
+                    &typ,
+                    prefix,
+                    FunctionCompletionKind::NameAndParameters,
+                    self_prefix,
+                );
             }
             return false;
         }
         true
     }
 
-    fn visit_lvalue_dereference(&mut self, lvalue: &LValue, span: Span) -> bool {
+    fn visit_lvalue_dereference(&mut self, expr: &Expression, span: Span) -> bool {
         if self.byte == Some(b'.') && span.end() as usize == self.byte_index - 1 {
-            if let Some(typ) = self.get_lvalue_type(lvalue) {
+            if let Some(typ) = LValue::from_expression(expr.clone())
+                .and_then(|lvalue| self.get_lvalue_type(&lvalue))
+            {
                 let prefix = "";
                 let self_prefix = false;
                 self.complete_type_fields_and_methods(
@@ -1729,7 +1769,8 @@ impl Visitor for NodeFinder<'_> {
         constructor_expression: &ConstructorExpression,
         _: Span,
     ) -> bool {
-        let UnresolvedTypeData::Named(path, _, _) = &constructor_expression.typ.typ else {
+        let UnresolvedTypeData::Named(path, generic_type_args, _) = &constructor_expression.typ.typ
+        else {
             return true;
         };
 
@@ -1744,6 +1785,8 @@ impl Visitor for NodeFinder<'_> {
             self.complete_constructor_field_name(constructor_expression);
             return false;
         }
+
+        generic_type_args.accept(self);
 
         for (_field_name, expression) in &constructor_expression.fields {
             expression.accept(self);
@@ -1939,7 +1982,7 @@ fn get_field_type(typ: &Type, name: &str) -> Option<Type> {
         Type::TypeVariable(var) | Type::NamedGeneric(NamedGeneric { type_var: var, .. }) => {
             match &*var.borrow() {
                 TypeBinding::Bound(typ) => get_field_type(typ, name),
-                _ => None,
+                TypeBinding::Unbound(..) => None,
             }
         }
         _ => None,
@@ -1948,7 +1991,7 @@ fn get_field_type(typ: &Type, name: &str) -> Option<Type> {
 
 fn get_array_element_type(typ: Type) -> Option<Type> {
     match typ {
-        Type::Array(_, typ) | Type::Vector(typ) => Some(*typ),
+        Type::Array(typ, _) | Type::Vector(typ) => Some(*typ),
         Type::Alias(alias_type, generics) => {
             let typ = alias_type.borrow().get_type(&generics);
             get_array_element_type(typ)
@@ -1956,7 +1999,7 @@ fn get_array_element_type(typ: Type) -> Option<Type> {
         Type::TypeVariable(var) | Type::NamedGeneric(NamedGeneric { type_var: var, .. }) => {
             match &*var.borrow() {
                 TypeBinding::Bound(typ) => get_array_element_type(typ.clone()),
-                _ => None,
+                TypeBinding::Unbound(..) => None,
             }
         }
         _ => None,
@@ -1983,6 +2026,7 @@ fn get_type_type_id(typ: &Type) -> Option<TypeId> {
 ///
 /// For example:
 ///
+/// ```text
 /// // "merk" and "ro" match "merkle" and "root" and are in order  // cSpell:disable-line
 /// name_matches("compute_merkle_root", "merk_ro") == true // cSpell:disable-line
 ///
@@ -1991,6 +2035,7 @@ fn get_type_type_id(typ: &Type) -> Option<TypeId> {
 ///
 /// // neither "compute" nor "merkle" nor "root" start with "oot"
 /// name_matches("compute_merkle_root", "oot") == false
+/// ```
 fn name_matches(name: &str, prefix: &str) -> bool {
     let name = name.to_case(Case::Snake);
     let name_parts: Vec<&str> = name.split('_').collect();

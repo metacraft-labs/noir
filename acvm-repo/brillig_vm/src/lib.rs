@@ -5,6 +5,18 @@
 //!
 //! Brillig bytecode is distinct from regular [ACIR][acir] in that it does not generate constraints.
 //!
+//! # Input Validation
+//!
+//! **Important:** The VM assumes that all inputs have been validated by the caller before execution.
+//! This includes ensuring that field element values fit within the expected bit sizes for typed
+//! operations (e.g., `u8`, `u16`, `u32`, etc.).
+//!
+//! If invalid inputs are provided, the VM may produce unexpected results without error:
+//! - Cast operations truncate call data values that exceed the target bit size (e.g., casting `256` to `u8` produces `0`)
+//!
+//! When using the VM with Noir programs, the ABI layer handles input validation
+//! automatically. Direct consumers of the VM API must implement their own input validation.
+//!
 //! [acir]: https://crates.io/crates/acir
 //! [acvm]: https://crates.io/crates/acvm
 
@@ -21,7 +33,7 @@ use black_box::evaluate_black_box;
 pub use acir::brillig;
 use memory::MemoryTypeError;
 pub use memory::{
-    FREE_MEMORY_POINTER_ADDRESS, MEMORY_ADDRESSING_BIT_SIZE, Memory, MemoryValue,
+    FREE_MEMORY_POINTER_ADDRESS, MAX_MEMORY_SIZE, MEMORY_ADDRESSING_BIT_SIZE, Memory, MemoryValue,
     STACK_POINTER_ADDRESS, offsets,
 };
 
@@ -35,6 +47,16 @@ mod foreign_call;
 pub mod fuzzing;
 mod memory;
 
+/// Converts a u32 value to usize, panicking if the conversion fails.
+fn assert_usize(value: u32) -> usize {
+    value.try_into().expect("Failed conversion from u32 to usize")
+}
+
+/// Converts a usize value to u32, panicking if the conversion fails.
+fn assert_u32(value: usize) -> u32 {
+    value.try_into().expect("Failed conversion from usize to u32")
+}
+
 /// The error call stack contains the opcode indexes of the call stack at the time of failure, plus the index of the opcode that failed.
 pub type ErrorCallStack = Vec<usize>;
 
@@ -47,9 +69,9 @@ pub enum FailureReason {
     /// The revert data is referenced by the offset and size in the VM memory.
     Trap {
         /// Offset in memory where the revert data begins.
-        revert_data_offset: usize,
+        revert_data_offset: u32,
         /// Size of the revert data.
-        revert_data_size: usize,
+        revert_data_size: u32,
     },
     /// A runtime failure during execution.
     /// This error is triggered by all opcodes aside the [trap opcode][Opcode::Trap].
@@ -64,9 +86,9 @@ pub enum VMStatus<F> {
     /// The output of the program is stored in the VM memory and can be accessed via the provided offset and size.
     Finished {
         /// Offset in memory where the return data begins.
-        return_data_offset: usize,
+        return_data_offset: u32,
         /// Size of the return data.
-        return_data_size: usize,
+        return_data_size: u32,
     },
     /// The VM is still in progress and has not yet completed execution.
     /// This is used when simulating execution.
@@ -81,7 +103,7 @@ pub enum VMStatus<F> {
     /// The VM process is not solvable as a [foreign call][Opcode::ForeignCall] has been
     /// reached where the outputs are yet to be resolved.
     ///
-    /// The caller should interpret the information returned to compute a [ForeignCallResult]
+    /// The caller should interpret the information returned to compute a [`ForeignCallResult`]
     /// and update the Brillig process. The VM can then be restarted to fully solve the previously
     /// unresolved foreign call as well as the remaining Brillig opcodes.
     ForeignCallWait {
@@ -127,7 +149,7 @@ pub struct VM<'a, F, B: BlackBoxFunctionSolver<F>> {
     ///   unprocessed responses returned from the external foreign call handler.
     foreign_call_counter: usize,
     /// Accumulates the outputs of all foreign calls during a Brillig process.
-    /// The list is appended onto by the caller upon reaching a [VMStatus::ForeignCallWait].
+    /// The list is appended onto by the caller upon reaching a [`VMStatus::ForeignCallWait`].
     foreign_call_results: Vec<ForeignCallResult<F>>,
     /// Executable opcodes.
     bytecode: &'a [Opcode<F>],
@@ -191,7 +213,7 @@ impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> VM<'a, F, B> {
     /// Updates the current status of the VM.
     /// Returns the given status.
     fn status(&mut self, status: VMStatus<F>) -> &VMStatus<F> {
-        self.status = status.clone();
+        self.status = status;
         &self.status
     }
 
@@ -200,7 +222,7 @@ impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> VM<'a, F, B> {
     }
 
     /// Sets the current status of the VM to Finished (completed execution).
-    fn finish(&mut self, return_data_offset: usize, return_data_size: usize) -> &VMStatus<F> {
+    fn finish(&mut self, return_data_offset: u32, return_data_size: u32) -> &VMStatus<F> {
         self.status(VMStatus::Finished { return_data_offset, return_data_size })
     }
 
@@ -221,7 +243,7 @@ impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> VM<'a, F, B> {
 
     /// Sets the current status of the VM to `Failure`,
     /// indicating that the VM encountered a `Trap` Opcode.
-    fn trap(&mut self, revert_data_offset: usize, revert_data_size: usize) -> &VMStatus<F> {
+    fn trap(&mut self, revert_data_offset: u32, revert_data_size: u32) -> &VMStatus<F> {
         self.status(VMStatus::Failure {
             call_stack: self.get_call_stack(),
             reason: FailureReason::Trap { revert_data_offset, revert_data_size },
@@ -268,7 +290,7 @@ impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> VM<'a, F, B> {
     /// Write a numeric value to direct memory slot.
     ///
     /// Used by the debugger to alter memory.
-    pub fn write_memory_at(&mut self, ptr: usize, value: MemoryValue<F>) {
+    pub fn write_memory_at(&mut self, ptr: u32, value: MemoryValue<F>) {
         self.memory.write(MemoryAddress::direct(ptr), value);
     }
 
@@ -280,7 +302,7 @@ impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> VM<'a, F, B> {
         call_stack
     }
 
-    /// Returns the VM's call stack, but unlike [Self::get_call_stack] without the attaching
+    /// Returns the VM's call stack, but unlike [`Self::get_call_stack`] without the attaching
     /// the program counter in the last position of the returned vector.
     /// This is meant only for fetching the call stack after execution has completed.
     pub fn get_call_stack_no_current_counter(&self) -> Vec<usize> {
@@ -329,7 +351,7 @@ impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> VM<'a, F, B> {
                     Ok(false) => {
                         // Not a free memory op, carry on as a regular binary operation.
                     }
-                };
+                }
                 if let Err(error) = self.process_binary_int_op(*op, *bit_size, *lhs, *rhs, *result)
                 {
                     self.fail(error.to_string())
@@ -370,9 +392,20 @@ impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> VM<'a, F, B> {
                 }
             }
             Opcode::CalldataCopy { destination_address, size_address, offset_address } => {
-                let size = self.memory.read(*size_address).to_usize();
-                let offset = self.memory.read(*offset_address).to_usize();
-                let values: Vec<_> = self.calldata[offset..(offset + size)]
+                let size = assert_usize(self.memory.read(*size_address).to_u32());
+                let offset = assert_usize(self.memory.read(*offset_address).to_u32());
+                let end = if let Some(end) = offset.checked_add(size)
+                    && end <= self.calldata.len()
+                {
+                    end
+                } else {
+                    return self.fail(format!(
+                        "CalldataCopy out of bounds: offset {offset} + size {size} \
+                         exceeds calldata length {}",
+                        self.calldata.len()
+                    ));
+                };
+                let values: Vec<_> = self.calldata[offset..end]
                     .iter()
                     .map(|value| MemoryValue::new_field(*value))
                     .collect();
@@ -422,7 +455,7 @@ impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> VM<'a, F, B> {
                 self.increment_program_counter()
             }
             Opcode::Trap { revert_data } => {
-                let revert_data_size = self.memory.read(revert_data.size).to_usize();
+                let revert_data_size = self.memory.read(revert_data.size).to_u32();
                 if revert_data_size > 0 {
                     self.trap(
                         self.memory.read_ref(revert_data.pointer).unwrap_direct(),
@@ -433,7 +466,7 @@ impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> VM<'a, F, B> {
                 }
             }
             Opcode::Stop { return_data } => {
-                let return_data_size = self.memory.read(return_data.size).to_usize();
+                let return_data_size = self.memory.read(return_data.size).to_u32();
                 if return_data_size > 0 {
                     self.finish(
                         self.memory.read_ref(return_data.pointer).unwrap_direct(),
@@ -501,7 +534,7 @@ impl<'a, F: AcirField, B: BlackBoxFunctionSolver<F>> VM<'a, F, B> {
 
     /// Sets the program counter to `value`.
     /// If the program counter no longer points to an opcode
-    /// in the bytecode, then the VMStatus reports `Finished`.
+    /// in the bytecode, then the `VMStatus` reports `Finished`.
     fn set_program_counter(&mut self, value: usize) -> &VMStatus<F> {
         assert!(self.program_counter < self.bytecode.len());
         self.program_counter = value;

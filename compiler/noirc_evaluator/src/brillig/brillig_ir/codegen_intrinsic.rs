@@ -3,8 +3,6 @@ use acvm::acir::{
     brillig::{BlackBoxOp, IntegerBitSize},
 };
 
-use crate::brillig::brillig_ir::BrilligBinaryOp;
-
 use super::{
     BrilligContext,
     brillig_variable::{BrilligArray, SingleAddrVariable},
@@ -55,11 +53,10 @@ impl<F: AcirField + DebugToString, Registers: RegisterAllocator> BrilligContext<
             value_to_truncate.bit_size,
         );
 
-        self.binary_instruction(
+        self.unsigned_modulo_instruction(
+            destination_of_truncated_value,
             value_to_truncate,
             *modulus_var,
-            destination_of_truncated_value,
-            BrilligBinaryOp::Modulo,
         );
     }
 
@@ -78,11 +75,17 @@ impl<F: AcirField + DebugToString, Registers: RegisterAllocator> BrilligContext<
     ) {
         assert!(source_field.bit_size == F::max_num_bits());
         assert!(radix.bit_size == 32);
+        assert!(
+            target_array.size.0 <= F::max_num_bits(),
+            "ToRadix num_limbs ({}) exceeds the maximum useful number of limbs ({}) for this field",
+            target_array.size.0,
+            F::max_num_bits()
+        );
 
         let bits_register = self.make_constant_instruction(output_bits.into(), 1);
         self.codegen_initialize_array(target_array);
         let pointer = self.codegen_make_array_items_pointer(target_array);
-        let num_limbs = self.make_usize_constant_instruction(target_array.size.into());
+        let num_limbs = self.make_usize_constant_instruction(target_array.size.0.into());
 
         // Perform big-endian ToRadix
         self.black_box_op_instruction(BlackBoxOp::ToRadix {

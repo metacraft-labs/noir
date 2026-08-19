@@ -36,7 +36,7 @@ fn add_single_step_smoke() {
     }];
 
     // Start VM
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(calldata, &opcodes, &solver, false, None);
 
     let status = vm.process_opcode();
@@ -56,15 +56,15 @@ fn jmpif_opcode() {
 
     let lhs = {
         calldata.push(2u128.into());
-        MemoryAddress::direct(calldata.len() - 1)
+        MemoryAddress::direct((calldata.len() - 1).try_into().unwrap())
     };
 
     let rhs = {
         calldata.push(2u128.into());
-        MemoryAddress::direct(calldata.len() - 1)
+        MemoryAddress::direct((calldata.len() - 1).try_into().unwrap())
     };
 
-    let destination = MemoryAddress::direct(calldata.len());
+    let destination = MemoryAddress::direct(calldata.len().try_into().unwrap());
 
     let opcodes = vec![
         Opcode::Const {
@@ -87,7 +87,7 @@ fn jmpif_opcode() {
         Opcode::JumpIf { condition: destination, location: 6 },
     ];
 
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(calldata, &opcodes, &solver, false, None);
 
     let status = vm.process_opcode();
@@ -169,7 +169,7 @@ fn jump_forward_and_backward() {
         Opcode::JumpIf { condition, location: 5 },
     ];
 
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let vm = brillig_execute_and_get_vm(calldata, &opcodes, &solver);
 
     let memory = vm.take_memory();
@@ -185,38 +185,55 @@ fn jump_forward_and_backward() {
 
 #[test]
 fn stop() {
+    // Pretend we have some reserved memory slots.
+    let reserved_size: u32 = 3;
     // Create a vector in memory
     let vector_size: u32 = 100;
     let calldata: Vec<FieldElement> = (0..vector_size).map(FieldElement::from).collect();
 
-    let calldata_pointer = MemoryAddress::Direct(calldata.len());
+    // The pointers to the calldata will come after the calldata itself.
+    // An address in memory where we will copy the calldata to. Not zero to leave room for some reserved registers.
+    let calldata_dst_addr = MemoryAddress::direct(reserved_size);
+    // A pointer address to hold the calldata start address.
+    let calldata_dst_pointer = MemoryAddress::direct(reserved_size + vector_size);
+    // An address in memory to store where the calldata should come from.
+    let calldata_src_pointer = calldata_dst_pointer.offset(1);
+    // An address in memory to store how much calldata we want to copy.
+    let calldata_size_addr = calldata_src_pointer.offset(1);
 
     // Simply immediately return the call data
     let opcodes = vec![
-        // The pointer for the call data will come after the calldata itself
+        // Where we want to copy the calldata from: it starts at `VM::calldata[0]`.
         Opcode::Const {
-            destination: calldata_pointer,
+            destination: calldata_src_pointer,
             bit_size: BitSize::Integer(IntegerBitSize::U32),
-            value: FieldElement::from(0u32),
+            value: FieldElement::from(0),
         },
-        // Place the size register after all the call data
+        // How long the calldata is.
         Opcode::Const {
-            destination: calldata_pointer.offset(1),
+            destination: calldata_size_addr,
             bit_size: BitSize::Integer(IntegerBitSize::U32),
-            value: FieldElement::from(100u32),
+            value: FieldElement::from(vector_size),
         },
+        // Copy the data from the calldata buffer into the memory.
         Opcode::CalldataCopy {
-            destination_address: MemoryAddress::direct(0),
-            size_address: calldata_pointer.offset(1),
-            offset_address: calldata_pointer,
+            destination_address: calldata_dst_addr,
+            size_address: calldata_size_addr,
+            offset_address: calldata_src_pointer,
         },
-        // Stop and return the vector starting at memory[0]
+        // Stop needs a pointer to the data, not its direct address.
+        Opcode::Const {
+            destination: calldata_dst_pointer,
+            bit_size: BitSize::Integer(IntegerBitSize::U32),
+            value: FieldElement::from(calldata_dst_addr.to_u32()),
+        },
+        // Stop and return the vector that was written to memory.
         Opcode::Stop {
-            return_data: HeapVector { pointer: calldata_pointer, size: calldata_pointer.offset(1) },
+            return_data: HeapVector { pointer: calldata_dst_pointer, size: calldata_size_addr },
         },
     ];
 
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let vm = brillig_execute_and_get_vm(calldata.clone(), &opcodes, &solver);
 
     let VMStatus::Finished { return_data_offset, return_data_size } = vm.get_status() else {
@@ -224,8 +241,8 @@ fn stop() {
     };
 
     let memory = vm.take_memory();
-    let returned: Vec<_> = (return_data_offset..return_data_size)
-        .map(|i| memory.read(MemoryAddress::direct(i)).to_field())
+    let returned: Vec<_> = (0..return_data_size)
+        .map(|i| memory.read(MemoryAddress::direct(return_data_offset + i)).to_field())
         .collect();
     assert_eq!(returned, calldata);
 }
@@ -266,7 +283,7 @@ fn cast_opcode() {
             },
         },
     ];
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(calldata, opcodes, &solver, false, None);
 
     let status = vm.process_opcode();
@@ -327,7 +344,7 @@ fn not_opcode() {
             },
         },
     ];
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(calldata, opcodes, &solver, false, None);
 
     let status = vm.process_opcode();
@@ -372,7 +389,7 @@ fn mov_opcode() {
         },
         Opcode::Mov { destination: MemoryAddress::direct(2), source: MemoryAddress::direct(0) },
     ];
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(calldata, opcodes, &solver, false, None);
 
     let status = vm.process_opcode();
@@ -438,7 +455,7 @@ fn cmov_opcode() {
             condition: MemoryAddress::direct(1),
         },
     ];
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(calldata, opcodes, &solver, false, None);
 
     let status = vm.process_opcode();
@@ -470,7 +487,7 @@ fn cmp_binary_ops() {
     let bit_size = MEMORY_ADDRESSING_BIT_SIZE;
     let calldata: Vec<FieldElement> =
         vec![(2u128).into(), (2u128).into(), (0u128).into(), (5u128).into(), (6u128).into()];
-    let calldata_size = calldata.len();
+    let calldata_size = calldata.len() as u32;
 
     let calldata_copy_opcodes = vec![
         Opcode::Const {
@@ -536,7 +553,7 @@ fn cmp_binary_ops() {
         .chain(cast_opcodes)
         .chain([equal_opcode, not_equal_opcode, less_than_opcode, less_than_equal_opcode])
         .collect();
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(calldata, &opcodes, &solver, false, None);
 
     // Calldata copy
@@ -556,37 +573,39 @@ fn cmp_binary_ops() {
     let status = vm.process_opcode();
     assert_eq!(*status, VMStatus::InProgress);
 
-    let output_eq_value = vm.get_memory()[destination.unwrap_direct()];
+    let output_eq_value = vm.get_memory()[destination.unwrap_direct() as usize];
     assert_eq!(output_eq_value, true.into());
 
     let status = vm.process_opcode();
     assert_eq!(*status, VMStatus::InProgress);
 
-    let output_neq_value = vm.get_memory()[destination.unwrap_direct()];
+    let output_neq_value = vm.get_memory()[destination.unwrap_direct() as usize];
     assert_eq!(output_neq_value, false.into());
 
     let status = vm.process_opcode();
     assert_eq!(*status, VMStatus::InProgress);
 
-    let lt_value = vm.get_memory()[destination.unwrap_direct()];
+    let lt_value = vm.get_memory()[destination.unwrap_direct() as usize];
     assert_eq!(lt_value, true.into());
 
     let status = vm.process_opcode();
     assert_eq!(*status, VMStatus::Finished { return_data_offset: 0, return_data_size: 0 });
 
-    let lte_value = vm.get_memory()[destination.unwrap_direct()];
+    let lte_value = vm.get_memory()[destination.unwrap_direct() as usize];
     assert_eq!(lte_value, true.into());
 }
 
 #[test]
 fn store_opcode() {
     /// Brillig code for the following:
+    /// ```text
     ///     let mut i = 0;
     ///     let len = memory.len();
     ///     while i < len {
     ///         memory[i] = i as Value;
     ///         i += 1;
     ///     }
+    /// ```
     fn brillig_write_memory(item_count: usize) -> Vec<MemoryValue<FieldElement>> {
         let integer_bit_size = MEMORY_ADDRESSING_BIT_SIZE;
         let bit_size = BitSize::Integer(integer_bit_size);
@@ -637,7 +656,7 @@ fn store_opcode() {
         ];
 
         let opcodes = [&start[..], &loop_body[..]].concat();
-        let solver = StubbedBlackBoxSolver::default();
+        let solver = StubbedBlackBoxSolver;
         let vm = brillig_execute_and_get_vm(vec![], &opcodes, &solver);
         vm.get_memory()[4..].to_vec()
     }
@@ -665,7 +684,7 @@ fn iconst_opcode() {
             value: FieldElement::from(27_usize),
         },
     ];
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(vec![], opcodes, &solver, false, None);
 
     let status = vm.process_opcode();
@@ -683,6 +702,7 @@ fn iconst_opcode() {
 #[test]
 fn load_opcode() {
     /// Brillig code for the following:
+    /// ```text
     ///     let mut sum = 0;
     ///     let mut i = 0;
     ///     let len = memory.len();
@@ -690,6 +710,7 @@ fn load_opcode() {
     ///         sum += memory[i];
     ///         i += 1;
     ///     }
+    /// ```
     fn brillig_sum_memory(memory: Vec<FieldElement>) -> FieldElement {
         let bit_size = IntegerBitSize::U32;
         let r_i = MemoryAddress::direct(0);
@@ -780,7 +801,7 @@ fn load_opcode() {
         ];
 
         let opcodes = [&start[..], &loop_body[..]].concat();
-        let solver = StubbedBlackBoxSolver::default();
+        let solver = StubbedBlackBoxSolver;
         let vm = brillig_execute_and_get_vm(memory, &opcodes, &solver);
         vm.take_memory().read(r_sum).to_field()
     }
@@ -801,6 +822,7 @@ fn load_opcode() {
 #[test]
 fn call_and_return_opcodes() {
     /// Brillig code for the following recursive function:
+    /// ```text
     ///     fn recursive_write(i: u128, len: u128) {
     ///         if len <= i {
     ///             return;
@@ -808,6 +830,7 @@ fn call_and_return_opcodes() {
     ///         memory[i as usize] = i as Value;
     ///         recursive_write(memory, i + 1, len);
     ///     }
+    /// ```
     /// Note we represent a 100% in-stack optimized form in brillig
     fn brillig_recursive_write_memory<F: AcirField>(size: usize) -> Vec<MemoryValue<F>> {
         let integer_bit_size = MEMORY_ADDRESSING_BIT_SIZE;
@@ -872,7 +895,7 @@ fn call_and_return_opcodes() {
         ];
 
         let opcodes = [&start[..], &recursive_fn[..]].concat();
-        let solver = StubbedBlackBoxSolver::default();
+        let solver = StubbedBlackBoxSolver;
         let vm = brillig_execute_and_get_vm(vec![], &opcodes, &solver);
         vm.get_memory()[4..].to_vec()
     }
@@ -917,7 +940,7 @@ fn relative_addressing() {
         },
     ];
 
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(calldata, &opcodes, &solver, false, None);
 
     vm.process_opcode();
@@ -954,7 +977,7 @@ fn field_zero_division_regression() {
             rhs: MemoryAddress::direct(1),
         },
     ];
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(calldata, opcodes, &solver, false, None);
 
     let status = vm.process_opcode();
@@ -991,7 +1014,7 @@ fn free_memory_pointer_out_of_memory() {
         // would wrap around to equal 0.
         Opcode::Const {
             destination: big_array_size_addr,
-            value: FieldElement::from(u32::MAX - free_memory_starting_slot as u32 + 1),
+            value: FieldElement::from(u32::MAX - free_memory_starting_slot + 1),
             bit_size: BitSize::Integer(IntegerBitSize::U32),
         },
         // Increase the free memory pointer by the size of the hypothetical big array.
@@ -1016,7 +1039,7 @@ fn free_memory_pointer_out_of_memory() {
             },
         },
     ];
-    let solver = StubbedBlackBoxSolver::default();
+    let solver = StubbedBlackBoxSolver;
     let mut vm = VM::new(calldata, opcodes, &solver, false, None);
 
     let status = vm.process_opcodes();
@@ -1024,7 +1047,7 @@ fn free_memory_pointer_out_of_memory() {
 
     // Check that the free memory pointer did not wrap around.
     let free_memory_start = memory.read_ref(FREE_MEMORY_POINTER_ADDRESS);
-    assert!(free_memory_start.to_usize() >= free_memory_starting_slot);
+    assert!(free_memory_start.to_u32() >= free_memory_starting_slot);
 
     assert_eq!(
         status,
