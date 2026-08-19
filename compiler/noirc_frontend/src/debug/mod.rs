@@ -3,7 +3,7 @@ use crate::parser::{ParsedModule, ParsedSubModule};
 use crate::token::FunctionAttributeKind;
 use crate::{ast, ast::Path, parser::ItemKind};
 use noirc_artifacts::debug::{DebugFnId, DebugFunction};
-use noirc_errors::{Location, Span};
+use noirc_errors::{Located, Location, Span};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::mem::take;
@@ -310,6 +310,51 @@ impl DebugInstrumenter {
         }
     }
 
+    /// Instrument a compound assignment (`x += y`, `arr[i] *= y`, …) by
+    /// rewriting it to the plain assignment it is equivalent to,
+    /// `x = x + y`, and instrumenting that.
+    ///
+    /// The parser used to perform this desugaring itself, so
+    /// [`Self::walk_assign_statement`] saw every compound assignment as an
+    /// [`ast::StatementKind::Assign`]. Once `AssignOp` became its own
+    /// statement kind — desugared later, in the elaborator — compound
+    /// assignments stopped being instrumented at all, which made the debugger
+    /// and the trace recorder report a **stale value** for every variable
+    /// updated with `+=`/`*=`/… rather than reporting nothing (so the
+    /// breakage was silent).
+    ///
+    /// Caveat, inherited from the desugaring the parser used to do: an
+    /// lvalue index sub-expression is evaluated twice, so `arr[f()] += 1`
+    /// calls `f()` twice under `--instrument-debug`. The elaborator's own
+    /// `elaborate_assign_op` avoids this by reusing the elaborated lvalue,
+    /// which is not available this early. Only debug-instrumented builds are
+    /// affected.
+    fn walk_assign_op_statement(
+        &mut self,
+        assign_op_stmt: &ast::AssignOpStatement,
+        location: Location,
+    ) -> ast::Statement {
+        let operator_location = assign_op_stmt.op.location();
+        let expression_location = assign_op_stmt.expression.location;
+
+        let desugared = ast::AssignStatement {
+            lvalue: assign_op_stmt.lvalue.clone(),
+            expression: ast::Expression {
+                kind: ast::ExpressionKind::Infix(Box::new(ast::InfixExpression {
+                    lhs: assign_op_stmt.lvalue.as_expression(),
+                    operator: Located::from(
+                        operator_location,
+                        assign_op_stmt.op.contents.to_binary_op_kind(),
+                    ),
+                    rhs: assign_op_stmt.expression.clone(),
+                })),
+                location: expression_location,
+            },
+        };
+
+        self.walk_assign_statement(&desugared, location)
+    }
+
     fn walk_assign_statement(
         &mut self,
         assign_stmt: &ast::AssignStatement,
@@ -519,6 +564,9 @@ impl DebugInstrumenter {
             }
             ast::StatementKind::Assign(assign_stmt) => {
                 *stmt = self.walk_assign_statement(assign_stmt, stmt.location);
+            }
+            ast::StatementKind::AssignOp(assign_op_stmt) => {
+                *stmt = self.walk_assign_op_statement(assign_op_stmt, stmt.location);
             }
             ast::StatementKind::Expression(expr) => {
                 self.walk_expr(expr);
