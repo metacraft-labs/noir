@@ -1,3 +1,5 @@
+#![expect(unreachable_pub)] // This module is full of issues related to this lint
+
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 

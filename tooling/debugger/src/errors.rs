@@ -2,9 +2,9 @@ use thiserror::Error;
 
 /// Errors raised while serving the Debug Adapter Protocol.
 ///
-/// Gated on `cli`: the `ServerError` variant wraps a type from the `dap` crate,
-/// which is only a dependency when the interactive front-ends are compiled in.
-#[cfg(feature = "cli")]
+/// Gated on the `dap` feature: the `ServerError` variant wraps a type from the
+/// `dap` crate, which is only a dependency when that front-end is compiled in.
+#[cfg(feature = "dap")]
 #[derive(Debug, Error)]
 pub enum DapError {
     #[error("{0}")]

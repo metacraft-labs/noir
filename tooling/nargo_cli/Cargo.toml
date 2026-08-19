@@ -45,7 +45,7 @@ nargo_fmt.workspace = true
 nargo_toml.workspace = true
 noir_lsp.workspace = true
 noir_artifact_cli.workspace = true
-noir_debugger = { workspace = true, features = ["cli"] }
+noir_debugger = { workspace = true, features = ["repl", "dap"] }
 noirc_evaluator.workspace = true
 # `nim-writer` supplies the `TraceSink -> TraceWriter` adapter for the
 # Nim-FFI-backed CTFS writer this binary drives.  The feature is off by default

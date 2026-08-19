@@ -1,3 +1,5 @@
+#![expect(unreachable_pub)] // This module is full of issues related to this lint
+
 use crate::DebugProject;
 use crate::context::{
     DebugCommandResult, DebugContext, DebugExecutionResult, DebugLocation, DebugStackFrame,

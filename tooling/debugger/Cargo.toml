@@ -22,29 +22,28 @@ noirc_errors.workspace = true
 noirc_artifacts.workspace = true
 thiserror.workspace = true
 codespan-reporting.workspace = true
-bn254_blackbox_solver.workspace = true
-
-# Interactive front-end dependencies. Optional so that the crate's
-# platform-agnostic core (`context`, `foreign_calls`) can be built for targets
-# with no terminal and no sockets -- notably `wasm32-unknown-unknown`.
+# Only needed by the front-ends (`repl` and `dap` features). The stepping core
+# is generic over `BlackBoxFunctionSolver`, so an embedder picks its own solver.
+bn254_blackbox_solver = { workspace = true, optional = true }
 dap = { workspace = true, optional = true }
 easy-repl = { version = "0.2.1", optional = true }
 owo-colors = { version = "^4.2.2", optional = true }
 
 [features]
-# The native default: the full debugger, exactly as before this crate was
-# feature-gated.
-default = ["cli"]
+default = ["repl", "dap"]
 
-# The interactive front-ends: the `nargo debug` REPL and the DAP server, plus
-# the terminal source-code printer they share.
-cli = ["dep:dap", "dep:easy-repl", "dep:owo-colors", "rpc"]
-
-# Oracle resolution over HTTP. `nargo`'s own comment: "Execution currently uses
-# HTTP based Oracle resolvers; does not compile to Wasm." Pulls
-# jsonrpsee/http-client + tokio/rt + rand, and transitively `mio`, which has a
+# Resolve oracle calls against a JSON-RPC server.
+#
+# Execution currently uses HTTP based Oracle resolvers; does not compile to Wasm
+# -- `nargo/rpc` pulls jsonrpsee + tokio, and transitively `mio`, which has a
 # hard `compile_error!` on wasm targets.
 rpc = ["nargo/rpc"]
+
+# The interactive terminal front-end which backs `nargo debug`.
+repl = ["dep:easy-repl", "dep:owo-colors", "dep:bn254_blackbox_solver", "rpc"]
+
+# The Debug Adapter Protocol server front-end which backs `nargo dap`.
+dap = ["dep:dap", "dep:bn254_blackbox_solver", "rpc"]
 
 [dev-dependencies]
 assert_cmd = "2.0.12"

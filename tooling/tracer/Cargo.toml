@@ -12,11 +12,11 @@ repository.workspace = true
 acvm.workspace = true
 fm.workspace = true
 nargo.workspace = true
-# Inherited WITHOUT the debugger's `cli` feature (the workspace entry sets
+# Inherited WITHOUT the debugger's front-end features (the workspace entry sets
 # `default-features = false`), and so without `rpc` -> jsonrpsee/tokio/mio,
 # which has a hard `compile_error!` on wasm.  The tracer only ever uses
 # `noir_debugger::{context, foreign_calls}`, both of which are unconditional.
-# On a native build `nargo_cli` asks for `features = ["cli"]`, so feature
+# On a native build `nargo_cli` asks for `features = ["repl", "dap"]`, so feature
 # unification gives the CLI the full debugger exactly as before.
 noir_debugger.workspace = true
 noirc_abi.workspace = true
