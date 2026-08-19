@@ -45,6 +45,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  check-wasm:
+    name: cargo check (wasm32)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup toolchain
+        uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: wasm32-unknown-unknown
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - uses: taiki-e/install-action@just
+
+      - name: Run `cargo check` for wasm32
+        run: just check-wasm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   rustfmt:
     name: cargo fmt
     runs-on: ubuntu-22.04
@@ -208,6 +237,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - clippy
+      - check-wasm
       - rustfmt
       - rustdoc
       - eslint

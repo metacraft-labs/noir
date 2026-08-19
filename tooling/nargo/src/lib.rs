@@ -15,9 +15,6 @@ pub mod workspace;
 pub use self::errors::NargoError;
 pub use self::ops::FuzzExecutionConfig;
 pub use self::ops::FuzzFolderConfig;
-use std::sync::Mutex;
-use std::sync::mpsc;
-use std::thread;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
@@ -209,8 +206,6 @@ fn collect_all_files_under_path(
     }
 }
 
-const STACK_SIZE: usize = 8 * 1024 * 1024;
-
 #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 pub fn parse_all(file_manager: &FileManager) -> ParsedFiles {
     use rayon::iter::ParallelBridge as _;
@@ -232,6 +227,11 @@ pub fn parse_all(file_manager: &FileManager) -> ParsedFiles {
 
 #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 pub fn parse_all(file_manager: &FileManager) -> ParsedFiles {
+    use std::sync::{Mutex, mpsc};
+    use std::thread;
+
+    const STACK_SIZE: usize = 8 * 1024 * 1024;
+
     // Collect only .nr files to process
     let nr_files: Vec<_> = file_manager
         .as_file_map()
