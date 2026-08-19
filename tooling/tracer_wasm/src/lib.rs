@@ -127,7 +127,8 @@ fn trace_to_json(
     inputs: &str,
     inputs_are_json: bool,
 ) -> Result<String, String> {
-    let trace = trace_artifact(artifact_json, inputs, inputs_are_json).map_err(|e| e.to_string())?;
+    let trace =
+        trace_artifact(artifact_json, inputs, inputs_are_json).map_err(|e| e.to_string())?;
     serde_json::to_string(&trace).map_err(|e| e.to_string())
 }
 
