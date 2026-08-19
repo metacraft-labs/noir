@@ -105,6 +105,16 @@
       <h2>What the module produced</h2>
       <table id="counts"></table>
       <p class="note" id="module-note"></p>
+      <p class="note">
+        <strong>What this download is not, yet:</strong> a <code>.ct</code> CTFS container. The
+        module returns the low-level event stream — the same events, in the same order, that the
+        container writer would buffer — and the download is that stream as JSON. No <code>.ct</code>
+        writer can currently be reached from <code>wasm32-unknown-unknown</code>: the Nim writer
+        links a static library, and the pure-Rust one gates its CTFS writer behind
+        <code>#[cfg(not(target_arch = "wasm32"))]</code> and pulls in C <code>zstd</code>. Making one
+        reach wasm is being done separately; when it lands, this button hands you the container
+        instead, and nothing else on this page changes.
+      </p>
 
       <h2>Steps</h2>
       <pre id="steps"></pre>

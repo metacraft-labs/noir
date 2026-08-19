@@ -226,6 +226,33 @@ const outcome = await evaluate(`
 console.log('\n--- what the browser rendered ---');
 console.log(JSON.stringify(outcome, null, 2));
 
+// Actually take the download, rather than believing a visible button. This is
+// the delivery path a `.ct` container will travel once one can be produced from
+// wasm, so it is worth knowing it works end to end.
+const downloadDir = await import('node:fs/promises').then((fs) =>
+  fs.mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'noir-web-dl-')),
+);
+await cdp.send('Browser.setDownloadBehavior', {
+  behavior: 'allow',
+  downloadPath: downloadDir,
+  eventsEnabled: true,
+});
+await evaluate(`document.getElementById('download').click(), null`);
+
+const { readdirSync, readFileSync: readSync, statSync } = await import('node:fs');
+let downloaded = null;
+for (let i = 0; i < 100 && !downloaded; i++) {
+  const finished = readdirSync(downloadDir).filter((f) => !f.endsWith('.crdownload'));
+  if (finished.length) downloaded = join(downloadDir, finished[0]);
+  else await new Promise((r) => setTimeout(r, 100));
+}
+if (!downloaded) fail('clicking the download button produced no file');
+const downloadedTrace = JSON.parse(readSync(downloaded, 'utf8'));
+console.log(
+  `\ndownloaded ${downloaded.split('/').pop()} (${statSync(downloaded).size} bytes), ` +
+    `${downloadedTrace.events.length} events, paths ${JSON.stringify(downloadedTrace.paths)}`,
+);
+
 // Re-run with *different* source, to show the textarea genuinely drives the
 // compile. Without this the whole demo is consistent with the module ignoring
 // its input and replaying something baked in at build time.
