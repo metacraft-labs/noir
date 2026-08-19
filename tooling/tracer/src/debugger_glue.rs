@@ -88,7 +88,7 @@ fn convert_debugger_location<B: BlackBoxFunctionSolver<FieldElement>>(
     let filepath = match debug_artifact.name(location.file) {
         Ok(filepath) => filepath,
         Err(error) => {
-            println!("Warning: could not get filepath for source location: {error}");
+            tracing::warn!("could not get filepath for source location: {error}");
             return SourceLocation::create_unknown();
         }
     };
@@ -96,7 +96,7 @@ fn convert_debugger_location<B: BlackBoxFunctionSolver<FieldElement>>(
     let line_number = match debug_artifact.location_line_index(location) {
         Ok(line) => line as isize + 1,
         Err(error) => {
-            println!("Warning: could not get line for source location: {error}");
+            tracing::warn!("could not get line for source location: {error}");
             return SourceLocation::create_unknown();
         }
     };

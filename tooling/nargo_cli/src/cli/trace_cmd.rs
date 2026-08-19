@@ -5,6 +5,8 @@ use nargo::ops::debug::compile_options_for_debugging;
 use nargo::package::Package;
 use nargo::{constants::PROVER_INPUT_FILE, ops::debug::compile_bin_package_for_debugging};
 use nargo_toml::{PackageSelection, get_package_manifest, resolve_workspace_from_toml};
+use noir_tracer::TraceOptions;
+use noir_tracer::sink::NimWriterSink;
 use noir_tracer::tracer_glue::begin_trace;
 use noir_tracer::tracer_glue::finish_trace;
 use noirc_abi::InputMap;
@@ -110,9 +112,19 @@ pub(crate) fn trace_program(
     // CTFS is the only trace format nargo emits; the writer factory is kept
     // for symmetry with other recorders and to centralize the format choice
     // in `codetracer_trace_writer`.
-    let mut tracer =
+    let mut writer =
         create_trace_writer(crate_name_string.as_str(), &[], TraceEventsFileFormat::Ctfs);
-    begin_trace(&mut *tracer, out_dir, &crate_name_string);
+    // `NimWriterSink` is the `noir_tracer` adapter over the Nim writer's
+    // `TraceWriter` trait; the recorder itself is typed against the
+    // platform-agnostic `TraceSink`.
+    let mut tracer = NimWriterSink::new(&mut *writer);
+
+    // The recorder no longer reaches for `std::env::current_dir()` itself --
+    // that is ambient state a wasm host does not have. The CLI, which does have
+    // a working directory, supplies it, so the emitted container is unchanged.
+    let options = TraceOptions::with_workdir(std::env::current_dir().ok());
+
+    begin_trace(&mut tracer, out_dir, &crate_name_string, options.workdir.as_deref());
     if let Err(error) = noir_tracer::trace_circuit(
         &Bn254BlackBoxSolver,
         &compiled_program.program.functions,
@@ -120,12 +132,16 @@ pub(crate) fn trace_program(
         initial_witness,
         &compiled_program.program.unconstrained_functions,
         &compiled_program.abi.error_types,
-        &mut *tracer,
+        &options,
+        &mut tracer,
     ) {
         return Err(CliError::from(error));
     };
 
-    finish_trace(&mut *tracer, out_dir);
+    match finish_trace(&mut tracer) {
+        Ok(()) => println!("Saved trace to {out_dir}"),
+        Err(err) => println!("Warning: trace writer failed to finalize CTFS container: {err}"),
+    }
 
     Ok(())
 }

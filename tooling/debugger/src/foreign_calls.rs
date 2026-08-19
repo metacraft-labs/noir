@@ -1,4 +1,3 @@
-#[cfg(feature = "rpc")]
 use std::path::PathBuf;
 
 use acvm::{
@@ -97,27 +96,43 @@ impl DefaultDebugForeignCallExecutor {
     }
 }
 
+/// Without `rpc` there is no HTTP oracle resolver to configure, so
+/// `resolver_url`, `root_path` and `package_name` have nothing to do — but the
+/// signatures stay identical to the `rpc` ones on purpose. A programmatic
+/// consumer such as `noir_tracer` is compiled both ways depending on the target,
+/// and would otherwise need a `#[cfg]` at every call site.
 #[cfg(not(feature = "rpc"))]
 impl DefaultDebugForeignCallExecutor {
     fn make<'a, W: 'a + std::io::Write>(
         output: W,
+        _resolver_url: Option<String>,
         ex: DefaultDebugForeignCallExecutor,
+        _root_path: Option<PathBuf>,
+        _package_name: String,
     ) -> impl DebugForeignCallExecutor + 'a {
         DefaultForeignCallBuilder { output, enable_mocks: true }.build().add_layer(ex)
     }
 
     #[allow(clippy::new_ret_no_self, dead_code)]
-    pub fn new<'a, W: 'a + std::io::Write>(output: W) -> impl DebugForeignCallExecutor + 'a {
-        Self::make(output, Self::default())
+    pub fn new<'a, W: 'a + std::io::Write>(
+        output: W,
+        resolver_url: Option<String>,
+        root_path: Option<PathBuf>,
+        package_name: String,
+    ) -> impl DebugForeignCallExecutor + 'a {
+        Self::make(output, resolver_url, Self::default(), root_path, package_name)
     }
 
     pub fn from_artifact<'a, W: 'a + std::io::Write>(
         output: W,
+        resolver_url: Option<String>,
         artifact: &DebugArtifact,
+        root_path: Option<PathBuf>,
+        package_name: String,
     ) -> impl DebugForeignCallExecutor + use<'a, W> {
         let mut ex = Self::default();
         ex.load_artifact(artifact);
-        Self::make(output, ex)
+        Self::make(output, resolver_url, ex, root_path, package_name)
     }
 }
 
