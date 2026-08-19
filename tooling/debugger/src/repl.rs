@@ -1,3 +1,7 @@
+//! The `unreachable_pub` lint fires all over this front-end; the stepping
+//! core in `context` and `foreign_calls` is clean.
+#![expect(unreachable_pub)]
+
 use crate::DebugProject;
 use crate::context::{
     DebugCommandResult, DebugContext, DebugExecutionResult, DebugLocation, DebugStackFrame,

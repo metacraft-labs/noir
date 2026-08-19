@@ -49,25 +49,46 @@ pub struct DefaultDebugForeignCallExecutor {
     pub debug_vars: DebugVars<FieldElement>,
 }
 
-impl DefaultDebugForeignCallExecutor {
-    fn make<'a, W: 'a + std::io::Write>(
-        output: W,
-        resolver_url: Option<String>,
-        ex: DefaultDebugForeignCallExecutor,
-        root_path: Option<PathBuf>,
-        package_name: String,
-    ) -> impl DebugForeignCallExecutor + 'a {
-        DefaultForeignCallBuilder {
-            output,
-            enable_mocks: true,
-            resolver_url,
-            root_path,
-            package_name: Some(package_name),
-        }
-        .build()
-        .add_layer(ex)
+/// Builds the executor stack for the `rpc` feature.
+#[cfg(feature = "rpc")]
+fn build_executor<'a, W: 'a + std::io::Write>(
+    output: W,
+    resolver_url: Option<String>,
+    ex: DefaultDebugForeignCallExecutor,
+    root_path: Option<PathBuf>,
+    package_name: String,
+) -> impl DebugForeignCallExecutor + 'a {
+    DefaultForeignCallBuilder {
+        output,
+        enable_mocks: true,
+        resolver_url,
+        root_path,
+        package_name: Some(package_name),
     }
+    .build()
+    .add_layer(ex)
+}
 
+/// Builds the executor stack without the `rpc` feature.
+///
+/// The oracle resolver arguments are accepted and ignored rather than removed
+/// from the signature: turning `rpc` off is a build-time decision to have no
+/// resolver at all, and the constructors below are a public API that a consumer
+/// may compile both ways — for instance a tool built natively and for Wasm from
+/// one source. Varying the arity by feature would push a `#[cfg]` onto every
+/// one of its call sites.
+#[cfg(not(feature = "rpc"))]
+fn build_executor<'a, W: 'a + std::io::Write>(
+    output: W,
+    _resolver_url: Option<String>,
+    ex: DefaultDebugForeignCallExecutor,
+    _root_path: Option<PathBuf>,
+    _package_name: String,
+) -> impl DebugForeignCallExecutor + 'a {
+    DefaultForeignCallBuilder { output, enable_mocks: true }.build().add_layer(ex)
+}
+
+impl DefaultDebugForeignCallExecutor {
     #[allow(clippy::new_ret_no_self, dead_code)]
     pub fn new<'a, W: 'a + std::io::Write>(
         output: W,
@@ -75,7 +96,7 @@ impl DefaultDebugForeignCallExecutor {
         root_path: Option<PathBuf>,
         package_name: String,
     ) -> impl DebugForeignCallExecutor + 'a {
-        Self::make(output, resolver_url, Self::default(), root_path, package_name)
+        build_executor(output, resolver_url, Self::default(), root_path, package_name)
     }
 
     pub fn from_artifact<'a, W: 'a + std::io::Write>(
@@ -87,7 +108,7 @@ impl DefaultDebugForeignCallExecutor {
     ) -> impl DebugForeignCallExecutor + use<'a, W> {
         let mut ex = Self::default();
         ex.load_artifact(artifact);
-        Self::make(output, resolver_url, ex, root_path, package_name)
+        build_executor(output, resolver_url, ex, root_path, package_name)
     }
 
     pub fn load_artifact(&mut self, artifact: &DebugArtifact) {
