@@ -70,13 +70,34 @@ export async function loadTracer(wasmBytes) {
       } finally {
         exports.ct_free(ptr, len);
       }
-      const text = decoder.decode(result.bytes);
-      if (result.isError) {
-        throw new Error(text);
+      return finish(result);
+    },
+
+    /// Trace an already-compiled program. `artifactJson` is a `ProgramArtifact`
+    /// as `nargo trace --emit-debug-artifact` writes it. The page does not use
+    /// this, but it is what lets a comparison run both halves of the pipeline
+    /// against each other inside one module.
+    traceArtifact(artifactJson, inputs, inputsAreJson = false) {
+      const [aPtr, aLen] = writeString(artifactJson);
+      const [iPtr, iLen] = writeString(inputs);
+      let result;
+      try {
+        result = takeResult(exports.ct_trace(aPtr, aLen, iPtr, iLen, inputsAreJson ? 1 : 0));
+      } finally {
+        exports.ct_free(aPtr, aLen);
+        exports.ct_free(iPtr, iLen);
       }
-      return JSON.parse(text);
+      return finish(result);
     },
   };
+
+  function finish(result) {
+    const text = decoder.decode(result.bytes);
+    if (result.isError) {
+      throw new Error(text);
+    }
+    return JSON.parse(text);
+  }
 }
 
 /// Reduce the low-level event stream to the counts `ct-print --full` reports,
