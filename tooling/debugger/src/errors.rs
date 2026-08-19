@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+#[cfg(feature = "dap")]
 #[derive(Debug, Error)]
 pub enum DapError {
     #[error("{0}")]
