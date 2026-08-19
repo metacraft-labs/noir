@@ -47,8 +47,8 @@
 //!   registers an unseen path again, so a fresh path yields **two** `Path`
 //!   events and a shifted path table.
 //!
-//! `tests/ctfs_sink.rs` pins all three by comparing the container's decoded
-//! counts against `MemorySink`'s, fixture by fixture.
+//! `tests/ctfs_container.rs` pins all three by comparing the container's
+//! decoded counts against `MemorySink`'s, fixture by fixture.
 
 use std::error::Error;
 use std::path::Path;

@@ -1,27 +1,20 @@
 //! An in-memory [`TraceSink`] that accumulates the CodeTracer low-level event
 //! stream instead of writing a container.
 //!
-//! ## Why this exists rather than a dependency on `codetracer_trace_writer`
+//! ## Why this exists alongside [`crate::CtfsSink`]
 //!
-//! There is, as of `codetracer-trace-format` v0.19.0, **no writer that can
-//! produce a `.ct` CTFS container from a wasm target**:
+//! A `.ct` container **can** now be written from wasm -- that is what
+//! `ctfs_sink` does -- but a container is opaque bytes, and the demo page also
+//! wants the recording in a form JavaScript can render: counts, a step walk,
+//! the raw events. This sink is that form. [`crate::TeeSink`] drives both from
+//! one pass, so they always describe the same recording.
 //!
-//! * `codetracer_trace_writer_nim` links a Nim static library and `zstd-sys`.
-//! * the pure-Rust `codetracer_trace_writer` gates `ctfs_writer` behind
-//!   `#[cfg(not(target_arch = "wasm32"))]`, and `create_trace_writer(.., Ctfs)`
-//!   is a `panic!("CTFS format is not supported on wasm32")` there. It also
-//!   pulls `codetracer_ctfs` -> `zstd` (C, unconditional) and
-//!   `codetracer_trace_format_capnp`, whose build script requires the `capnp`
-//!   compiler on the host, and its wasm `ruzstd` dependency has a higher MSRV
-//!   than noir's pinned toolchain.
-//!
-//! So the wasm side stops at the event stream and hands it to the host, which
-//! can serialize it or feed it to a native container writer. The event
-//! semantics -- interning order, the implicit `Step` before a non-toplevel
-//! `Call`, `<toplevel>` being function 0 and `None` being type 0 -- mirror
-//! `codetracer_trace_writer::abstract_trace_writer::AbstractTraceWriter`
-//! exactly, so the produced stream is the same one that writer would have
-//! buffered.
+//! The event semantics -- interning order, `<toplevel>` being function 0 and
+//! `None` being type 0, and *no* implicit `Step` before a non-toplevel `Call`
+//! -- mirror the Nim writer that produces the native container, and were
+//! validated against it across all 20 `test_programs/trace` fixtures.
+//! `CtfsSink` reproduces this sink's sequence rather than the pure-Rust
+//! `AbstractTraceWriter` defaults, which differ; see its module docs.
 //!
 //! Columns: `register_step_with_column` drops the column, because the
 //! `StepRecord` in `codetracer_trace_types` carries only `(path_id, line)`.

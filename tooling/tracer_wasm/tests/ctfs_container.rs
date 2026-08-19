@@ -16,9 +16,10 @@
 //! `ct-print` must come from `codetracer-trace-format-nim` on branch
 //! `wasm/nim-to-wasm`. The stock reader cannot decode **any** container this
 //! writer produces, native or wasm: it does not skip the writer's 8-byte
-//! `HEADERV1` prefix on `events.log`, and it treats a zstd frame with no
-//! pledged content size as a size. Both are fixed on that branch. Tests that
-//! need it SKIP loudly when it is missing.
+//! `HEADERV1` prefix on `events.log`, it treats a zstd frame with no pledged
+//! content size as a size, and it requires a `text` key on a boolean value
+//! that the Rust `ValueRecord::Bool` does not carry. All three are fixed on
+//! that branch. Tests that need it SKIP loudly when it is missing.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
