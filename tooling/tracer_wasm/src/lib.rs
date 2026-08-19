@@ -315,7 +315,10 @@ pub mod abi {
     /// `(ptr, len)` must describe an initialized UTF-8 buffer that stays valid
     /// for the duration of the call.
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn ct_trace_source(request_ptr: *const u8, request_len: usize) -> *mut u8 {
+    pub unsafe extern "C" fn ct_trace_source(
+        request_ptr: *const u8,
+        request_len: usize,
+    ) -> *mut u8 {
         let request = unsafe { std::slice::from_raw_parts(request_ptr, request_len) };
 
         let result = match std::str::from_utf8(request) {

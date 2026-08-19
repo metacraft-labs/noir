@@ -44,12 +44,13 @@ pub fn compile_source(
     entry_point: &str,
 ) -> Result<CompiledProgram, String> {
     let entry_path = Path::new(entry_point);
-    let entry_parent = entry_path.parent().filter(|p| !p.as_os_str().is_empty()).ok_or_else(|| {
-        format!(
-            "the entry point must live in a directory (got `{entry_point}`); \
+    let entry_parent =
+        entry_path.parent().filter(|p| !p.as_os_str().is_empty()).ok_or_else(|| {
+            format!(
+                "the entry point must live in a directory (got `{entry_point}`); \
              a root-level entry point would instrument the standard library"
-        )
-    })?;
+            )
+        })?;
 
     if !files.contains_key(entry_point) {
         return Err(format!("no source was supplied for the entry point `{entry_point}`"));
@@ -80,8 +81,9 @@ pub fn compile_source(
         ..CompileOptions::default()
     };
 
-    let (program, _warnings) = noirc_driver::compile_main(&mut context, crate_id, &options, None)
-        .map_err(|diagnostics| render_diagnostics(&diagnostics, &context.file_manager))?;
+    let (program, _warnings) =
+        noirc_driver::compile_main(&mut context, crate_id, &options, None)
+            .map_err(|diagnostics| render_diagnostics(&diagnostics, &context.file_manager))?;
 
     Ok(program)
 }

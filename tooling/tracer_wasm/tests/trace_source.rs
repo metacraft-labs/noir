@@ -124,8 +124,10 @@ const NATIVE_COUNTS: &[(&str, usize, usize, usize, usize)] = &[
 #[test]
 fn tracing_from_source_matches_the_native_container() {
     for &(fixture, want_steps, want_calls, want_paths, want_io) in NATIVE_COUNTS {
-        let request = request_for(fixture).unwrap_or_else(|| panic!("{fixture} has no Prover.toml"));
-        let t = trace_source(&request).unwrap_or_else(|e| panic!("tracing {fixture} from source: {e}"));
+        let request =
+            request_for(fixture).unwrap_or_else(|| panic!("{fixture} has no Prover.toml"));
+        let t =
+            trace_source(&request).unwrap_or_else(|e| panic!("tracing {fixture} from source: {e}"));
 
         assert_eq!(steps(&t), want_steps, "{fixture}: steps");
         assert_eq!(calls(&t), want_calls, "{fixture}: calls");
@@ -182,8 +184,8 @@ fn source_and_artifact_paths_agree_on_every_fixture() {
         let artifact = std::fs::read_to_string(&artifact_path).expect("debug artifact");
         let from_artifact = trace_artifact(&artifact, &request.inputs, false)
             .unwrap_or_else(|e| panic!("tracing {fixture} from an artifact: {e}"));
-        let from_source = trace_source(&request)
-            .unwrap_or_else(|e| panic!("tracing {fixture} from source: {e}"));
+        let from_source =
+            trace_source(&request).unwrap_or_else(|e| panic!("tracing {fixture} from source: {e}"));
 
         assert_eq!(steps(&from_source), steps(&from_artifact), "{fixture}: steps");
         assert_eq!(calls(&from_source), calls(&from_artifact), "{fixture}: calls");
