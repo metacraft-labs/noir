@@ -232,7 +232,7 @@ impl std::str::FromStr for DebugLocation {
 }
 
 #[derive(Debug)]
-pub(super) enum DebugCommandResult {
+pub enum DebugCommandResult {
     Done,
     Ok,
     BreakpointReached(DebugLocation),
@@ -293,7 +293,32 @@ pub struct RunParams {
     pub oracle_resolver_url: Option<String>,
 }
 
-pub(super) struct DebugContext<'a, B: BlackBoxFunctionSolver<FieldElement>> {
+/// Steps a compiled Noir program one opcode — or one source location — at a
+/// time, keeping the ACVM, the Brillig VM and the debug variable state in sync.
+///
+/// This is the portable core of the debugger: it performs no I/O of its own and
+/// depends on nothing beyond the compiler and the ACVM, so it is available with
+/// `default-features = false` and builds for every target the ACVM builds for.
+/// The in-tree REPL and DAP front-ends are two consumers of it; external tools
+/// that want to drive stepping themselves are expected to be others.
+///
+/// The public API falls into four groups:
+///
+/// * stepping — [`Self::step_into_opcode`], [`Self::step_acir_opcode`],
+///   [`Self::next_into`], [`Self::next_over`], [`Self::next_out`],
+///   [`Self::cont`], [`Self::restart`], each reporting progress as a
+///   [`DebugCommandResult`];
+/// * inspection — [`Self::get_current_debug_location`],
+///   [`Self::get_current_source_location`], [`Self::get_call_stack`],
+///   [`Self::get_source_call_stack`], [`Self::get_variables`],
+///   [`Self::get_witness_map`], [`Self::get_brillig_memory`],
+///   [`Self::debug_artifact`];
+/// * breakpoints — [`Self::add_breakpoint`], [`Self::delete_breakpoint`],
+///   [`Self::clear_breakpoints`], [`Self::is_breakpoint_set`],
+///   [`Self::is_valid_debug_location`];
+/// * mutation and completion — [`Self::overwrite_witness`],
+///   [`Self::write_brillig_memory`], [`Self::is_solved`], [`Self::finalize`].
+pub struct DebugContext<'a, B: BlackBoxFunctionSolver<FieldElement>> {
     pub(crate) acvm: ACVM<'a, FieldElement, B>,
     current_circuit_id: u32,
     brillig_solver: Option<BrilligSolver<'a, FieldElement, B>>,
@@ -334,7 +359,7 @@ fn initialize_acvm<'a, B: BlackBoxFunctionSolver<FieldElement>>(
 }
 
 impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
-    pub(super) fn new(
+    pub fn new(
         blackbox_solver: &'a B,
         circuits: &'a [Circuit<FieldElement>],
         debug_artifact: &'a DebugArtifact,
@@ -368,19 +393,19 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         }
     }
 
-    pub(super) fn get_opcodes(&self) -> &[Opcode<FieldElement>] {
+    pub fn get_opcodes(&self) -> &[Opcode<FieldElement>] {
         self.acvm.opcodes()
     }
 
-    pub(super) fn get_opcodes_of_circuit(&self, circuit_id: u32) -> &[Opcode<FieldElement>] {
+    pub fn get_opcodes_of_circuit(&self, circuit_id: u32) -> &[Opcode<FieldElement>] {
         &self.circuits[circuit_id as usize].opcodes
     }
 
-    pub(super) fn get_witness_map(&self) -> &WitnessMap<FieldElement> {
+    pub fn get_witness_map(&self) -> &WitnessMap<FieldElement> {
         self.acvm.witness_map()
     }
 
-    pub(super) fn overwrite_witness(
+    pub fn overwrite_witness(
         &mut self,
         witness: Witness,
         value: FieldElement,
@@ -388,7 +413,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         self.acvm.overwrite_witness(witness, value)
     }
 
-    pub(super) fn get_current_debug_location(&self) -> Option<DebugLocation> {
+    pub fn get_current_debug_location(&self) -> Option<DebugLocation> {
         let ip = self.acvm.instruction_pointer();
         if ip >= self.get_opcodes().len() {
             None
@@ -414,7 +439,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         }
     }
 
-    pub(super) fn get_call_stack(&self) -> Vec<DebugLocation> {
+    pub fn get_call_stack(&self) -> Vec<DebugLocation> {
         // Build the frames from parent ACIR calls
         let mut frames: Vec<_> = self
             .acvm_stack
@@ -464,7 +489,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
     // 4. exact location is not found, so an opcode for a nearby source location
     //    is returned (this again could actually be more than one opcodes)
     //    -> return the opcode for the next source line that is mapped
-    pub(super) fn find_opcode_for_source_location(
+    pub fn find_opcode_for_source_location(
         &self,
         file_id: &FileId,
         line: i64,
@@ -490,7 +515,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         Some(found_location)
     }
 
-    pub(super) fn find_opcode_at_current_file_line(&self, line: i64) -> Option<DebugLocation> {
+    pub fn find_opcode_at_current_file_line(&self, line: i64) -> Option<DebugLocation> {
         let file = self.get_current_file()?;
 
         self.find_opcode_for_source_location(&file, line)
@@ -503,7 +528,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
     /// happen for certain opcodes inserted synthetically by the compiler).
     /// This function also filters source locations that are determined to be in
     /// the internal debug module.
-    pub(super) fn get_current_source_location(&self) -> Option<Vec<Location>> {
+    pub fn get_current_source_location(&self) -> Option<Vec<Location>> {
         self.get_current_debug_location()
             .as_ref()
             .map(|debug_location| self.get_source_location_for_debug_location(debug_location))
@@ -522,7 +547,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
     /// the given opcode location cannot be mapped back to a source location
     /// (eg. it may be pure debug instrumentation code or other synthetically
     /// produced opcode by the compiler)
-    pub(super) fn get_source_location_for_debug_location(
+    pub fn get_source_location_for_debug_location(
         &self,
         debug_location: &DebugLocation,
     ) -> Vec<Location> {
@@ -554,11 +579,22 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
             .collect()
     }
 
+    /// Borrows the [`DebugArtifact`] the context is stepping through.
+    ///
+    /// Source locations returned by this context are only meaningful against
+    /// this artifact: it owns the file map and the line index tables used to
+    /// turn a [`Location`] into a path, line and column
+    /// (see [`DebugArtifact::location_line_number`] and
+    /// [`DebugArtifact::location_column_number`]).
+    pub fn debug_artifact(&self) -> &DebugArtifact {
+        self.debug_artifact
+    }
+
     /// Returns the current call stack with expanded source locations. In
     /// general, the matching between opcode location and source location is 1
     /// to 1, but due to the compiler inlining functions a single opcode
     /// location may expand to multiple source locations.
-    pub(super) fn get_source_call_stack(&self) -> Vec<(DebugLocation, Location)> {
+    pub fn get_source_call_stack(&self) -> Vec<(DebugLocation, Location)> {
         self.get_call_stack()
             .iter()
             .flat_map(|debug_location| {
@@ -579,7 +615,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         self.acir_opcode_addresses.address_to_debug_location(address)
     }
 
-    pub(super) fn render_opcode_at_location(&self, location: &DebugLocation) -> String {
+    pub fn render_opcode_at_location(&self, location: &DebugLocation) -> String {
         let opcodes = self.get_opcodes_of_circuit(location.circuit_id);
         match &location.opcode_location {
             OpcodeLocation::Acir(acir_index) => {
@@ -745,7 +781,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         }
     }
 
-    pub(super) fn step_into_opcode(&mut self) -> DebugCommandResult {
+    pub fn step_into_opcode(&mut self) -> DebugCommandResult {
         if self.brillig_solver.is_some() {
             return self.step_brillig_opcode();
         }
@@ -785,7 +821,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         }
     }
 
-    pub(super) fn is_executing_brillig(&self) -> bool {
+    pub fn is_executing_brillig(&self) -> bool {
         if self.brillig_solver.is_some() {
             return true;
         }
@@ -806,7 +842,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         }
     }
 
-    pub(super) fn step_acir_opcode(&mut self) -> DebugCommandResult {
+    pub fn step_acir_opcode(&mut self) -> DebugCommandResult {
         if self.is_executing_brillig() {
             self.step_out_of_brillig_opcode()
         } else {
@@ -816,7 +852,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
     }
 
     /// Steps debugging execution until the next source location
-    pub(super) fn next_into(&mut self) -> DebugCommandResult {
+    pub fn next_into(&mut self) -> DebugCommandResult {
         let start_location = self.get_current_source_location();
         loop {
             let result = self.step_into_opcode();
@@ -832,7 +868,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
 
     /// Steps debugging execution until the next source location at the same (or
     /// less) call stack depth (eg. don't dive into function calls)
-    pub(super) fn next_over(&mut self) -> DebugCommandResult {
+    pub fn next_over(&mut self) -> DebugCommandResult {
         let start_call_stack = self.get_source_call_stack();
         loop {
             let result = self.next_into();
@@ -848,7 +884,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
 
     /// Steps debugging execution until the next source location with a smaller
     /// call stack depth (eg. returning from the current function)
-    pub(super) fn next_out(&mut self) -> DebugCommandResult {
+    pub fn next_out(&mut self) -> DebugCommandResult {
         let start_call_stack = self.get_source_call_stack();
         loop {
             let result = self.next_into();
@@ -862,7 +898,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         }
     }
 
-    pub(super) fn cont(&mut self) -> DebugCommandResult {
+    pub fn cont(&mut self) -> DebugCommandResult {
         loop {
             let result = self.step_into_opcode();
             if !matches!(result, DebugCommandResult::Ok) {
@@ -871,16 +907,11 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         }
     }
 
-    pub(super) fn get_brillig_memory(&self) -> Option<&[MemoryValue<FieldElement>]> {
+    pub fn get_brillig_memory(&self) -> Option<&[MemoryValue<FieldElement>]> {
         self.brillig_solver.as_ref().map(|solver| solver.get_memory())
     }
 
-    pub(super) fn write_brillig_memory(
-        &mut self,
-        ptr: usize,
-        value: FieldElement,
-        bit_size: BitSize,
-    ) {
+    pub fn write_brillig_memory(&mut self, ptr: usize, value: FieldElement, bit_size: BitSize) {
         if let Some(solver) = self.brillig_solver.as_mut() {
             solver.write_memory_at(
                 ptr.try_into().expect("Pointer is too large"),
@@ -890,11 +921,11 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         }
     }
 
-    pub(super) fn get_variables(&self) -> Vec<StackFrame<FieldElement>> {
+    pub fn get_variables(&self) -> Vec<StackFrame<FieldElement>> {
         self.foreign_call_executor.get_variables()
     }
 
-    pub(super) fn current_stack_frame(&self) -> Option<StackFrame<FieldElement>> {
+    pub fn current_stack_frame(&self) -> Option<StackFrame<FieldElement>> {
         self.foreign_call_executor.current_stack_frame()
     }
 
@@ -906,7 +937,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         }
     }
 
-    pub(super) fn is_valid_debug_location(&self, location: &DebugLocation) -> bool {
+    pub fn is_valid_debug_location(&self, location: &DebugLocation) -> bool {
         if location.circuit_id as usize >= self.circuits.len() {
             return false;
         }
@@ -929,23 +960,23 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         }
     }
 
-    pub(super) fn is_breakpoint_set(&self, location: &DebugLocation) -> bool {
+    pub fn is_breakpoint_set(&self, location: &DebugLocation) -> bool {
         self.breakpoints.contains(location)
     }
 
-    pub(super) fn add_breakpoint(&mut self, location: DebugLocation) -> bool {
+    pub fn add_breakpoint(&mut self, location: DebugLocation) -> bool {
         self.breakpoints.insert(location)
     }
 
-    pub(super) fn delete_breakpoint(&mut self, location: &DebugLocation) -> bool {
+    pub fn delete_breakpoint(&mut self, location: &DebugLocation) -> bool {
         self.breakpoints.remove(location)
     }
 
-    pub(super) fn clear_breakpoints(&mut self) {
+    pub fn clear_breakpoints(&mut self) {
         self.breakpoints.clear();
     }
 
-    pub(super) fn is_solved(&self) -> bool {
+    pub fn is_solved(&self) -> bool {
         matches!(self.acvm.get_status(), ACVMStatus::Solved)
     }
 
@@ -955,7 +986,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         self.witness_stack
     }
 
-    pub(super) fn restart(&mut self) {
+    pub fn restart(&mut self) {
         // restart everything that's progress related
         // by assigning the initial values
         self.current_circuit_id = 0;
