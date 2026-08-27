@@ -36,6 +36,85 @@
 //! Round 2 (MN+1 in the spec) will add struct destructuring,
 //! BoundedVec, generics, oracle calls, std::hash, std::ec, recursion
 //! and Aztec.nr contract constructs.
+//!
+//! ==========================================================================
+//! READ THIS BEFORE YOU DIAGNOSE A FAILURE HERE.  As of 2026-08-27, on
+//! `blocktracer`, **six of the six tests in this file fail, and none of the
+//! six failures belongs to whatever you just changed.**
+//!
+//! HOW TO BUILD AND RUN THEM.  Two invocations are known to work; the
+//! blocker is only that `codetracer_trace_writer_nim`'s `build.rs` compiles
+//! a Nim static library at build time and therefore needs the Nim toolchain
+//! on `PATH`.  `noir` has no `.envrc` of its own, so borrow the writer's:
+//!
+//!     direnv exec ../codetracer-trace-format \
+//!         cargo test -p noir_tracer --test test_tracer
+//!
+//! or, without a dev shell, skip the `nimble install --depsOnly` step the
+//! build script runs (its own doc comment names the variable):
+//!
+//!     CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL=1 \
+//!         cargo build -p nargo_cli --bin nargo
+//!     CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL=1 \
+//!         cargo test -p noir_tracer --test test_tracer
+//!
+//! The tests also need `nargo` built (they print `SKIP:` otherwise) and
+//! `ct-print`, which is already at the sibling path the locator uses.
+//!
+//! WHAT FAILS, MEASURED AT `6db58caad` WITH NOTHING ELSE CHANGED:
+//!
+//!     test_a_1_mul                 values  got  10   expected  19
+//!     test_a_2_function_calls      types   got   3   expected   4
+//!     test_assert                  types   got   2   expected   3
+//!     test_if_then_else_reduced    values  got  78   expected 155
+//!     test_types_test              types   got  10   expected  11
+//!     test_multi_stmt_per_line_column_aware
+//!                                  got [9, 27, 45]  expected [1, 9, 1, 27, 1, 45]
+//!
+//! WHY — the half that is established.  `noir/Cargo.toml:144` resolves
+//! `codetracer_trace_writer` to `codetracer_trace_writer_nim` in the sibling
+//! `codetracer-trace-format` checkout **by bare path, at no pinned
+//! revision**, and that checkout has moved 45 commits since this file was
+//! last touched.  `register_step_with_column`'s own doc comment there now
+//! reads: *"Current split-stream traces therefore carry one absolute step at
+//! the requested `(line, column)` instead of an intermediate column-1 step
+//! plus a separate delta step."*  That is precisely
+//! `[1, 9, 1, 27, 1, 45]` -> `[9, 27, 45]`, and it is precisely `values`
+//! going from `2·steps − 1` to `steps` (19 -> 10, 155 -> 78).  The
+//! expectations pin the OLD writer; the writer changed on purpose and this
+//! file was never re-run against it.
+//!
+//! WHY — the half that is NOT established, and is why nobody has repinned
+//! these yet.  Three fixtures lose exactly ONE type-table entry and renumber
+//! the synthetics behind it (`assert`: `[None, Field, type_1]` ->
+//! `[None, Field]`; `types_test`: `type_1` gone, `type_3` -> `type_2`,
+//! `type_6` -> `type_5`), while `a_1_mul`'s `type_1` survives.  Nothing in
+//! the writer's history accounts for that, and "one fewer type" is as
+//! consistent with a LOST type registration as with a removed duplicate.
+//! **Do not repin the type tables from today's output until you know which
+//! it is** — that would be writing an expectation from an output nobody has
+//! certified.  Repinning all six is owed work; it belongs to the Noir
+//! fixture-parity milestone, not to a passing change.
+//!
+//! ONE THING IN THIS FILE *IS* VERIFIED BY MEASUREMENT, and it is the one
+//! you cannot reach by running the suite.  `field_small_int` and the two
+//! tests that call it were updated for OQ-4's `Field` rendering
+//! (`aztec-avm-runtime/SOURCE-MAPPING.md` §4, applied at
+//! `tooling/tracer/src/tracer_glue.rs`).  Those assertions sit AFTER the
+//! stale count pins above, so the suite never reaches them.  They were
+//! checked instead by recording both fixtures with the real `nargo trace`
+//! and decoding with the real `ct-print`:
+//!
+//!     assert.nr      a 0x…000c -> 12   b 0x…000c -> 12
+//!                    x 0x…000a -> 10   y 0x…000a -> 10      (all String/66)
+//!     types_test.nr  a -> 1  c.x -> 9  c.y -> 10  d -> 3
+//!                    h[0] -> 7  h[1] -> 8                    (all String/66)
+//!                    b {"kind":"Int","i":2}  e {"kind":"Int","i":4}
+//!
+//! Every one matches, including the deliberate Int/String split on the two
+//! non-`Field` arms.  So those expectations are correct; they are merely
+//! unreachable until the six pins above are settled.
+//! ==========================================================================
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -250,6 +329,38 @@ fn assert_path_strip_normalised(doc: &serde_json::Value, fixture: &str) {
         paths[0],
         fixture
     );
+}
+
+/// A `Field`-typed value's small integer, decoded from the rendering `tracer_glue.rs` now uses.
+///
+/// **THE SHAPE IS ASSERTED, NOT TOLERATED.** A `Field` is 254 bits and no longer arrives as
+/// `ValueRecord::Int`: `aztec-avm-runtime/SOURCE-MAPPING.md` §4 settled the rendering by measuring
+/// five candidates against both pinned readers, and the verdict is `0x` + 64 lowercase big-endian
+/// hex in `ValueRecord::String`, under the same `(TypeKind::Int, "Field")` type record, so that one
+/// field element has one spelling on both sides of a joined Aztec recording. This helper therefore
+/// asserts the variant, the `0x` prefix, the FIXED 66-character width (no leading-zero stripping)
+/// and lowercase hex before it decodes anything — a helper that merely parsed the number would let
+/// the rendering drift back without a test noticing.
+///
+/// It also asserts the top 48 hex digits are zero, which is what makes returning an `i64` honest:
+/// these fixtures' fields are small, and a value that had grown past 64 bits would fail here rather
+/// than be silently truncated the way `to_i128() as i64` used to truncate it.
+fn field_small_int(v: &serde_json::Value) -> i64 {
+    assert_eq!(
+        v["kind"].as_str(),
+        Some("String"),
+        "a Field renders as ValueRecord::String; see tracer_glue.rs's Field arm: {v}"
+    );
+    let text = v["text"].as_str().expect("a Field's String carries text");
+    assert_eq!(text.len(), 66, "0x + 64 hex, fixed width: {text}");
+    assert!(text.starts_with("0x"), "a Field is 0x-prefixed: {text}");
+    let body = &text[2..];
+    assert!(
+        body.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "lowercase hex only: {text}"
+    );
+    assert!(body[..48].chars().all(|c| c == '0'), "this fixture's Field fits in 64 bits: {text}");
+    i64::from_str_radix(&body[48..], 16).expect("the low 64 bits parse")
 }
 
 // ===========================================================================
@@ -589,7 +700,9 @@ fn test_assert_via_ct_print_full() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| (v["varname"].as_str().unwrap(), v["value"]["i"].as_i64().unwrap()))
+        // `main(x: Field, y: pub Field)`, and `a`/`b` are Field-typed too, so every one of these
+        // four goes through the OQ-4 rendering rather than through `["i"]`.
+        .map(|v| (v["varname"].as_str().unwrap(), field_small_int(&v["value"])))
         .collect();
     assert_eq!(vars[&"a"], 12);
     assert_eq!(vars[&"b"], 12);
@@ -693,18 +806,19 @@ fn test_types_test_via_ct_print_full() {
             }
         })
         .expect("a step must surface all params a..h");
-    assert_eq!(first_body_vars[&"a"]["kind"].as_str(), Some("Int"));
-    assert_eq!(first_body_vars[&"a"]["i"].as_i64(), Some(1));
+    // `main(a: Field, b: u32, c: Point, d: Field, e: i8, f: bool, g: str<11>, h: [Field; 2])`.
+    // The FIELD-typed ones — a, c.x, c.y, d, h[0], h[1] — carry the OQ-4 rendering; b (u32) and
+    // e (i8) are ordinary integers and still `ValueRecord::Int`. Both kinds are asserted here,
+    // which is what stops "everything is a String now" from passing.
+    assert_eq!(field_small_int(&first_body_vars[&"a"]), 1);
     assert_eq!(first_body_vars[&"b"]["kind"].as_str(), Some("Int"));
     assert_eq!(first_body_vars[&"b"]["i"].as_i64(), Some(2));
     assert_eq!(first_body_vars[&"c"]["kind"].as_str(), Some("Struct"));
     let c_fields = first_body_vars[&"c"]["field_values"].as_array().unwrap();
     assert_eq!(c_fields.len(), 2);
-    assert_eq!(c_fields[0]["kind"].as_str(), Some("Int"));
-    assert_eq!(c_fields[0]["i"].as_i64(), Some(9));
-    assert_eq!(c_fields[1]["kind"].as_str(), Some("Int"));
-    assert_eq!(c_fields[1]["i"].as_i64(), Some(10));
-    assert_eq!(first_body_vars[&"d"]["i"].as_i64(), Some(3));
+    assert_eq!(field_small_int(&c_fields[0]), 9);
+    assert_eq!(field_small_int(&c_fields[1]), 10);
+    assert_eq!(field_small_int(&first_body_vars[&"d"]), 3);
     assert_eq!(first_body_vars[&"e"]["kind"].as_str(), Some("Int"));
     assert_eq!(first_body_vars[&"e"]["i"].as_i64(), Some(4));
     assert_eq!(first_body_vars[&"f"]["kind"].as_str(), Some("Bool"));
@@ -716,8 +830,8 @@ fn test_types_test_via_ct_print_full() {
     assert_eq!(first_body_vars[&"h"]["is_slice"].as_bool(), Some(false));
     let h_elems = first_body_vars[&"h"]["elements"].as_array().unwrap();
     assert_eq!(h_elems.len(), 2);
-    assert_eq!(h_elems[0]["i"].as_i64(), Some(7));
-    assert_eq!(h_elems[1]["i"].as_i64(), Some(8));
+    assert_eq!(field_small_int(&h_elems[0]), 7);
+    assert_eq!(field_small_int(&h_elems[1]), 8);
 
     // call_exit returns Void
     let exit = events.last().unwrap();
