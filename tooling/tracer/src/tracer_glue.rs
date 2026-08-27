@@ -185,6 +185,18 @@ fn register_value(
                 // it CANNOT represent (`"()"`, `"fn"` below) and a field element is not one of
                 // those. The width is FIXED at 64 characters with no leading-zero stripping, so
                 // two renderings of one value are one string and a reader never has to normalise.
+                //
+                // ONE CONSEQUENCE THAT IS NOT NEUTRAL, and it is stated here because the sentence
+                // above is easy to over-read. The TYPE RECORD is unchanged — still
+                // `(TypeKind::Int, "Field")`, ensured on the line above. The TYPE TABLE is not:
+                // the writer registers a nameless companion type for a `TypeKind::Int` type the
+                // first time that type carries an `Int` VALUE, and a `Field` no longer carries
+                // one, so the companion is never created. Measured in a clean worktree across
+                // three fixtures: `assert`'s table goes `[None, Field, type_1]` -> `[None, Field]`,
+                // `a_2_function_calls`' `[None, Field, type_1, ()]` -> `[None, Field, ()]`, and
+                // `types_test` loses the entry after `Field` while the companions after `u32` and
+                // `i8` survive and renumber. `a_1_mul`, whose only companion follows `u32`, is
+                // untouched. `tests/test_tracer.rs`' header carries the full measurement.
                 ValueRecord::String { text: field_to_hex(field_value), type_id }
             } else {
                 // Note(stanm): panic here, because this means the compiler frontend is broken, which

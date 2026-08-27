@@ -38,14 +38,14 @@
 //! and Aztec.nr contract constructs.
 //!
 //! ==========================================================================
-//! READ THIS BEFORE YOU DIAGNOSE A FAILURE HERE.  As of 2026-08-27, on
-//! `blocktracer`, **six of the six tests in this file fail, and none of the
-//! six failures belongs to whatever you just changed.**
+//! READ THIS BEFORE YOU DIAGNOSE A FAILURE HERE. As of 2026-08-27, on
+//! `blocktracer`, **three of the six tests in this file fail, and none of the
+//! three failures belongs to whatever you just changed.**
 //!
-//! HOW TO BUILD AND RUN THEM.  Two invocations are known to work; the
-//! blocker is only that `codetracer_trace_writer_nim`'s `build.rs` compiles
-//! a Nim static library at build time and therefore needs the Nim toolchain
-//! on `PATH`.  `noir` has no `.envrc` of its own, so borrow the writer's:
+//! HOW TO BUILD AND RUN THEM. The only obstacle is that
+//! `codetracer_trace_writer_nim`'s `build.rs` compiles a Nim static library at
+//! build time and therefore needs the Nim toolchain on `PATH`. `noir` has no
+//! `.envrc` of its own, so borrow the writer's:
 //!
 //!     direnv exec ../codetracer-trace-format \
 //!         cargo test -p noir_tracer --test test_tracer
@@ -58,62 +58,64 @@
 //!     CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL=1 \
 //!         cargo test -p noir_tracer --test test_tracer
 //!
-//! The tests also need `nargo` built (they print `SKIP:` otherwise) and
-//! `ct-print`, which is already at the sibling path the locator uses.
+//! **Rebuild `nargo` before you trust a result.** These tests SPAWN the
+//! workspace `nargo` binary; `cargo test -p noir_tracer` does not rebuild it.
+//! A stale `nargo` is how a baseline measurement was got wrong once already —
+//! reverting `tracer_glue.rs` and re-running `cargo test` measured the OLD
+//! expectations against the NEW recorder and produced an attribution that was
+//! exactly backwards. Take baselines in a separate `git worktree`.
 //!
-//! WHAT FAILS, MEASURED AT `6db58caad` WITH NOTHING ELSE CHANGED:
+//! WHAT WAS REPINNED HERE, AND WHY EACH ONE MOVED. Every count below was
+//! measured, and the two causes are separated because they belong to different
+//! people:
 //!
-//!     test_a_1_mul                 values  got  10   expected  19
-//!     test_a_2_function_calls      types   got   3   expected   4
-//!     test_assert                  types   got   2   expected   3
-//!     test_if_then_else_reduced    values  got  78   expected 155
-//!     test_types_test              types   got  10   expected  11
-//!     test_multi_stmt_per_line_column_aware
-//!                                  got [9, 27, 45]  expected [1, 9, 1, 27, 1, 45]
+//!   * `counts["values"]` and `events.len()` in all five fixtures, and the
+//!     column list in `test_multi_stmt_per_line_column_aware`: **not this
+//!     repository's change.** `noir/Cargo.toml:144` resolves
+//!     `codetracer_trace_writer` to `codetracer_trace_writer_nim` in the
+//!     sibling `codetracer-trace-format` checkout **by bare path, at no pinned
+//!     revision**, and that checkout has moved 45 commits since this file was
+//!     last touched. `register_step_with_column`'s own doc comment there now
+//!     reads: *"Current split-stream traces therefore carry one absolute step
+//!     at the requested `(line, column)` instead of an intermediate column-1
+//!     step plus a separate delta step."* That is `[1, 9, 1, 27, 1, 45]`
+//!     becoming `[9, 27, 45]`, and it is `values` going from `2·steps - 1` to
+//!     `steps` (19 -> 10, 33 -> 17, 21 -> 11, 155 -> 78, 47 -> 24).
 //!
-//! WHY — the half that is established.  `noir/Cargo.toml:144` resolves
-//! `codetracer_trace_writer` to `codetracer_trace_writer_nim` in the sibling
-//! `codetracer-trace-format` checkout **by bare path, at no pinned
-//! revision**, and that checkout has moved 45 commits since this file was
-//! last touched.  `register_step_with_column`'s own doc comment there now
-//! reads: *"Current split-stream traces therefore carry one absolute step at
-//! the requested `(line, column)` instead of an intermediate column-1 step
-//! plus a separate delta step."*  That is precisely
-//! `[1, 9, 1, 27, 1, 45]` -> `[9, 27, 45]`, and it is precisely `values`
-//! going from `2·steps − 1` to `steps` (19 -> 10, 155 -> 78).  The
-//! expectations pin the OLD writer; the writer changed on purpose and this
-//! file was never re-run against it.
+//!   * `counts["types"]` and the `types` table in `a_2_function_calls`,
+//!     `assert` and `types_test`: **this repository's change, and it was not
+//!     declared.** Rendering a `Field` as `ValueRecord::String` instead of
+//!     `ValueRecord::Int` removes exactly ONE type-table entry — the nameless
+//!     companion that gets registered for a `TypeKind::Int` type the first
+//!     time it carries an `Int` VALUE. Measured across three fixtures in a
+//!     clean worktree: `assert` `[None, Field, type_1]` -> `[None, Field]`,
+//!     `a_2_function_calls` `[None, Field, type_1, ()]` -> `[None, Field, ()]`,
+//!     and `types_test` loses the entry after `Field` while the two companions
+//!     after `u32` and `i8` survive and renumber (`type_3` -> `type_2`,
+//!     `type_6` -> `type_5`). `a_1_mul`, whose only companion follows `u32`,
+//!     is untouched. So the rendering change is NOT type-table-neutral, and
+//!     `tracer_glue.rs`'s claim that a `Field` stays "under the SAME
+//!     `(TypeKind::Int, "Field")` type record" is true of the TYPE and not of
+//!     the TABLE.
 //!
-//! WHY — the half that is NOT established, and is why nobody has repinned
-//! these yet.  Three fixtures lose exactly ONE type-table entry and renumber
-//! the synthetics behind it (`assert`: `[None, Field, type_1]` ->
-//! `[None, Field]`; `types_test`: `type_1` gone, `type_3` -> `type_2`,
-//! `type_6` -> `type_5`), while `a_1_mul`'s `type_1` survives.  Nothing in
-//! the writer's history accounts for that, and "one fewer type" is as
-//! consistent with a LOST type registration as with a removed duplicate.
-//! **Do not repin the type tables from today's output until you know which
-//! it is** — that would be writing an expectation from an output nobody has
-//! certified.  Repinning all six is owed work; it belongs to the Noir
-//! fixture-parity milestone, not to a passing change.
+//! WHAT IS STILL RED, and all three predate this change — verified by decoding
+//! the same fixtures with a baseline `nargo` built in a separate worktree:
 //!
-//! ONE THING IN THIS FILE *IS* VERIFIED BY MEASUREMENT, and it is the one
-//! you cannot reach by running the suite.  `field_small_int` and the two
-//! tests that call it were updated for OQ-4's `Field` rendering
-//! (`aztec-avm-runtime/SOURCE-MAPPING.md` §4, applied at
-//! `tooling/tracer/src/tracer_glue.rs`).  Those assertions sit AFTER the
-//! stale count pins above, so the suite never reaches them.  They were
-//! checked instead by recording both fixtures with the real `nargo trace`
-//! and decoding with the real `ct-print`:
+//!   1. `test_a_1_mul_via_ct_print_full` — the per-step `x` sequence is
+//!      shifted by one (`[None, None, Some(3), ...]` against a pinned
+//!      `[None, None, None, Some(3), ...]`). Same cause as `values`, but the
+//!      right expectation is a question about which step a stepper should stop
+//!      on, so it is not repinned here.
+//!   2. `test_a_2_function_calls_via_ct_print_full` — the last step is
+//!      recorded as `("main", 142)` **in a thirteen-line file**. Present in the
+//!      baseline decode byte for byte, so it is a recorder defect and not a
+//!      stale pin; repinning it would write a bogus line number into a test.
+//!   3. `test_multi_stmt_per_line_column_aware` — the `assert` step on line 4
+//!      no longer carries column 1 (`None` against `Some(1)`).
 //!
-//!     assert.nr      a 0x…000c -> 12   b 0x…000c -> 12
-//!                    x 0x…000a -> 10   y 0x…000a -> 10      (all String/66)
-//!     types_test.nr  a -> 1  c.x -> 9  c.y -> 10  d -> 3
-//!                    h[0] -> 7  h[1] -> 8                    (all String/66)
-//!                    b {"kind":"Int","i":2}  e {"kind":"Int","i":4}
-//!
-//! Every one matches, including the deliberate Int/String split on the two
-//! non-`Field` arms.  So those expectations are correct; they are merely
-//! unreachable until the six pins above are settled.
+//! Fixing those three is Noir fixture-parity work and belongs to that
+//! milestone. **Do not repin them from today's output**; two of the three are
+//! asking whether today's output is right, which is the question.
 //! ==========================================================================
 
 use std::path::PathBuf;
@@ -397,7 +399,7 @@ fn test_a_1_mul_via_ct_print_full() {
     // distinct steps now too.  See FU-Column-Aware-Nav-Noir notes.
     assert_eq!(counts["steps"].as_u64(), Some(10), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(19), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(10), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     // ---- tables ------------------------------------------------------------
@@ -411,7 +413,7 @@ fn test_a_1_mul_via_ct_print_full() {
     // 1 call_entry + 19 step events (10 register_step calls + 9 aux
     // `sekDeltaColumn` cursor-nudges) + 1 call_exit = 21 wire-level
     // events.
-    assert_eq!(events.len(), 21, "1 call_entry + 19 steps + 1 call_exit");
+    assert_eq!(events.len(), 12, "1 call_entry + 10 steps + 1 call_exit");
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
     assert_eq!(
         observed_event_kinds(&doc),
@@ -483,23 +485,23 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(3), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(2), "varnames; counts={counts}");
-    assert_eq!(counts["types"].as_u64(), Some(4), "types; counts={counts}");
+    assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
     // counts["steps"] / counts["values"] / events.len() include
     // column-aware auxiliary `sekDeltaColumn` cursor-nudges; see
     // `test_a_1_mul_via_ct_print_full` for the accounting.
     assert_eq!(counts["steps"].as_u64(), Some(17), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(33), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(17), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main", "foo", "bar"]);
     assert_eq!(string_array(&doc, "varnames"), vec!["x", "y"]);
-    assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "type_1", "()"]);
+    assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "()"]);
     assert_path_strip_normalised(&doc, "a_2_function_calls");
 
     // 5 call_entry + 33 step events + 5 call_exit = 43 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 43);
+    assert_eq!(events.len(), 27);
     assert_eq!(
         observed_call_sequence(&doc),
         vec![
@@ -594,7 +596,7 @@ fn test_if_then_else_reduced_via_ct_print_full() {
     // cursor-nudges; see `test_a_1_mul_via_ct_print_full`.
     assert_eq!(counts["steps"].as_u64(), Some(78), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(155), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(78), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main"]);
@@ -604,7 +606,7 @@ fn test_if_then_else_reduced_via_ct_print_full() {
 
     // 1 call_entry + 155 step events + 1 call_exit = 157 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 157);
+    assert_eq!(events.len(), 80);
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
 
     // Column-aware call_entry has empty args (see a_1_mul).
@@ -654,22 +656,22 @@ fn test_assert_via_ct_print_full() {
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(4), "varnames; counts={counts}");
-    assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
+    assert_eq!(counts["types"].as_u64(), Some(2), "types; counts={counts}");
     // Column-aware counts include sekDeltaColumn cursor-nudges; see
     // `test_a_1_mul_via_ct_print_full` for the accounting.
     assert_eq!(counts["steps"].as_u64(), Some(11), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(21), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(11), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(1), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main"]);
     assert_eq!(string_array(&doc, "varnames"), vec!["x", "y", "a", "b"]);
-    assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "type_1"]);
+    assert_eq!(string_array(&doc, "types"), vec!["None", "Field"]);
     assert_path_strip_normalised(&doc, "assert");
 
     // 1 call_entry + 21 step events + 1 io + 1 call_exit = 24 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 24);
+    assert_eq!(events.len(), 14);
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
 
     // The single io_event must be tagged ioError and the text must match
@@ -737,12 +739,12 @@ fn test_types_test_via_ct_print_full() {
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(9), "varnames; counts={counts}");
-    assert_eq!(counts["types"].as_u64(), Some(11), "types; counts={counts}");
+    assert_eq!(counts["types"].as_u64(), Some(10), "types; counts={counts}");
     // Column-aware counts include sekDeltaColumn cursor-nudges; see
     // `test_a_1_mul_via_ct_print_full` for the accounting.
     assert_eq!(counts["steps"].as_u64(), Some(24), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(47), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(24), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main"]);
@@ -755,12 +757,11 @@ fn test_types_test_via_ct_print_full() {
         vec![
             "None",
             "Field",
-            "type_1",
             "u32",
-            "type_3",
+            "type_2",
             "Point",
             "i8",
-            "type_6",
+            "type_5",
             "Bool",
             "String",
             "Array<2, ..>",
@@ -770,7 +771,7 @@ fn test_types_test_via_ct_print_full() {
 
     // 1 call_entry + 47 step events + 1 call_exit = 49 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 49);
+    assert_eq!(events.len(), 26);
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
 
     // ---- call_entry args ------------------------------------------------
@@ -898,9 +899,9 @@ fn test_multi_stmt_per_line_column_aware() {
         .collect();
     assert_eq!(
         line2_columns,
-        vec![1_i64, 9, 1, 27, 1, 45],
+        vec![9_i64, 27, 45],
         "expected the three statements on line 2 to surface columns \
-         9 / 27 / 45 (interleaved with the writer's column-1 resets); \
+         9 / 27 / 45, one absolute step each; \
          got {line2_columns:?}",
     );
 
