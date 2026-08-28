@@ -7,31 +7,37 @@
 //!
 //! 1. Locates the workspace-built `nargo` binary at
 //!    `<noir>/target/{debug,release}/nargo` (or via the
-//!    `CODETRACER_NARGO_BIN` env var).  If neither is present the
-//!    test prints a `SKIP:` line — the convention used by every
-//!    other recorder when its toolchain isn't built — so silent
-//!    skips remain forbidden.
+//!    `CODETRACER_NARGO_BIN` env var).  If it is missing the test
+//!    **fails**; see `skipping_allowed` for why, and for the
+//!    explicit local opt-out.
 //! 2. Runs `nargo --program-dir <fixture> trace --out-dir <tmp>`,
 //!    producing a single `<package>.ct` CTFS bundle.
 //! 3. Locates the `codetracer-trace-format-nim/ct-print` binary at
 //!    `../../../codetracer-trace-format-nim/ct-print` (sibling
-//!    workspace layout) or `CODETRACER_CT_PRINT_BIN`.  Skips with
-//!    `SKIP:` if missing.
+//!    workspace layout) or `CODETRACER_CT_PRINT_BIN`.  Fails if
+//!    missing, on the same reasoning as (1).
 //! 4. Pipes the `.ct` through `ct-print --full --strip-paths` and
 //!    parses the JSON.
 //! 5. Pins exact counts, function/type tables, call sequences and
 //!    per-step decoded values via `assert_eq!`.  No `>=`, no
 //!    `contains`, no substring matching.  No `#[ignore]`.
 //!
-//! Why these five fixtures (out of 20 in `test_programs/trace/`)?
+//! Why these fixtures (out of 22 in `test_programs/trace/`)?
 //!
-//! * `a_1_mul` — basic `u32` arithmetic baseline.
+//! * `a_1_mul` — basic `u32` arithmetic baseline, and the fixture that
+//!   exercises `x *= y` (see `StatementKind::AssignOp` in
+//!   `noirc_frontend::debug`).
 //! * `a_2_function_calls` — three-deep call chain (main → foo → bar).
 //! * `if_then_else_reduced` — branching `for` loop.
 //! * `assert` — assertion-failure → `EventLogKind::Error` io_event.
 //! * `types_test` — comprehensive type signature with `Field`,
 //!   `u32`, `i8`, `bool`, `str<11>`, `[Field; 2]` and a user-defined
 //!   `Point` struct.
+//! * `multi_stmt_per_line` — column-aware step encoding.
+//! * `while_loop` — assignments inside a `while` body. Added because
+//!   nothing else here uses `while` or `loop`, and that gap hid a
+//!   defect that silently dropped every such assignment from the
+//!   trace.
 //!
 //! Round 2 (MN+1 in the spec) will add struct destructuring,
 //! BoundedVec, generics, oracle calls, std::hash, std::ec, recursion
@@ -41,6 +47,45 @@ use std::path::PathBuf;
 use std::process::Command;
 
 // -- locator helpers --------------------------------------------------------
+
+/// Escape hatch for a developer who has not built the sibling
+/// `codetracer-trace-format-nim` checkout yet.
+///
+/// It is **opt-in and loud**. The default is a hard failure, because the
+/// previous behaviour of this file was the exact anti-pattern this suite
+/// exists to prevent: every test called `record_and_dump_full`, which
+/// returned `None` when either binary was missing, and every test then did
+/// `else { return; }` — so a machine without `ct-print` ran six tests that
+/// asserted nothing and reported `ok`. In CI, where neither `nargo` nor
+/// `ct-print` is built (the workspace cannot even `cargo metadata` without
+/// the sibling repositories — see `CARRY-VS-UPSTREAM.md` §5), that is a
+/// green suite proving the tracer works while never once running it.
+///
+/// Set `CODETRACER_TRACER_TESTS_ALLOW_SKIP=1` to get the old behaviour
+/// locally. Never set it in CI.
+fn skipping_allowed() -> bool {
+    matches!(std::env::var("CODETRACER_TRACER_TESTS_ALLOW_SKIP").as_deref(), Ok("1") | Ok("true"))
+}
+
+/// Report a missing prerequisite: panic by default, skip only when the
+/// developer has explicitly opted in via `CODETRACER_TRACER_TESTS_ALLOW_SKIP`.
+fn missing_prerequisite(test_name: &str, what: &str) -> Option<PathBuf> {
+    if skipping_allowed() {
+        eprintln!("SKIP: {test_name} requires {what}");
+        return None;
+    }
+    panic!(
+        "{test_name} cannot run: it requires {what}\n\n\
+         This is a hard failure on purpose. These tests assert on a real \
+         recording made by a real `nargo trace` and decoded by a real \
+         `ct-print`; with either binary missing there is nothing to assert \
+         and a pass would be meaningless.\n\
+         If you are iterating locally and have not built the sibling \
+         `codetracer-trace-format-nim` checkout, set \
+         `CODETRACER_TRACER_TESTS_ALLOW_SKIP=1` to downgrade this to a skip. \
+         Do not set it in CI."
+    );
+}
 
 /// Workspace root (=`noir/`).  `CARGO_MANIFEST_DIR` is `noir/tooling/tracer`,
 /// so we walk up two parents.
@@ -62,7 +107,8 @@ fn noir_workspace_root() -> PathBuf {
 ///      release binary; matches what a developer iterating on the tracer
 ///      expects).
 ///
-/// Returns `None` (with a `SKIP:` diagnostic) if none is found.
+/// Panics if none is found; returns `None` only under the explicit
+/// `CODETRACER_TRACER_TESTS_ALLOW_SKIP` opt-out.
 fn locate_nargo(test_name: &str) -> Option<PathBuf> {
     if let Ok(env_path) = std::env::var("CODETRACER_NARGO_BIN") {
         let p = PathBuf::from(env_path);
@@ -83,13 +129,12 @@ fn locate_nargo(test_name: &str) -> Option<PathBuf> {
         return Some(newest);
     }
 
-    eprintln!(
-        "SKIP: {test_name} requires the workspace `nargo` binary at \
-         <noir>/target/{{debug,release}}/nargo.  Build it with \
-         `cargo build -p nargo_cli --bin nargo` or set \
-         CODETRACER_NARGO_BIN."
-    );
-    None
+    missing_prerequisite(
+        test_name,
+        "the workspace `nargo` binary at <noir>/target/{debug,release}/nargo. \
+         Build it with `cargo build -p nargo_cli --bin nargo` or set \
+         CODETRACER_NARGO_BIN.",
+    )
 }
 
 /// Locate the `ct-print` binary from `codetracer-trace-format-nim`.
@@ -99,7 +144,8 @@ fn locate_nargo(test_name: &str) -> Option<PathBuf> {
 ///   2. `<workspace>/../codetracer-trace-format-nim/ct-print` (sibling
 ///      layout in the metacraft monorepo).
 ///
-/// Returns `None` (with a `SKIP:` diagnostic) if neither is found.
+/// Panics if neither is found; returns `None` only under the explicit
+/// `CODETRACER_TRACER_TESTS_ALLOW_SKIP` opt-out.
 fn locate_ct_print(test_name: &str) -> Option<PathBuf> {
     if let Ok(env_path) = std::env::var("CODETRACER_CT_PRINT_BIN") {
         let p = PathBuf::from(env_path);
@@ -117,12 +163,12 @@ fn locate_ct_print(test_name: &str) -> Option<PathBuf> {
         return Some(p);
     }
 
-    eprintln!(
-        "SKIP: {test_name} requires `ct-print` from \
-         codetracer-trace-format-nim.  Build it via the sibling \
-         repo or set CODETRACER_CT_PRINT_BIN."
-    );
-    None
+    missing_prerequisite(
+        test_name,
+        "`ct-print` from codetracer-trace-format-nim. Build it with \
+         `just build-ct-print` in the sibling checkout (it lands at the repo \
+         root, which is where this looks), or set CODETRACER_CT_PRINT_BIN.",
+    )
 }
 
 /// Path to one of the existing `test_programs/trace/<name>` fixtures.
@@ -821,4 +867,76 @@ fn test_multi_stmt_per_line_column_aware() {
         .iter()
         .any(|e| e["kind"] == "step" && e["line"].as_i64() == Some(3));
     assert!(!assert_line_step, "line 3 (the `assert`) is expected to have no step yet");
+}
+
+/// Assignments inside a `while` body must be recorded.
+///
+/// This is the end-to-end half of the `debug::tests` unit tests added
+/// alongside it. `DebugInstrumenter::walk_statement` used to end in a
+/// `_ => {}` catch-all, and `StatementKind::{Loop, While}` fell into it, so
+/// the instrumenter never descended into a `while` or `loop` body. The
+/// defect predates the `beta.18` -> `beta.26` sync: `Loop` and `While` were
+/// already `StatementKind` variants at `beta.18` and already hit that same
+/// catch-all. It was never a regression, just never noticed — no fixture in
+/// `test_programs/trace` used `while` or `loop`, so nothing recorded it and
+/// nothing failed.
+///
+/// Recorded on a `beta.18` build, `while_loop` yields exactly four value
+/// observations — `n`, `out`, `acc = 0`, `i = 0` — and then nothing for the
+/// remaining five iterations: the debugger shows `acc` frozen at `0` while
+/// the circuit computes `10`.
+///
+/// Counting steps would not catch this. Only the recorded *values* do.
+#[test]
+fn test_while_loop_body_assignments_are_recorded() {
+    let Some(doc) =
+        record_and_dump_full("test_while_loop_body_assignments_are_recorded", "while_loop")
+    else {
+        return;
+    };
+
+    assert_eq!(doc["metadata"]["program"].as_str(), Some("while_loop"));
+
+    // Every point at which a variable's recorded value differs from the value
+    // it last held, in order: the observation sequence a debugger user sees.
+    let mut last: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    let mut observed: Vec<(String, i64)> = Vec::new();
+    for event in doc["events"].as_array().expect("events") {
+        if event["kind"] != "step" {
+            continue;
+        }
+        for var in event["vars"].as_array().into_iter().flatten() {
+            let name = var["varname"].as_str().expect("varname").to_string();
+            let value = var["value"]["i"].as_i64().expect("integer value");
+            if last.get(&name) != Some(&value) {
+                observed.push((name.clone(), value));
+                last.insert(name, value);
+            }
+        }
+    }
+
+    let observed: Vec<(&str, i64)> = observed.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+    assert_eq!(
+        observed,
+        vec![
+            // entry bindings
+            ("n", 5),
+            ("out", 10),
+            ("acc", 0),
+            ("i", 0),
+            // five iterations of the `while` body
+            ("i", 1),
+            ("acc", 1),
+            ("i", 2),
+            ("acc", 3),
+            ("i", 3),
+            ("acc", 6),
+            ("i", 4),
+            ("acc", 10),
+            ("i", 5),
+        ],
+        "the `while` body must contribute an observation per assignment per \
+         iteration; before the `StatementKind::While` arm existed this \
+         stopped after the four entry bindings"
+    );
 }

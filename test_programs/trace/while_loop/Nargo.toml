@@ -1,0 +1,4 @@
+[package]
+name = "while_loop"
+type = "bin"
+authors = [""]

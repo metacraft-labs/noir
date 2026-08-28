@@ -1,0 +1,81 @@
+name: Upstream drift
+
+# Why this workflow exists, and why it is shaped the way it is.
+#
+# This fork carries the CodeTracer tracer (`tooling/tracer`, `tooling/tracer_wasm`,
+# `nargo trace`). It drifted **eight upstream releases** behind noir-lang/noir
+# without anyone noticing, and one of the things that broke on the way back
+# (`x *= y` silently stopped being instrumented) corrupted recorded traces
+# without failing a build. Distance from upstream is therefore a thing this
+# repository has to *measure*, not a thing someone remembers to check.
+#
+# Three constraints shaped this file, all of them measured on the fork rather
+# than assumed:
+#
+#   1. **Nothing here can run `cargo`.** The workspace member `tooling/tracer`
+#      depends on `../codetracer-trace-format/{codetracer_trace_types,
+#      codetracer_trace_writer_nim}` by *path*, i.e. on sibling repositories
+#      that do not exist in a bare checkout. Every scheduled Rust job inherited
+#      from upstream currently dies before compiling anything, with
+#      `failed to load manifest for workspace member .../tooling/tracer`.
+#      This job is pure git, so it works in a plain checkout.
+#
+#   2. **`push` is not a usable trigger on this fork.** Every inherited
+#      workflow is gated on `push: branches: [master]`, and this fork's
+#      development branch is `codetracer` (`origin/master` is a dead 2023
+#      mirror). The GitHub API reports **zero** `push` and **zero**
+#      `pull_request` workflow runs for the whole repository. So the trigger
+#      list below names the branches this fork actually uses.
+#
+#   3. **It must fail, not merely report.** Both forks were already pinned to a
+#      release when they drifted. What was missing was not the pin: it was
+#      anyone being told how old the pin had become. `DRIFT_MAX_BEHIND` is two
+#      releases, i.e. roughly six weeks at upstream's ~3-week beta cadence, and
+#      still a diff a human can read.
+
+on:
+  schedule:
+    # Weekly, Monday 07:00 UTC. Upstream cuts a beta roughly every three weeks,
+    # so weekly is frequent enough to catch a new release in its first week and
+    # infrequent enough not to become noise.
+    - cron: "0 7 * * 1"
+  push:
+    branches:
+      - codetracer
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      max_behind:
+        description: "Fail if any tracked ref is more than this many releases behind"
+        required: false
+        default: "2"
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: distance from noir-lang/noir
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        # Pinned by SHA, matching every other workflow in this repository.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `git describe` needs the full history; `scripts/upstream-drift.sh`
+          # fetches upstream's tags on top of it. A shallow clone reports no
+          # drift at all, which is exactly the failure mode this job exists to
+          # prevent.
+          fetch-depth: 0
+
+      - name: Report drift
+        env:
+          DRIFT_MAX_BEHIND: ${{ github.event.inputs.max_behind || '2' }}
+        run: |
+          # `HEAD` is the branch this ran on: `codetracer` for the weekly
+          # schedule (it is the default branch), the pushed branch on a push,
+          # and the merge result on a pull request — which is what makes this
+          # job able to block a change that would move the pin backwards.
+          ./scripts/upstream-drift.sh HEAD

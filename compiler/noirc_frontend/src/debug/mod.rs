@@ -431,7 +431,14 @@ impl DebugInstrumenter {
                     location: *location,
                 }
             }
-            _ => {
+            // `x[i] = v`, `p.field = v`, and interned lvalues, all of which are
+            // recorded as a member assignment against the root variable. Spelled
+            // out rather than left as `_` so that a new `LValue` variant is a
+            // compile error here too — the inner walk below is already
+            // exhaustive, and this arm is what feeds it.
+            ast::LValue::MemberAccess { .. }
+            | ast::LValue::Index { .. }
+            | ast::LValue::Interned(..) => {
                 let mut indexes = vec![];
                 let mut cursor = &assign_stmt.lvalue;
                 let var_id;
@@ -553,7 +560,49 @@ impl DebugInstrumenter {
             ast::ExpressionKind::Parenthesized(expr) => {
                 self.walk_expr(expr);
             }
-            _ => {}
+
+            // ----------------------------------------------------------------
+            // Everything below is deliberately NOT descended into. The match is
+            // exhaustive on purpose: `ExpressionKind` is an upstream enum, and a
+            // catch-all here is a drift hazard. When upstream adds a variant the
+            // tracer must decide about, this file must stop compiling rather
+            // than silently stop recording. (`StatementKind::AssignOp` is the
+            // worked example — see `walk_assign_op_statement` and the tests at
+            // the bottom of this file.)
+            // ----------------------------------------------------------------
+
+            // Leaves with no sub-expressions to walk.
+            ast::ExpressionKind::Variable(_)
+            | ast::ExpressionKind::AsTraitPath(_)
+            | ast::ExpressionKind::TypePath(_)
+            | ast::ExpressionKind::Error => {}
+
+            // `Literal::Array`/`Slice`/`FmtStr` do carry sub-expressions, but the
+            // instrumenter has never descended into them and doing so now would
+            // change every recorded trace containing an array literal. Left as a
+            // known gap rather than an accidental one.
+            ast::ExpressionKind::Literal(_) => {}
+
+            // `constrain`/`assert` operands are pure checks: they cannot assign,
+            // so there is no `__debug_var_assign` to emit inside them.
+            ast::ExpressionKind::Constrain(_) => {}
+
+            // Comptime code runs in the interpreter, not in the traced program,
+            // so instrumentation calls placed inside it would never be observed.
+            ast::ExpressionKind::Comptime(..)
+            | ast::ExpressionKind::Quote(_)
+            | ast::ExpressionKind::Unquote(_) => {}
+
+            // Already-elaborated or interned nodes: the AST this pass edits is
+            // no longer the representation these carry.
+            ast::ExpressionKind::Resolved(_)
+            | ast::ExpressionKind::Interned(_)
+            | ast::ExpressionKind::InternedStatement(_) => {}
+
+            // Known gaps, listed so they are visible rather than silent:
+            // `match` arms and `unsafe { .. }` bodies are not instrumented, so
+            // assignments inside them are not recorded.
+            ast::ExpressionKind::Match(_) | ast::ExpressionKind::Unsafe(_) => {}
         }
     }
 
@@ -615,7 +664,44 @@ impl DebugInstrumenter {
             ast::StatementKind::For(for_stmt) => {
                 self.walk_for(for_stmt);
             }
-            _ => {} // Constrain, Error
+            ast::StatementKind::Loop(loop_stmt) => {
+                self.walk_expr(&mut loop_stmt.body);
+            }
+            ast::StatementKind::While(while_stmt) => {
+                self.walk_expr(&mut while_stmt.condition);
+                self.walk_expr(&mut while_stmt.body);
+            }
+
+            // ----------------------------------------------------------------
+            // This match used to end in `_ => {} // Constrain, Error` — a
+            // catch-all whose comment enumerated what its author expected to
+            // reach it. `StatementKind` is an *upstream* enum: when
+            // noir-lang/noir#12123 made `x <op>= y` its own `AssignOp` variant
+            // instead of desugaring it in the parser, that variant joined the
+            // catch-all silently, and every compound assignment stopped being
+            // recorded while the program still computed the right answer. A
+            // green build, a passing test suite, and a wrong trace.
+            //
+            // The match is therefore exhaustive on purpose. A new upstream
+            // variant must break this build, and whoever fixes it must decide
+            // in writing whether the tracer records it. Do not reintroduce a
+            // catch-all here.
+            // ----------------------------------------------------------------
+
+            // Control-flow markers: nothing to record and nothing to descend
+            // into.
+            ast::StatementKind::Break | ast::StatementKind::Continue => {}
+
+            // Runs in the comptime interpreter, not in the traced program, so
+            // instrumentation placed inside it would never be observed.
+            ast::StatementKind::Comptime(_) => {}
+
+            // The real `StatementKind` lives in the `NodeInterner`; this pass
+            // edits the parsed AST and cannot reach it.
+            ast::StatementKind::Interned(_) => {}
+
+            // A recovered parse error. Compilation is already failing.
+            ast::StatementKind::Error => {}
         }
     }
 }
@@ -903,4 +989,195 @@ fn uint_expr(x: u128, location: Location) -> ast::Expression {
 fn sint_expr(x: i128, location: Location) -> ast::Expression {
     let kind = ast::ExpressionKind::Literal(ast::Literal::Integer(x.into(), None));
     ast::Expression { kind, location }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Regression tests for [`DebugInstrumenter`].
+    //!
+    //! These exist because of a **silent** defect. noir-lang/noir#12123 made
+    //! `x <op>= y` its own [`ast::StatementKind::AssignOp`] variant instead of
+    //! desugaring it in the parser, and marked the change a bug fix with no
+    //! breaking-change flag. [`DebugInstrumenter::walk_statement`] ended in a
+    //! `_ => {}` catch-all, so compound assignments simply stopped being
+    //! instrumented: the compiled program still computed the right answer, no
+    //! test failed, and every `+=`/`*=`/… kept its pre-assignment value in the
+    //! debugger and in recorded traces.
+    //!
+    //! `test_programs/execution_success/op_assign_desugaring` pins the
+    //! *evaluation semantics* of the desugaring, but it cannot catch this: the
+    //! program executes correctly whether or not the instrumenter touched it.
+    //! Only counting the emitted `__debug_var_assign` calls does.
+
+    use super::DebugInstrumenter;
+    use crate::parser::parse_program_with_dummy_file;
+
+    /// Instrument `src` and render the resulting module back to source.
+    fn instrument(src: &str) -> String {
+        let (mut module, errors) = parse_program_with_dummy_file(src);
+        assert!(errors.is_empty(), "fixture failed to parse: {errors:?}");
+        DebugInstrumenter::default().instrument_module(&mut module);
+
+        module
+            .items
+            .iter()
+            .filter_map(|item| match &item.kind {
+                crate::parser::ItemKind::Function(f) => Some(f.to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn count(haystack: &str, needle: &str) -> usize {
+        haystack.matches(needle).count()
+    }
+
+    /// The defect itself: four compound assignments must produce four
+    /// `__debug_var_assign` calls on top of the three entry-time parameter
+    /// bindings. Before the `AssignOp` arm existed this was **3** — the
+    /// parameters only — and `x` was recorded as `3` for the whole run while
+    /// the circuit correctly computed `429981696`.
+    ///
+    /// This is `test_programs/trace/a_1_mul` reduced to what the instrumenter
+    /// can be asked about without building `nargo`.
+    #[test]
+    fn compound_assignment_emits_a_var_assign_per_statement() {
+        let instrumented = instrument(
+            "fn main(mut x: u32, y: u32, z: u32) {
+                 x *= y;
+                 x *= x;
+                 x *= x;
+                 x *= x;
+                 assert(x == z);
+             }",
+        );
+
+        assert_eq!(
+            count(&instrumented, "__debug_var_assign"),
+            3 + 4,
+            "expected 3 parameter bindings + 1 per compound assignment, got:\n{instrumented}"
+        );
+    }
+
+    /// The control for the test above: the same program written out longhand
+    /// has always been instrumented, and must stay identical in count. If this
+    /// one ever disagrees with the compound-assignment count, the desugaring
+    /// has drifted rather than the arm having gone missing.
+    #[test]
+    fn compound_and_longhand_assignment_agree() {
+        let compound = instrument(
+            "fn main(mut x: u32, y: u32) {
+                 x *= y;
+             }",
+        );
+        let longhand = instrument(
+            "fn main(mut x: u32, y: u32) {
+                 x = x * y;
+             }",
+        );
+
+        assert_eq!(
+            count(&compound, "__debug_var_assign"),
+            count(&longhand, "__debug_var_assign"),
+            "`x *= y` and `x = x * y` must be recorded the same number of times\
+             \ncompound:\n{compound}\nlonghand:\n{longhand}"
+        );
+    }
+
+    /// The right-hand side is bound to a temporary *before* the lvalue is read,
+    /// so a side-effecting rhs is observed by the lvalue
+    /// (`i += { i = 10; 1 }` is 11, not 1). This pins the shape of the
+    /// desugaring, not just its count.
+    #[test]
+    fn compound_assignment_binds_the_rhs_before_reading_the_lvalue() {
+        let instrumented = instrument(
+            "fn main(mut x: u32, y: u32) {
+                 x += y;
+             }",
+        );
+
+        let bound = instrumented.find("let __debug_op_rhs").unwrap_or_else(|| {
+            panic!("the rhs must be bound to a temporary, got:\n{instrumented}")
+        });
+        let lvalue_read = instrumented.find("(x + __debug_op_rhs)").unwrap_or_else(|| {
+            panic!("the operator must be applied to the bound temporary, got:\n{instrumented}")
+        });
+        assert!(
+            bound < lvalue_read,
+            "the rhs temporary must be bound before the lvalue is read:\n{instrumented}"
+        );
+    }
+
+    /// `p.x += 1` goes through the member-assignment oracle, like `p.x = ...`.
+    #[test]
+    fn compound_assignment_to_a_member_is_instrumented() {
+        let instrumented = instrument(
+            "fn main() {
+                 let mut p = Pair { x: 1, y: 2 };
+                 p.x += 5;
+             }",
+        );
+
+        assert_eq!(
+            count(&instrumented, "__debug_member_assign_1"),
+            1,
+            "expected one member assignment to be recorded, got:\n{instrumented}"
+        );
+    }
+
+    /// A deliberate, documented gap rather than an accident: instrumenting
+    /// `x[expr] += v` at this stage would re-evaluate `expr`, and
+    /// `test_programs/execution_success/op_assign_desugaring` pins that it must
+    /// run exactly once. The assignment still happens; the debugger just does
+    /// not observe it. Asserted so that a future fix has to update this test
+    /// rather than change recorded traces silently.
+    #[test]
+    fn compound_assignment_through_an_index_is_left_uninstrumented() {
+        let instrumented = instrument(
+            "fn main() {
+                 let mut xs = [1, 2, 3];
+                 xs[0] += 3;
+             }",
+        );
+
+        assert_eq!(
+            count(&instrumented, "__debug_member_assign"),
+            0,
+            "indexed compound assignment must not be instrumented, got:\n{instrumented}"
+        );
+    }
+
+    /// `while` and `loop` bodies reached the same `_ => {}` catch-all that hid
+    /// the `AssignOp` defect, so assignments inside them were never recorded.
+    /// Now that [`DebugInstrumenter::walk_statement`] is exhaustive they are
+    /// walked like a `for` body.
+    #[test]
+    fn while_and_loop_bodies_are_instrumented() {
+        let while_loop = instrument(
+            "unconstrained fn main(mut x: u32) {
+                 while x < 10 {
+                     x += 1;
+                 }
+             }",
+        );
+        assert_eq!(
+            count(&while_loop, "__debug_var_assign"),
+            1 + 1,
+            "expected the parameter binding plus the assignment in the loop body, got:\n{while_loop}"
+        );
+
+        let bare_loop = instrument(
+            "unconstrained fn main(mut x: u32) {
+                 loop {
+                     x += 1;
+                 }
+             }",
+        );
+        assert_eq!(
+            count(&bare_loop, "__debug_var_assign"),
+            1 + 1,
+            "expected the parameter binding plus the assignment in the loop body, got:\n{bare_loop}"
+        );
+    }
 }
