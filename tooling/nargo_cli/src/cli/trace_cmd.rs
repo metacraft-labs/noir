@@ -122,6 +122,14 @@ pub(crate) fn trace_program(
 ) -> Result<(), CliError> {
     let initial_witness = compiled_program.abi.encode(inputs_map, None)?;
 
+    // Create `--out-dir` up front.  The Nim writer cannot open its container in
+    // a directory that does not exist, and `begin_trace` turns that into a
+    // `panic!` (which surfaces as SIGABRT, not a diagnostic).  A missing output
+    // directory is an ordinary user mistake, so handle it here and report it as
+    // a `CliError` instead.
+    std::fs::create_dir_all(out_dir)
+        .map_err(|err| CliError::Generic(format!("creating trace output dir {out_dir}: {err}")))?;
+
     let debug_artifact = DebugArtifact {
         debug_symbols: compiled_program.debug.clone(),
         file_map: compiled_program.file_map.clone(),
