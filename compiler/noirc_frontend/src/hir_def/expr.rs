@@ -1,25 +1,26 @@
+use acvm::FieldElement;
 use fm::FileId;
 use iter_extended::vecmap;
 use noirc_errors::Location;
+use num_bigint::BigInt;
 
-use crate::Shared;
 use crate::ast::{BinaryOp, BinaryOpKind, Ident, UnaryOp};
 use crate::hir::type_check::generics::TraitGenerics;
 use crate::node_interner::pusher::{HasLocation, PushedExpr};
 use crate::node_interner::{
     DefinitionId, DefinitionKind, ExprId, FuncId, NodeInterner, StmtId, TraitId, TraitItemId,
 };
-use crate::signed_field::SignedField;
 use crate::token::{FmtStrFragment, Tokens};
+use crate::{Shared, TypeBindings};
 
 use super::stmt::HirPattern;
 use super::traits::{ResolvedTraitBound, TraitConstraint};
 use super::types::{DataType, Type};
 
-/// A HirExpression is the result of an Expression in the AST undergoing
+/// A `HirExpression` is the result of an Expression in the AST undergoing
 /// name resolution. It is almost identical to the Expression AST node, but
 /// references other HIR nodes indirectly via IDs rather than directly via
-/// boxing. Variables in HirExpressions are tagged with their DefinitionId
+/// boxing. Variables in `HirExpressions` are tagged with their `DefinitionId`
 /// from the definition that refers to them so there is no ambiguity with names.
 #[derive(Debug, Clone)]
 pub enum HirExpression {
@@ -53,13 +54,13 @@ pub struct HirIdent {
     pub location: Location,
     pub id: DefinitionId,
 
-    /// If this HirIdent refers to a trait method, this field stores
+    /// If this `HirIdent` refers to a trait method, this field stores
     /// whether the impl for this method is known or not.
     pub impl_kind: ImplKind,
 }
 
 impl HirIdent {
-    /// Create a [HirIdent] with [ImplKind::NotATraitMethod].
+    /// Create a [`HirIdent`] with [`ImplKind::NotATraitMethod`].
     ///
     /// It may not be a method at all.
     pub fn non_trait_method(id: DefinitionId, location: Location) -> Self {
@@ -128,8 +129,8 @@ pub enum HirLiteral {
     Array(HirArrayLiteral),
     Vector(HirArrayLiteral),
     Bool(bool),
-    Integer(SignedField),
-    Str(String),
+    Integer(BigInt),
+    Str(Vec<u8>),
     FmtStr(Vec<FmtStrFragment>, Vec<ExprId>, u32 /* length */),
     Unit,
 }
@@ -158,7 +159,7 @@ pub struct HirPrefixExpression {
 }
 
 impl HirPrefixExpression {
-    /// Creates a basic HirPrefixExpression with `trait_method_id = None` and `skip = false`
+    /// Creates a basic `HirPrefixExpression` with `trait_method_id = None` and `skip = false`
     pub fn new(operator: UnaryOp, rhs: ExprId) -> Self {
         Self { operator, rhs, trait_method_id: None, skip: false }
     }
@@ -178,7 +179,7 @@ pub struct HirInfixExpression {
 }
 
 /// This is always a struct field access `my_struct.field`
-/// and never a method call. The later is represented by HirMethodCallExpression.
+/// and never a method call. The later is represented by `HirMethodCallExpression`.
 #[derive(Debug, Clone)]
 pub struct HirMemberAccess {
     pub lhs: ExprId,
@@ -216,7 +217,7 @@ pub struct HirCallExpression {
 }
 
 /// These nodes are temporary, they're
-/// lowered into HirCallExpression nodes
+/// lowered into `HirCallExpression` nodes
 /// after type checking resolves the object
 /// type and the method it calls.
 #[derive(Debug, Clone)]
@@ -230,13 +231,13 @@ pub struct HirMethodCallExpression {
 }
 
 /// Corresponds to `assert` and `assert_eq` in the source code.
-/// This node also contains the FileId of the file the constrain
+/// This node also contains the `FileId` of the file the constrain
 /// originates from. This is used later in the SSA pass to issue
 /// an error if a constrain is found to be always false.
 #[derive(Debug, Clone)]
 pub struct HirConstrainExpression(
     /*condition*/ pub ExprId,
-    pub FileId,
+    pub Location,
     /*message*/ pub Option<ExprId>,
 );
 
@@ -262,15 +263,15 @@ pub struct HirTraitMethodReference {
 }
 
 impl HirMethodReference {
-    /// Return the [FuncId] of a method if it's known.
+    /// Return the [`FuncId`] of a method if it's known.
     ///
     /// Returns `None` for trait methods don't have a know function definition.
     pub fn func_id(&self, interner: &NodeInterner) -> Option<FuncId> {
         match self {
             HirMethodReference::FuncId(func_id) => Some(*func_id),
             HirMethodReference::TraitItemId(HirTraitMethodReference { definition, .. }) => {
-                match &interner.try_definition(*definition)?.kind {
-                    DefinitionKind::Function(func_id) => Some(*func_id),
+                match interner.definition(*definition).kind {
+                    DefinitionKind::Function(func_id) => Some(func_id),
                     _ => None,
                 }
             }
@@ -297,7 +298,7 @@ impl HirMethodReference {
                 assumed,
             }) => {
                 let constraint = TraitConstraint {
-                    typ: object_type,
+                    typ: Self::find_self_type(definition, object_type, interner),
                     trait_bound: ResolvedTraitBound { trait_id, trait_generics, location },
                 };
 
@@ -309,6 +310,46 @@ impl HirMethodReference {
             .push_expr(HirExpression::Ident(func_var.clone(), generics))
             .push_location(interner, location);
         (func, func_var)
+    }
+
+    /// Find what the trait's Self type should be to construct the trait constraint, given the type
+    /// of its first argument. Assuming this is a method call, it should be sufficient to expect
+    /// Self is somewhere within the first argument. Usually the first parameter is either `Self`
+    /// or `&mut Self`.
+    ///
+    /// This defaults to `object_type` if there are any unexpected type errors (expected to be
+    /// issued elsewhere).
+    fn find_self_type(
+        definition: DefinitionId,
+        object_type: Type,
+        interner: &NodeInterner,
+    ) -> Type {
+        // Get the function type, e.g: `fn(&mut Self, i32) -> Field`
+        let function_type = interner.definition_type(definition);
+
+        // Instantiate, e.g: `fn(&mut ?Self, A, B) -> C`
+        let (instantiated, _bindings) = function_type.instantiate(interner);
+        let instantiated = instantiated.follow_bindings_shallow();
+
+        let first_parameter = match instantiated.as_ref() {
+            Type::Function(parameters, _, _, _) if !parameters.is_empty() => &parameters[0],
+            _ => return object_type,
+        };
+
+        // Match the first parameter, expected to be `?Self` or `&mut ?Self` to our object type. If
+        // successful, we expect `bindings` to have a single binding of `?Self` to either our
+        // object type or its element type, if it is a reference. Note that unifying here also
+        // handles the case where `object_type` is unbound but is discovered (here) that it must at
+        // least be a reference.
+        let mut bindings = TypeBindings::default();
+        if object_type.try_unify(first_parameter, &mut bindings).is_ok() && bindings.len() == 1 {
+            // We're expecting `Self` or `&mut Self`, where `Self` becomes a type variable after
+            // instantiation, so the value of `Self` for the constraint should be what it is bound
+            // to in `bindings`.
+            bindings.into_values().next().unwrap().2
+        } else {
+            object_type
+        }
     }
 }
 
@@ -345,7 +386,7 @@ pub struct HirConstructorExpression {
 /// represented when using enums with named fields.
 ///
 /// During monomorphization, these expressions are translated to tuples of
-/// (tag, variant0_fields, variant1_fields, ..) since we cannot actually
+/// (tag, `variant0_fields`, `variant1_fields`, ..) since we cannot actually
 /// make a true union in a circuit.
 #[derive(Debug, Clone)]
 pub struct HirEnumConstructorExpression {
@@ -403,7 +444,7 @@ pub struct HirLambda {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HirMatch {
-    /// Jump directly to ExprId
+    /// Jump directly to `ExprId`
     Success(ExprId),
 
     /// A Failure node in the match. `missing_case` is true if this node is the result of a missing
@@ -438,10 +479,10 @@ pub enum Constructor {
     True,
     False,
     Unit,
-    Int(SignedField),
+    Int(FieldElement),
     Tuple(Vec<Type>),
     Variant(Type, usize),
-    Range(SignedField, SignedField),
+    Range(FieldElement, FieldElement),
 }
 
 impl Constructor {
@@ -509,7 +550,7 @@ impl Constructor {
                 } else
                 /* def is a struct */
                 {
-                    let field_count = def_ref.fields_raw().map(|fields| fields.len()).unwrap_or(0);
+                    let field_count = def_ref.fields_raw().map_or(0, |fields| fields.len());
                     vec![(Constructor::Variant(typ.clone(), 0), field_count)]
                 }
             }

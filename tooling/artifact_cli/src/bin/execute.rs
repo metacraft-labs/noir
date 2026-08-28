@@ -32,6 +32,7 @@ struct ExecutorCli {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Execute a binary program or a circuit artifact.
     Execute(execute_cmd::ExecuteCommand),
@@ -105,14 +106,14 @@ fn check_witness_file(
     };
 
     let mut witness_stack = load_witness_from_file(witness_path)?;
-    let backend = Bn254BlackBoxSolver(false);
+    let backend = Bn254BlackBoxSolver;
 
     while let Some(stack_item) = witness_stack.pop() {
         let function_index = stack_item.index as usize;
         let witness_map = stack_item.witness;
 
         let acir_circuit = &program.program.functions[function_index];
-        validate_witness(&backend, witness_map, acir_circuit)
+        validate_witness(&backend, &witness_map, acir_circuit)
             .map_err(|e| eyre::eyre!("Witness validation failed: {e}"))?;
     }
 

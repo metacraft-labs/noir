@@ -40,7 +40,7 @@ impl<T: Default> Default for Located<T> {
     }
 }
 
-/// Hash-based data structures (HashMap, HashSet) rely on the inverse of Hash
+/// Hash-based data structures (`HashMap`, `HashSet`) rely on the inverse of Hash
 /// being injective, i.e. x.eq(y) => hash(x, H) == hash(y, H), we hence align
 /// this with the above
 impl<T: Hash> Hash for Located<T> {
@@ -63,7 +63,7 @@ impl<T> Located<T> {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct Location {
     pub span: Span,
     pub file: FileId,
@@ -90,6 +90,10 @@ impl Location {
             self
         }
     }
+
+    pub fn is_dummy(&self) -> bool {
+        *self == Location::dummy()
+    }
 }
 
 impl Ord for Location {
@@ -101,5 +105,11 @@ impl Ord for Location {
 impl PartialOrd for Location {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+impl std::fmt::Debug for Location {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}:{}", self.file.as_usize(), self.span.start(), self.span.end())
     }
 }

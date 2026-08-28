@@ -24,12 +24,13 @@ use crate::{
     requests::{ProcessRequestCallbackArgs, to_lsp_location},
 };
 
-/// Traverses an AST to find a ReferenceId at the given byte index.
+/// Traverses an AST to find a `ReferenceId` at the given byte index.
 /// This searches:
 /// - references in doc comment links
 /// - attribute references (see `visit_meta_attribute`).
 pub(crate) struct VisitorReferenceFinder<'a> {
     source: &'a str,
+    file_id: FileId,
     byte_index: usize,
     /// The module ID in scope. This might change as we traverse the AST
     /// if we are analyzing something inside an inline module declaration.
@@ -37,7 +38,7 @@ pub(crate) struct VisitorReferenceFinder<'a> {
     args: &'a ProcessRequestCallbackArgs<'a>,
     link_finder: LinkFinder,
 
-    /// The found ReferenceId, if any, along with an LSP location that covers
+    /// The found `ReferenceId`, if any, along with an LSP location that covers
     /// the range of the text that points to that reference (None if the range
     /// should be the word under the cursor, or Some if the range is not that word,
     /// which is the case of doc comment links where the entire `[...]` is the range)
@@ -47,7 +48,7 @@ pub(crate) struct VisitorReferenceFinder<'a> {
 impl<'a> VisitorReferenceFinder<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        file: FileId,
+        file_id: FileId,
         source: &'a str,
         byte_index: usize,
         args: &'a ProcessRequestCallbackArgs<'a>,
@@ -56,7 +57,7 @@ impl<'a> VisitorReferenceFinder<'a> {
         let krate = args.crate_id;
         let def_map = &args.def_maps[&krate];
         let local_id = if let Some((module_index, _)) =
-            def_map.modules().iter().find(|(_, module_data)| module_data.location.file == file)
+            def_map.modules().iter().find(|(_, module_data)| module_data.location.file == file_id)
         {
             LocalModuleId::new(module_index)
         } else {
@@ -64,19 +65,22 @@ impl<'a> VisitorReferenceFinder<'a> {
         };
         let module_id = ModuleId { krate, local_id };
         let link_finder = LinkFinder::default();
-        Self { source, byte_index, module_id, args, link_finder, reference_id: None }
+        Self { source, file_id, byte_index, module_id, args, link_finder, reference_id: None }
     }
 
     pub(crate) fn find(
         &mut self,
         parsed_module: &ParsedModule,
     ) -> Option<(ReferenceId, Option<lsp_types::Location>)> {
+        // Find in the doc comments on the crate root, if we are in the crate root
+        self.find_in_reference_doc_comments(ReferenceId::Module(self.module_id));
+
         parsed_module.accept(self);
 
         std::mem::take(&mut self.reference_id)
     }
 
-    /// Checks if the cursor is on a link inside the doc comments of the given ReferenceId.
+    /// Checks if the cursor is on a link inside the doc comments of the given `ReferenceId`.
     fn find_in_reference_doc_comments(&mut self, id: ReferenceId) {
         let Some(doc_comments) = self.args.interner.doc_comments(id) else {
             return;
@@ -101,6 +105,12 @@ impl<'a> VisitorReferenceFinder<'a> {
         self.link_finder.reset();
         for located_comment in doc_comments {
             let location = located_comment.location();
+            if location.file != self.file_id {
+                // A module's comments might happen inline in the same file or in a different file.
+                // We should not process comments that are not in the current file.
+                continue;
+            }
+
             let Some(lsp_location) = to_lsp_location(self.args.files, location.file, location.span)
             else {
                 continue;
@@ -122,6 +132,10 @@ impl<'a> VisitorReferenceFinder<'a> {
                 self.args.crate_graph,
             );
             for link in links {
+                let Some(target) = link.target else {
+                    continue;
+                };
+
                 let line = start_line + link.line as u32;
                 let start =
                     if link.line == 0 { start_char + link.start as u32 } else { link.start as u32 };
@@ -131,7 +145,7 @@ impl<'a> VisitorReferenceFinder<'a> {
                     && start <= byte_lsp_location.range.start.character
                     && byte_lsp_location.range.start.character <= end
                 {
-                    let reference = match link.target {
+                    let reference = match target {
                         LinkTarget::TopLevelItem(module_def_id) => {
                             module_def_id_to_reference_id(module_def_id)
                         }
@@ -147,7 +161,7 @@ impl<'a> VisitorReferenceFinder<'a> {
                         }
                     };
                     let location = lsp_types::Location {
-                        uri: byte_lsp_location.uri.clone(),
+                        uri: byte_lsp_location.uri,
                         range: lsp_types::Range {
                             start: lsp_types::Position { line, character: start },
                             end: lsp_types::Position { line, character: end },
@@ -171,16 +185,16 @@ impl Visitor for VisitorReferenceFinder<'_> {
         let name_location = parsed_sub_module.name.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.find_in_reference_doc_comments(reference);
-        };
+        }
 
         // Switch `self.module_id` to the submodule
         let previous_module_id = self.module_id;
 
         let def_map = &self.args.def_maps[&self.module_id.krate];
-        if let Some(module_data) = def_map.get(self.module_id.local_id) {
-            if let Some(child_module) = module_data.children.get(&parsed_sub_module.name) {
-                self.module_id = ModuleId { krate: self.module_id.krate, local_id: *child_module };
-            }
+        if let Some(module_data) = def_map.get(self.module_id.local_id)
+            && let Some(child_module) = module_data.children.get(&parsed_sub_module.name)
+        {
+            self.module_id = ModuleId { krate: self.module_id.krate, local_id: *child_module };
         }
 
         parsed_sub_module.accept_children(self);
@@ -195,7 +209,7 @@ impl Visitor for VisitorReferenceFinder<'_> {
         let name_location = function.name_ident().location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.find_in_reference_doc_comments(reference);
-        };
+        }
 
         self.intersects_span(span)
     }
@@ -204,13 +218,13 @@ impl Visitor for VisitorReferenceFinder<'_> {
         let name_location = noir_struct.name.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.find_in_reference_doc_comments(reference);
-        };
+        }
 
-        for field in noir_struct.fields.iter() {
+        for field in &noir_struct.fields {
             let field_name_location = field.item.name.location();
             if let Some(reference) = self.args.interner.reference_at_location(field_name_location) {
                 self.find_in_reference_doc_comments(reference);
-            };
+            }
         }
 
         false
@@ -220,14 +234,14 @@ impl Visitor for VisitorReferenceFinder<'_> {
         let name_location = noir_enum.name.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.find_in_reference_doc_comments(reference);
-        };
+        }
 
-        for variant in noir_enum.variants.iter() {
+        for variant in &noir_enum.variants {
             let variant_name_location = variant.item.name.location();
             if let Some(reference) = self.args.interner.reference_at_location(variant_name_location)
             {
                 self.find_in_reference_doc_comments(reference);
-            };
+            }
         }
 
         false
@@ -237,16 +251,16 @@ impl Visitor for VisitorReferenceFinder<'_> {
         let name_location = noir_trait.name.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.find_in_reference_doc_comments(reference);
-        };
+        }
 
-        for item in noir_trait.items.iter() {
+        for item in &noir_trait.items {
             if let TraitItem::Function { name, .. } = &item.item {
                 let func_name_location = name.location();
                 if let Some(reference) =
                     self.args.interner.reference_at_location(func_name_location)
                 {
                     self.find_in_reference_doc_comments(reference);
-                };
+                }
             }
         }
 
@@ -257,7 +271,7 @@ impl Visitor for VisitorReferenceFinder<'_> {
         let name_location = let_statement.pattern.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.find_in_reference_doc_comments(reference);
-        };
+        }
         false
     }
 
@@ -265,16 +279,16 @@ impl Visitor for VisitorReferenceFinder<'_> {
         let name_location = type_alias.name.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.find_in_reference_doc_comments(reference);
-        };
+        }
         false
     }
 
     /// If the cursor is on an custom attribute, try to resolve its
-    /// underlying function and return a ReferenceId to it.
+    /// underlying function and return a `ReferenceId` to it.
     /// This is needed in hover and go-to-definition because when an annotation generates
     /// code, that code ends up residing in the attribute definition (it ends up having the
     /// attribute's span) so using the usual graph to locate what points to that location
-    /// will give not only the attribute function but also any type generated by it.use fm::FileId;
+    /// will give not only the attribute function but also any type generated by it.use `fm::FileId`;
     fn visit_meta_attribute(
         &mut self,
         attribute: &MetaAttribute,
@@ -291,7 +305,7 @@ impl Visitor for VisitorReferenceFinder<'_> {
 
         // The path here must resolve to a function and it's a simple path (can't have turbofish)
         // so it can (and must) be solved as an import.
-        let Ok(Some((module_def_id, _, _))) = resolve_import(
+        let Ok(Some(scope)) = resolve_import(
             path,
             self.module_id,
             self.args.def_maps,
@@ -302,7 +316,7 @@ impl Visitor for VisitorReferenceFinder<'_> {
             return true;
         };
 
-        self.reference_id = Some((module_def_id_to_reference_id(module_def_id), None));
+        self.reference_id = Some((module_def_id_to_reference_id(scope.id), None));
 
         true
     }

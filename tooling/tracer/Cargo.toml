@@ -12,13 +12,30 @@ repository.workspace = true
 acvm.workspace = true
 fm.workspace = true
 nargo.workspace = true
+# Inherited WITHOUT the debugger's front-end features (the workspace entry sets
+# `default-features = false`), and so without `rpc` -> jsonrpsee/tokio/mio,
+# which has a hard `compile_error!` on wasm.  The tracer only ever uses
+# `noir_debugger::{context, foreign_calls}`, both of which are unconditional.
+# On a native build `nargo_cli` asks for `features = ["repl", "dap"]`, so feature
+# unification gives the CLI the full debugger exactly as before.
 noir_debugger.workspace = true
 noirc_abi.workspace = true
 noirc_artifacts.workspace = true
 noirc_printable_type.workspace = true
 codetracer_trace_types.workspace = true
-codetracer_trace_writer.workspace = true
 tracing.workspace = true
+
+# The Nim-FFI-backed CTFS writer.  Optional: it links a Nim static library and
+# `zstd-sys` (C), so it can never target wasm.  `trace_circuit` itself talks to
+# the narrow `TraceSink` trait defined in this crate, which is writer-agnostic;
+# this feature only adds the blanket adapter from `TraceSink` to the Nim
+# writer's `TraceWriter`.  Enabled by `nargo_cli`, so the native `nargo trace`
+# output is byte-for-byte what it was.
+codetracer_trace_writer = { workspace = true, optional = true }
+
+[features]
+default = []
+nim-writer = ["dep:codetracer_trace_writer"]
 
 [dev-dependencies]
 # Round 1 strict `_via_ct_print_full` tests in `tests/test_tracer.rs`

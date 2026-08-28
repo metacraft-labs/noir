@@ -1,21 +1,23 @@
 use crate::{SourceLocation, StackFrame, stack_frame::Variable};
 
+use crate::sink::TraceSink;
 use acvm::FieldElement;
 use acvm::acir::AcirField; // necessary, for `to_i128` to work
 use codetracer_trace_types::{EventLogKind, FullValueRecord, Line, TypeKind, ValueRecord};
-use codetracer_trace_writer::trace_writer::TraceWriter;
 use noirc_printable_type::{PrintableType, PrintableValue};
 use std::path::{Path, PathBuf};
 
 /// Initialize the trace writer for emitting a CTFS `.ct` container.
 ///
-/// The writer is a `NimTraceWriter` from `codetracer_trace_writer_nim`,
-/// re-exported under the `codetracer_trace_writer` crate name via a
-/// `package = "..."` rename in the workspace `Cargo.toml`.  The Nim-FFI
-/// backend writes the v4 multi-stream layout that
-/// `codetracer-trace-format-nim/ct-print` understands; the pure-Rust
-/// `codetracer_trace_writer` produced a SplitBinary single-shard variant
-/// the decoder cannot read.
+/// `tracer` is any [`TraceSink`]. The native `nargo trace` passes a
+/// `NimTraceWriter` from `codetracer_trace_writer_nim` (reachable through this
+/// crate's default-off `nim-writer` feature), whose Nim-FFI backend writes the
+/// v4 multi-stream layout that `codetracer-trace-format-nim/ct-print`
+/// understands.
+///
+/// `workdir` is baked into the container metadata so `ct-print --strip-paths`
+/// can normalise recorded paths; pass `None` on targets with no working
+/// directory. It used to be read from `std::env::current_dir()`.
 ///
 /// The writer packages events, metadata and source paths into a single
 /// `<program>.ct` file in `out_dir`. The `program` argument is used both
@@ -29,19 +31,24 @@ use std::path::{Path, PathBuf};
 /// embeds it into `meta.dat` automatically at `close()` time, so we no
 /// longer need to call `begin_writing_trace_metadata` /
 /// `begin_writing_trace_paths` to register sidecar paths.
-pub fn begin_trace(tracer: &mut dyn TraceWriter, out_dir: &str, program: &str) {
+pub fn begin_trace(
+    tracer: &mut dyn TraceSink,
+    out_dir: &str,
+    program: &str,
+    workdir: Option<&Path>,
+) {
     // The Nim writer derives the actual `.ct` path by replacing the
     // supplied path's extension with `.ct`. Passing
     // `<out_dir>/<program>` therefore yields `<out_dir>/<program>.ct`.
     let trace_path = Path::new(out_dir).join(program);
-    if let Err(err) = TraceWriter::begin_writing_trace_events(tracer, &trace_path) {
+    if let Err(err) = TraceSink::begin_writing_trace_events(tracer, &trace_path) {
         panic!("Error: trace writer failed to begin writing CTFS container: {err}")
     }
 
     // Bake the workdir into the metadata so `ct-print --strip-paths` can
     // normalise it.  Cairo / Leo do the same.
-    if let Ok(cwd) = std::env::current_dir() {
-        TraceWriter::set_workdir(tracer, &cwd);
+    if let Some(workdir) = workdir {
+        TraceSink::set_workdir(tracer, workdir);
     }
 
     // The initial pending step is registered once the debugger reports the
@@ -54,8 +61,9 @@ pub fn begin_trace(tracer: &mut dyn TraceWriter, out_dir: &str, program: &str) {
 ///
 /// Flushes the events stream and closes the multi-stream writer, which
 /// emits `events.log`, `meta.dat`, `paths.dat` and the rest of the
-/// internal streams into the single `.ct` file.  Any error is reported
-/// but not propagated — the partial container is still useful for
+/// internal streams into the single `.ct` file.  Errors are returned rather
+/// than printed: reporting is the shell's job, not the recorder's, and a wasm
+/// host has no stdout to print to.  The partial container is still useful for
 /// post-mortem inspection.
 ///
 /// The legacy sidecar `finish_writing_trace_metadata` /
@@ -63,16 +71,10 @@ pub fn begin_trace(tracer: &mut dyn TraceWriter, out_dir: &str, program: &str) {
 /// Recording-Identifier-Migration: the multi-stream writer now handles
 /// metadata + paths inside `close()` and emits `meta.dat` with the
 /// canonical UUIDv7 `recording_id` (M-REC-1).
-pub fn finish_trace(tracer: &mut dyn TraceWriter, out_dir: &str) {
-    if let Err(err) = TraceWriter::finish_writing_trace_events(tracer) {
-        println!("Warning: trace writer failed to finalize CTFS events: {err}");
-        return;
-    }
-    if let Err(err) = TraceWriter::close(tracer) {
-        println!("Warning: trace writer failed to close CTFS container: {err}");
-        return;
-    }
-    println!("Saved trace to {}", out_dir);
+pub fn finish_trace(tracer: &mut dyn TraceSink) -> Result<(), Box<dyn std::error::Error>> {
+    TraceSink::finish_writing_trace_events(tracer)?;
+    TraceSink::close(tracer)?;
+    Ok(())
 }
 
 /// Registers a tracing step to the given `location` in the given `tracer`.
@@ -84,12 +86,12 @@ pub fn finish_trace(tracer: &mut dyn TraceWriter, out_dir: &str) {
 /// without a column (synthetic / unknown) fall through to the
 /// line-only path, which the default `register_step_with_column`
 /// override in the writer also handles via `register_step` directly.
-pub(crate) fn register_step(tracer: &mut dyn TraceWriter, location: &SourceLocation) {
+pub(crate) fn register_step(tracer: &mut dyn TraceSink, location: &SourceLocation) {
     let SourceLocation { filepath, line_number, column_number } = location;
     let path = &PathBuf::from(filepath.to_string());
     let line = Line(*line_number as i64);
     let column = column_number.map(|c| Line(c as i64));
-    TraceWriter::register_step_with_column(tracer, path, line, column);
+    TraceSink::register_step_with_column(tracer, path, line, column);
 }
 
 /// Compute per-line UTF-8 byte counts for `source` (no trailing
@@ -116,7 +118,7 @@ pub(crate) fn compute_line_lengths(source: &str) -> Vec<u32> {
 /// Registers all variables in the given frame for the last registered step. Each time a new step is
 /// registered, all of its variables need to be registered too. If no variables are registered for a
 /// step, the frontend will not carry over the variables registered for the previous step.
-pub(crate) fn register_variables(tracer: &mut dyn TraceWriter, frame: &StackFrame) {
+pub(crate) fn register_variables(tracer: &mut dyn TraceSink, frame: &StackFrame) {
     for variable in &frame.variables {
         if variable.name != "__debug_return_expr" {
             register_variable(tracer, variable);
@@ -127,20 +129,20 @@ pub(crate) fn register_variables(tracer: &mut dyn TraceWriter, frame: &StackFram
 /// Registers a variable for the last registered step.
 ///
 /// See `register_variables`.
-fn register_variable(tracer: &mut dyn TraceWriter, variable: &Variable) {
+fn register_variable(tracer: &mut dyn TraceSink, variable: &Variable) {
     let value_record = register_value(tracer, &variable.value, &variable.typ);
-    TraceWriter::register_variable_with_full_value(tracer, &variable.name, value_record);
+    TraceSink::register_variable_with_full_value(tracer, &variable.name, value_record);
 }
 
 /// Registers a value of a given type. Registers the type, if it's the first time it occurs.
 fn register_value(
-    tracer: &mut dyn TraceWriter,
+    tracer: &mut dyn TraceSink,
     value: &PrintableValue<FieldElement>,
     typ: &PrintableType,
 ) -> ValueRecord {
     if matches!(value, PrintableValue::Other) {
         let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-        let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+        let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
         return ValueRecord::None { type_id };
     }
 
@@ -148,7 +150,7 @@ fn register_value(
         PrintableType::Field => {
             if let PrintableValue::Field(field_value) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-                let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+                let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
                 ValueRecord::Int { i: field_value.to_i128() as i64, type_id }
             } else {
                 // Note(stanm): panic here, because this means the compiler frontend is broken, which
@@ -162,7 +164,7 @@ fn register_value(
         PrintableType::UnsignedInteger { .. } => {
             if let PrintableValue::Field(field_value) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-                let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+                let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
                 ValueRecord::Int { i: field_value.to_i128() as i64, type_id }
             } else {
                 panic!(
@@ -174,7 +176,7 @@ fn register_value(
         PrintableType::SignedInteger { .. } => {
             if let PrintableValue::Field(field_value) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-                let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+                let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
                 ValueRecord::Int { i: field_value.to_i128() as i64, type_id }
             } else {
                 panic!("type-value mismatch: value: {:?} does not match type SignedInteger", value)
@@ -183,7 +185,7 @@ fn register_value(
         PrintableType::Boolean => {
             if let PrintableValue::Field(field_value) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-                let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+                let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
                 ValueRecord::Bool { b: field_value.to_i128() as i64 == 1, type_id }
             } else {
                 panic!("type-value mismatch: value: {:?} does not match type Bool", value)
@@ -199,7 +201,7 @@ fn register_value(
                     .map(|e| register_value(tracer, e, element_type))
                     .collect();
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-                let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+                let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
                 ValueRecord::Sequence { elements: element_values, type_id, is_slice: true }
             } else {
                 panic!("type-value mismatch: value: {:?} does not match type Slice", value)
@@ -215,7 +217,7 @@ fn register_value(
                     .map(|e| register_value(tracer, e, element_type))
                     .collect();
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-                let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+                let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
                 ValueRecord::Sequence { elements: element_values, type_id, is_slice: false }
             } else {
                 panic!("type-value mismatch: value: {:?} does not match type Array", value)
@@ -224,7 +226,7 @@ fn register_value(
         PrintableType::String { .. } => {
             if let PrintableValue::String(s) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-                let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+                let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
                 ValueRecord::String { text: s.clone(), type_id }
             } else {
                 panic!("type-value mismatch: value: {:?} does not match type String", value);
@@ -233,7 +235,7 @@ fn register_value(
         PrintableType::Struct { fields, .. } => {
             if let PrintableValue::Struct(struc) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-                let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+                let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
                 let mut field_values = vec![];
                 for (field_name, field_type) in fields {
                     let field_value = struc
@@ -248,7 +250,7 @@ fn register_value(
         }
         PrintableType::Unit => {
             let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-            let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+            let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
             ValueRecord::Raw { r: "()".to_string(), type_id }
         }
         PrintableType::Tuple { types } => {
@@ -262,7 +264,7 @@ fn register_value(
                     .map(|(v, t)| register_value(tracer, v, t))
                     .collect();
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-                let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+                let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
                 ValueRecord::Tuple { elements: element_values, type_id }
             } else {
                 panic!("type-value mismatch: value: {:?} does not match type Tuple", value)
@@ -270,7 +272,7 @@ fn register_value(
         }
         PrintableType::Reference { typ: dereferenced_type, mutable } => {
             let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-            let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+            let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
             let v = register_value(tracer, value, dereferenced_type);
             ValueRecord::Reference {
                 dereferenced: Box::new(v),
@@ -281,7 +283,7 @@ fn register_value(
         }
         PrintableType::Function { .. } => {
             let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-            let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+            let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
             ValueRecord::Raw { r: "fn".to_string(), type_id }
         }
         PrintableType::Enum { .. } => {
@@ -298,7 +300,7 @@ fn register_value(
                     register_value(tracer, printable_value, element_type);
                 });
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
-                let type_id = TraceWriter::ensure_type_id(tracer, type_kind, &type_name);
+                let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
                 ValueRecord::String { text: msg.clone(), type_id }
             } else {
                 panic!("type-value mismatch: value: {:?} does not match type FmtString", value)
@@ -311,29 +313,29 @@ fn register_value(
 ///
 /// A helper method, that makes it easier to interface with `Tracer`.
 pub(crate) fn register_call(
-    tracer: &mut dyn TraceWriter,
+    tracer: &mut dyn TraceSink,
     location: &SourceLocation,
     frame: &StackFrame,
 ) {
     let SourceLocation { filepath, line_number, column_number: _ } = &location;
     let path = &PathBuf::from(filepath.to_string());
     let line = Line(*line_number as i64);
-    let file_id = TraceWriter::ensure_function_id(tracer, &frame.function_name, path, line);
+    let file_id = TraceSink::ensure_function_id(tracer, &frame.function_name, path, line);
     let args = convert_params_to_args_vec(tracer, frame);
-    TraceWriter::register_call(tracer, file_id, args);
+    TraceSink::register_call(tracer, file_id, args);
 }
 
 /// Extracts the relevant information from the given `frame` to construct a vector of `ArgRecord`
 /// that the `Tracer` interface expects when registering function calls.
 fn convert_params_to_args_vec(
-    tracer: &mut dyn TraceWriter,
+    tracer: &mut dyn TraceSink,
     frame: &StackFrame,
 ) -> Vec<FullValueRecord> {
     let mut result = Vec::new();
     for param_index in &frame.function_param_indexes {
         let variable = &frame.variables[*param_index];
         let value_record = register_value(tracer, &variable.value, &variable.typ);
-        result.push(TraceWriter::arg(tracer, &variable.name, value_record));
+        result.push(TraceSink::arg(tracer, &variable.name, value_record));
     }
     result
 }
@@ -342,28 +344,28 @@ fn convert_params_to_args_vec(
 ///
 /// The tracer seems to be keeping context of which function is returning and is not expecting that
 /// to be specified.
-pub(crate) fn register_return(tracer: &mut dyn TraceWriter, return_value: &Option<Variable>) {
+pub(crate) fn register_return(tracer: &mut dyn TraceSink, return_value: &Option<Variable>) {
     if let Some(return_value) = return_value {
         let value_record = register_value(tracer, &return_value.value, &return_value.typ);
-        TraceWriter::register_return(tracer, value_record);
+        TraceSink::register_return(tracer, value_record);
     } else {
-        let type_id = TraceWriter::ensure_type_id(tracer, TypeKind::None, "()");
+        let type_id = TraceSink::ensure_type_id(tracer, TypeKind::None, "()");
 
-        TraceWriter::register_return(tracer, ValueRecord::None { type_id });
+        TraceSink::register_return(tracer, ValueRecord::None { type_id });
     }
 }
 
-pub(crate) fn register_print(tracer: &mut dyn TraceWriter, s: &str) {
+pub(crate) fn register_print(tracer: &mut dyn TraceSink, s: &str) {
     // The newer `register_special_event` API takes a `metadata` parameter
     // (used by other recorders to tag the originating command/syscall).  Noir
     // print events have no such tag, so we pass an empty string — matching
     // the convention used by the shell recorders (see
     // `ct-shell-trace-writer/src/trace_bridge.rs`).
-    TraceWriter::register_special_event(tracer, EventLogKind::Write, "", s);
+    TraceSink::register_special_event(tracer, EventLogKind::Write, "", s);
 }
 
-pub(crate) fn register_error(tracer: &mut dyn TraceWriter, s: &str) {
-    TraceWriter::register_special_event(tracer, EventLogKind::Error, "", s);
+pub(crate) fn register_error(tracer: &mut dyn TraceSink, s: &str) {
+    TraceSink::register_special_event(tracer, EventLogKind::Error, "", s);
 }
 
 fn printable_type_to_kind_and_name(printable_type: &PrintableType) -> (TypeKind, String) {

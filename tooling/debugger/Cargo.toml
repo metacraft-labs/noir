@@ -16,19 +16,35 @@ build-data.workspace = true
 [dependencies]
 acvm.workspace = true
 fm.workspace = true
-nargo = { workspace = true, features = ["rpc"] }
+nargo.workspace = true
 noirc_printable_type.workspace = true
 noirc_errors.workspace = true
 noirc_artifacts.workspace = true
 thiserror.workspace = true
 codespan-reporting.workspace = true
-dap.workspace = true
-easy-repl = "0.2.1"
-owo-colors = "^4.2.2"
-bn254_blackbox_solver.workspace = true
 
+# Only needed by the front-ends (`repl` and `dap` features). The stepping core
+# is generic over `BlackBoxFunctionSolver`, so an embedder picks its own solver.
+bn254_blackbox_solver = { workspace = true, optional = true }
+dap = { workspace = true, optional = true }
+easy-repl = { version = "0.2.1", optional = true }
+owo-colors = { version = "^4.2.2", optional = true }
+
+[features]
+default = ["repl", "dap"]
+
+# Resolve oracle calls against a JSON-RPC server.
+#
+# Execution currently uses HTTP based Oracle resolvers; does not compile to Wasm.
+rpc = ["nargo/rpc"]
+
+# The interactive terminal front-end which backs `nargo debug`.
+repl = ["dep:easy-repl", "dep:owo-colors", "dep:bn254_blackbox_solver", "rpc"]
+
+# The Debug Adapter Protocol server front-end which backs `nargo dap`.
+dap = ["dep:dap", "dep:bn254_blackbox_solver", "rpc"]
 
 [dev-dependencies]
-assert_cmd = "2.0.12"
-rexpect = "0.5.0"
+assert_cmd = "2.2.2"
+rexpect = "0.7"
 tempfile.workspace = true

@@ -2,7 +2,7 @@ use acvm::{FieldElement, acir::AcirField};
 use num_bigint::BigUint;
 
 use crate::ssa::ir::{
-    dfg::{DataFlowGraph, simplify::SimplifyResult},
+    dfg::{DataFlowGraph, simplify::SimplifyResult, simplify::bail_malformed},
     instruction::Instruction,
     integer::IntegerConstant,
     types::{NumericType, Type},
@@ -17,24 +17,22 @@ pub(super) fn simplify_cast(
     dfg: &mut DataFlowGraph,
 ) -> SimplifyResult {
     use SimplifyResult::*;
-    debug_assert!(
-        dfg.type_of_value(value).is_numeric(),
-        "Can only cast numeric types, got {:?}",
-        dfg.type_of_value(value)
-    );
+    if !dfg.type_of_value(value).is_numeric() {
+        bail_malformed!(dfg, "cast operand must be numeric, got {:?}", dfg.type_of_value(value));
+    }
 
-    if Type::Numeric(dst_typ) == dfg.type_of_value(value) {
+    if Type::Numeric(dst_typ) == *dfg.type_of_value(value) {
         return SimplifiedTo(value);
     }
 
-    if let Value::Instruction { instruction, .. } = &dfg[value] {
-        if let Instruction::Cast(original_value, _) = &dfg[*instruction] {
-            let original_value = *original_value;
-            return match simplify_cast(original_value, dst_typ, dfg) {
-                None => SimplifiedToInstruction(Instruction::Cast(original_value, dst_typ)),
-                simpler => simpler,
-            };
-        }
+    if let Value::Instruction { instruction, .. } = &dfg[value]
+        && let Instruction::Cast(original_value, _) = &dfg[*instruction]
+    {
+        let original_value = *original_value;
+        return match simplify_cast(original_value, dst_typ, dfg) {
+            None => SimplifiedToInstruction(Instruction::Cast(original_value, dst_typ)),
+            simpler => simpler,
+        };
     }
 
     if let Some(constant) = dfg.get_numeric_constant(value) {
@@ -70,6 +68,7 @@ pub(super) fn simplify_cast(
                 if bit_size == 128 {
                     return None;
                 }
+
                 // Field/Unsigned -> signed
                 // We could only simplify to signed when we are below the maximum integer of the destination type.
                 // However, we expect that overflow constraints have been generated appropriately that enforce correctness.
@@ -96,7 +95,7 @@ mod tests {
     #[test]
     fn unsigned_u8_to_i8_safe() {
         let src = "
-        brillig(inline) predicate_pure fn main f0 {
+        brillig(inline) pure fn main f0 {
           b0():
             v2 = cast u8 135 as i8
             v3 = truncate v2 to 8 bits, max_bit_size: 9
@@ -109,7 +108,7 @@ mod tests {
         let ssa = Ssa::from_str_simplifying(src).unwrap();
 
         assert_ssa_snapshot!(ssa, @r"
-        brillig(inline) predicate_pure fn main f0 {
+        brillig(inline) pure fn main f0 {
           b0():
             return i8 -121
         }
@@ -184,6 +183,46 @@ mod tests {
             v2 = unchecked_add v0, v1
             v3 = cast v2 as i64
             return v2
+        }
+        ");
+    }
+
+    #[test]
+    fn simplifies_cast_from_field_4_to_i8() {
+        let src = "
+        acir(inline) pure fn main f0 {
+          b0():
+            v0 = cast Field 4 as i8
+            return v0
+        }
+        ";
+
+        let ssa = Ssa::from_str_simplifying(src).unwrap();
+
+        assert_ssa_snapshot!(ssa, @"
+        acir(inline) pure fn main f0 {
+          b0():
+            return i8 4
+        }
+        ");
+    }
+
+    #[test]
+    fn simplifies_cast_from_field_255_to_i8() {
+        let src = "
+        acir(inline) pure fn main f0 {
+          b0():
+            v0 = cast Field 255 as i8
+            return v0
+        }
+        ";
+
+        let ssa = Ssa::from_str_simplifying(src).unwrap();
+
+        assert_ssa_snapshot!(ssa, @"
+        acir(inline) pure fn main f0 {
+          b0():
+            return i8 -1
         }
         ");
     }

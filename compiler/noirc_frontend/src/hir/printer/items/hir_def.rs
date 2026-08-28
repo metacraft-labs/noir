@@ -1,3 +1,7 @@
+use std::borrow::Cow;
+
+use itertools::Itertools;
+
 use crate::{
     NamedGeneric, Type, TypeBindings,
     ast::{ItemVisibility, UnaryOp},
@@ -110,7 +114,22 @@ impl ItemPrinter<'_, '_> {
                 self.show_hir_expression_id_maybe_inside_parens(hir_infix_expression.rhs);
             }
             HirExpression::Index(hir_index_expression) => {
-                self.show_hir_expression_id_maybe_inside_parens(hir_index_expression.collection);
+                let collection = self.interner.expression(&hir_index_expression.collection);
+
+                if let HirExpression::Prefix(HirPrefixExpression {
+                    operator: UnaryOp::Dereference { implicitly_added: false },
+                    ..
+                }) = collection
+                {
+                    // In general we don't need parentheses around dereferences, but here we do
+                    self.push('(');
+                    self.show_hir_expression(collection, hir_index_expression.collection);
+                    self.push(')');
+                } else {
+                    self.show_hir_expression_id_maybe_inside_parens(
+                        hir_index_expression.collection,
+                    );
+                }
                 self.push('[');
                 self.show_hir_expression_id(hir_index_expression.index);
                 self.push(']');
@@ -170,7 +189,8 @@ impl ItemPrinter<'_, '_> {
                 }
             }
             HirExpression::MemberAccess(hir_member_access) => {
-                let lhs_exp = self.interner.expression(&hir_member_access.lhs);
+                let lhs_exp = self.dereference_hir_expression_id(hir_member_access.lhs);
+                let lhs_exp = self.interner.expression(&lhs_exp);
 
                 if let HirExpression::Prefix(HirPrefixExpression {
                     operator: UnaryOp::Dereference { implicitly_added: false },
@@ -244,7 +264,7 @@ impl ItemPrinter<'_, '_> {
                 }
                 self.push(')');
             }
-            HirExpression::Lambda(hir_lambda) => self.show_hir_lambda(hir_lambda),
+            HirExpression::Lambda(hir_lambda) => self.show_hir_lambda(&hir_lambda),
             HirExpression::Quote(tokens) => {
                 self.show_quoted(&tokens.0);
             }
@@ -258,7 +278,7 @@ impl ItemPrinter<'_, '_> {
         }
     }
 
-    pub(crate) fn show_hir_lambda(&mut self, hir_lambda: HirLambda) {
+    pub(crate) fn show_hir_lambda(&mut self, hir_lambda: &HirLambda) {
         if hir_lambda.unconstrained {
             self.push_str("unconstrained ");
         }
@@ -308,7 +328,7 @@ impl ItemPrinter<'_, '_> {
                         if let Some(fields) = get_type_fields(&typ) {
                             self.push('{');
                             self.show_separated_by_comma(
-                                &case.arguments.into_iter().zip(fields).collect::<Vec<_>>(),
+                                &case.arguments.into_iter().zip_eq(fields).collect::<Vec<_>>(),
                                 |this, (argument, (name, _, _))| {
                                     this.push_str(name);
                                     this.push_str(": ");
@@ -404,23 +424,39 @@ impl ItemPrinter<'_, '_> {
 
         // Special case: assumed trait method
         if let ImplKind::TraitItem(trait_method) = &hir_ident.impl_kind {
-            let show_as_trait_as_path = if trait_method.assumed {
-                // Is this `self.foo()` where `self` is currently a trait?
-                // If so, show it as `self.foo()` instead of `Self::foo(self)`.
-                let method_on_trait_self =
-                    if let Type::NamedGeneric(NamedGeneric { name, .. }) =
-                        &trait_method.constraint.typ
-                    {
-                        name.to_string() == "Self"
-                    } else {
-                        false
-                    };
-                !method_on_trait_self
-            } else {
-                let trait_id = trait_method.constraint.trait_bound.trait_id;
-                let module_data = &self.def_maps[&self.module_id.krate][self.module_id.local_id];
-                module_data.find_trait_in_scope(trait_id).is_none()
+            // If the receiver type has an inherent method of the same name, neither the method-call
+            // sugar `foo.method()` nor the `Type::method(foo)` path form resolves back to this trait
+            // method — both prefer the inherent one. Only the fully-qualified `<Type as Trait>::method`
+            // form is faithful, so force it.
+            let shadowed_by_inherent = {
+                let instantiation_bindings =
+                    self.interner.get_instantiation_bindings(hir_call_expression.func);
+                let mut constraint = trait_method.constraint.clone();
+                constraint.apply_bindings(instantiation_bindings);
+                let self_type = constraint.typ.follow_bindings();
+                let method_name = self.interner.function_name(&func_id);
+                self.interner.lookup_direct_method(&self_type, method_name, false).is_some()
             };
+
+            let show_as_trait_as_path = shadowed_by_inherent
+                || if trait_method.assumed {
+                    // Is this `self.foo()` where `self` is currently a trait?
+                    // If so, show it as `self.foo()` instead of `Self::foo(self)`.
+                    let method_on_trait_self =
+                        if let Type::NamedGeneric(NamedGeneric { name, .. }) =
+                            &trait_method.constraint.typ
+                        {
+                            name.to_string() == "Self"
+                        } else {
+                            false
+                        };
+                    !method_on_trait_self
+                } else {
+                    let trait_id = trait_method.constraint.trait_bound.trait_id;
+                    let module_data =
+                        &self.def_maps[&self.module_id.krate][self.module_id.local_id];
+                    module_data.find_trait_in_scope(trait_id).is_none()
+                };
             if show_as_trait_as_path {
                 self.show_hir_call_as_trait_as_path(
                     hir_call_expression,
@@ -428,6 +464,7 @@ impl ItemPrinter<'_, '_> {
                     generics,
                     func_id,
                     trait_method,
+                    shadowed_by_inherent,
                 );
                 return true;
             }
@@ -463,9 +500,26 @@ impl ItemPrinter<'_, '_> {
         }
 
         let first_argument = self.dereference_hir_expression_id(arguments[0]);
-        self.show_hir_expression_id_maybe_inside_parens(first_argument);
+        let first_arg_exp = self.interner.expression(&first_argument);
+        if let HirExpression::Prefix(HirPrefixExpression {
+            operator: UnaryOp::Dereference { implicitly_added: false },
+            ..
+        }) = first_arg_exp
+        {
+            // In general we don't need parentheses around dereferences, but here we do
+            self.push('(');
+            self.show_hir_expression(first_arg_exp, first_argument);
+            self.push(')');
+        } else {
+            self.show_hir_expression_id_maybe_inside_parens(first_argument);
+        }
         self.push('.');
         self.push_str(self.interner.function_name(&func_id));
+
+        if hir_call_expression.is_macro_call {
+            self.push('!');
+        }
+
         if let Some(generics) = generics {
             let use_colons = true;
             self.show_generic_types(&generics, use_colons);
@@ -484,6 +538,7 @@ impl ItemPrinter<'_, '_> {
         generics: Option<Vec<Type>>,
         func_id: FuncId,
         trait_method: &TraitItem,
+        force_fully_qualified: bool,
     ) {
         let instantiation_bindings =
             self.interner.get_instantiation_bindings(hir_call_expression.func);
@@ -492,9 +547,11 @@ impl ItemPrinter<'_, '_> {
 
         let trait_id = trait_method.constraint.trait_bound.trait_id;
         let module_data = &self.def_maps[&self.module_id.krate][self.module_id.local_id];
-        if module_data.find_trait_in_scope(trait_id).is_none() {
-            // It can happen that the trait is not in scope, for example if this call
-            // was generated via macros using `get_trait_impl -> methods`.
+        if force_fully_qualified || module_data.find_trait_in_scope(trait_id).is_none() {
+            // Print `<Type as Trait>::method`. This is required when the trait is not in scope (for
+            // example if this call was generated via macros using `get_trait_impl -> methods`), and
+            // when an inherent method of the same name would otherwise capture the unqualified
+            // `Type::method` form.
             self.push('<');
             self.show_type(&constraint.typ);
             self.push_str(" as ");
@@ -578,7 +635,11 @@ impl ItemPrinter<'_, '_> {
                 self.show_hir_ident(hir_for_statement.identifier, None);
                 self.push_str(" in ");
                 self.show_hir_expression_id(hir_for_statement.start_range);
-                self.push_str("..");
+                if hir_for_statement.inclusive {
+                    self.push_str("..=");
+                } else {
+                    self.push_str("..");
+                }
                 self.show_hir_expression_id(hir_for_statement.end_range);
                 self.push(' ');
                 self.show_hir_expression_id(hir_for_statement.block);
@@ -608,6 +669,9 @@ impl ItemPrinter<'_, '_> {
             }
             HirStatement::Comptime(_) => unreachable!("comptime should not happen"),
             HirStatement::Error => unreachable!("error should not happen"),
+            HirStatement::TraitAssociatedConstant => {
+                unreachable!("trait associated constant placeholder should not appear in printer")
+            }
         }
     }
 
@@ -632,7 +696,8 @@ impl ItemPrinter<'_, '_> {
                 self.push_str("_");
                 self.push_str(&typ.to_string());
             }
-            HirLiteral::Str(string) => {
+            HirLiteral::Str(bytes) => {
+                let string = String::from_utf8_lossy(&bytes);
                 self.push_str(&format!("{string:?}"));
             }
             HirLiteral::FmtStr(fmt_str_fragments, _expr_ids, _) => {
@@ -697,7 +762,14 @@ impl ItemPrinter<'_, '_> {
             }
             HirLValue::Index { array, index, typ: _, location: _ } => {
                 let array = simplify_hir_lvalue(*array);
+                let array_is_dereference = matches!(array, HirLValue::Dereference { .. });
+                if array_is_dereference {
+                    self.push('(');
+                }
                 self.show_hir_lvalue(array);
+                if array_is_dereference {
+                    self.push(')');
+                }
                 self.push('[');
                 self.show_hir_expression_id(index);
                 self.push(']');
@@ -710,6 +782,9 @@ impl ItemPrinter<'_, '_> {
             } => {
                 self.push_str("*");
                 self.show_hir_lvalue(*lvalue);
+            }
+            HirLValue::Error { .. } => {
+                unreachable!("error nodes should not happen")
             }
         }
     }
@@ -853,11 +928,16 @@ impl ItemPrinter<'_, '_> {
                 let typ = self.interner.definition_type(global_info.definition_id);
 
                 // Special case: the global is an enum value
-                let typ = if let Type::Forall(_, typ) = typ { *typ } else { typ };
-                if let Type::DataType(data_type, _generics) = &typ {
+                let typ = typ.as_monotype();
+                if let Type::DataType(data_type, _generics) = typ {
                     let data_type = data_type.borrow();
                     if data_type.is_enum() {
-                        self.show_type_name_as_data_type(&typ);
+                        // The enum expression may have unbound named generics, while the ident itself has them bound.
+                        let typ = match expr_id {
+                            Some(id) => Cow::Owned(self.interner.id_type(id)),
+                            None => Cow::Borrowed(typ),
+                        };
+                        self.show_type_name_as_data_type(typ.as_ref());
                         self.push_str("::");
                         self.push_str(global_info.ident.as_str());
                         return;
@@ -916,6 +996,7 @@ impl ItemPrinter<'_, '_> {
             HirStatement::Semi(expr_id) => self.expression_id_has_unsafe(*expr_id),
             HirStatement::Comptime(stmt_id) => self.statement_id_has_unsafe(*stmt_id),
             HirStatement::Error => false,
+            HirStatement::TraitAssociatedConstant => false,
         }
     }
 

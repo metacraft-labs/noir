@@ -5,19 +5,22 @@ use nargo::ops::debug::compile_options_for_debugging;
 use nargo::package::Package;
 use nargo::{constants::PROVER_INPUT_FILE, ops::debug::compile_bin_package_for_debugging};
 use nargo_toml::{PackageSelection, get_package_manifest, resolve_workspace_from_toml};
+use noir_tracer::TraceOptions;
+use noir_tracer::sink::NimWriterSink;
 use noir_tracer::tracer_glue::begin_trace;
 use noir_tracer::tracer_glue::finish_trace;
 use noirc_abi::InputMap;
-use noirc_abi::input_parser::Format;
 use noirc_artifacts::debug::DebugArtifact;
-use noirc_artifacts::program::CompiledProgram;
+use noirc_artifacts::program::{CompiledProgram, ProgramArtifact};
 use noirc_driver::{CompileOptions, NOIR_ARTIFACT_VERSION_STRING};
 use noirc_frontend::graph::CrateName;
+use std::path::PathBuf;
 
-use super::fs::inputs::read_inputs_from_file;
+use noir_artifact_cli::fs::inputs::read_inputs_from_file;
+
 use crate::errors::CliError;
 
-use codetracer_trace_writer::{create_trace_writer, TraceEventsFileFormat};
+use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
 
 use super::NargoConfig;
 
@@ -45,6 +48,15 @@ pub(crate) struct TraceCommand {
     /// Directory where to store the `<package>.ct` CTFS container.
     #[clap(long, short)]
     out_dir: String,
+
+    /// Also write the debug-instrumented `ProgramArtifact` to this path.
+    ///
+    /// This is the artifact a platform-agnostic tracer host (for instance the
+    /// `noir_tracer_wasm` module running in a browser) consumes: it carries the
+    /// `__debug_*` instrumentation that `nargo compile` does NOT produce, since
+    /// the source-level instrumenter only runs on the debugging compile path.
+    #[clap(long)]
+    emit_debug_artifact: Option<PathBuf>,
 }
 
 pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliError> {
@@ -75,13 +87,16 @@ pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliErro
     let compiled_program =
         compile_bin_package_for_debugging(&workspace, package, &compile_options)?;
 
-    trace_program_and_decode(
-        compiled_program,
-        package,
-        &args.prover_name,
-        &args.out_dir,
-        args.compile_options.pedantic_solving,
-    )
+    if let Some(path) = &args.emit_debug_artifact {
+        let artifact: ProgramArtifact = compiled_program.clone().into();
+        let json = serde_json::to_string(&artifact)
+            .map_err(|err| CliError::Generic(format!("serializing the debug artifact: {err}")))?;
+        std::fs::write(path, json).map_err(|err| {
+            CliError::Generic(format!("writing the debug artifact to {}: {err}", path.display()))
+        })?;
+    }
+
+    trace_program_and_decode(compiled_program, package, &args.prover_name, &args.out_dir)
 }
 
 fn trace_program_and_decode(
@@ -89,13 +104,14 @@ fn trace_program_and_decode(
     package: &Package,
     prover_name: &str,
     out_dir: &str,
-    pedantic_solving: bool,
 ) -> Result<(), CliError> {
     // Parse the initial witness values from Prover.toml
-    let (inputs_map, _) =
-        read_inputs_from_file(&package.root_dir, prover_name, Format::Toml, &program.abi)?;
+    let (inputs_map, _) = read_inputs_from_file(
+        &package.root_dir.join(prover_name).with_extension("toml"),
+        &program.abi,
+    )?;
 
-    trace_program(&program, &package.name, &inputs_map, out_dir, pedantic_solving)
+    trace_program(&program, &package.name, &inputs_map, out_dir)
 }
 
 pub(crate) fn trace_program(
@@ -103,7 +119,6 @@ pub(crate) fn trace_program(
     crate_name: &CrateName,
     inputs_map: &InputMap,
     out_dir: &str,
-    pedantic_solving: bool,
 ) -> Result<(), CliError> {
     let initial_witness = compiled_program.abi.encode(inputs_map, None)?;
 
@@ -116,22 +131,36 @@ pub(crate) fn trace_program(
     // CTFS is the only trace format nargo emits; the writer factory is kept
     // for symmetry with other recorders and to centralize the format choice
     // in `codetracer_trace_writer`.
-    let mut tracer =
+    let mut writer =
         create_trace_writer(crate_name_string.as_str(), &[], TraceEventsFileFormat::Ctfs);
-    begin_trace(&mut *tracer, out_dir, &crate_name_string);
+    // `NimWriterSink` is the `noir_tracer` adapter over the Nim writer's
+    // `TraceWriter` trait; the recorder itself is typed against the
+    // platform-agnostic `TraceSink`.
+    let mut tracer = NimWriterSink::new(&mut *writer);
+
+    // The recorder no longer reaches for `std::env::current_dir()` itself --
+    // that is ambient state a wasm host does not have. The CLI, which does have
+    // a working directory, supplies it, so the emitted container is unchanged.
+    let options = TraceOptions::with_workdir(std::env::current_dir().ok());
+
+    begin_trace(&mut tracer, out_dir, &crate_name_string, options.workdir.as_deref());
     if let Err(error) = noir_tracer::trace_circuit(
-        &Bn254BlackBoxSolver(pedantic_solving),
+        &Bn254BlackBoxSolver,
         &compiled_program.program.functions,
         &debug_artifact,
         initial_witness,
         &compiled_program.program.unconstrained_functions,
         &compiled_program.abi.error_types,
-        &mut *tracer,
+        &options,
+        &mut tracer,
     ) {
         return Err(CliError::from(error));
     };
 
-    finish_trace(&mut *tracer, out_dir);
+    match finish_trace(&mut tracer) {
+        Ok(()) => println!("Saved trace to {out_dir}"),
+        Err(err) => println!("Warning: trace writer failed to finalize CTFS container: {err}"),
+    }
 
     Ok(())
 }

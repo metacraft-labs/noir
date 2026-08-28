@@ -1,4 +1,4 @@
-//! This file contains mechanisms for mutating integer InputValues.
+//! This file contains mechanisms for mutating integer `InputValues`.
 //! If the value is a boolean, it just picks a new random value.
 //! Otherwise, it performs one of the following mutations:
 //! 1. Substitution with one of the fixed values (the selection of values is dependent on the width and signedness of the integer)
@@ -16,7 +16,7 @@ use num_traits::{
     ops::overflowing::{OverflowingAdd, OverflowingSub},
 };
 
-use rand::{Rng, seq::IndexedRandom};
+use rand::{RngExt, seq::IndexedRandom};
 use rand_xorshift::XorShiftRng;
 
 use super::{
@@ -303,7 +303,7 @@ fn add_sub_xor_and_or_unsigned<
 }
 
 /// Perform a shift operation on the value and convert to field
-/// The lowest bit of direction_and_magnitude represents shift direction, higher bits - shift value
+/// The lowest bit of `direction_and_magnitude` represents shift direction, higher bits - shift value
 fn shift_signed_int<
     T: Shl<u32, Output = T> + Shr<u32, Output = T> + PrimInt + HasBits + AsPrimitive<i128>,
 >(
@@ -321,7 +321,7 @@ fn shift_signed_int<
 }
 
 /// Perform a shift operation on the value and convert to field
-/// The lowest bit of direction_and_magnitude represents shift direction, higher bits - shift value
+/// The lowest bit of `direction_and_magnitude` represents shift direction, higher bits - shift value
 fn shift_unsigned_int<
     T: Shl<u32, Output = T> + Shr<u32, Output = T> + PrimInt + HasBits + AsPrimitive<u128>,
 >(
@@ -407,7 +407,7 @@ impl<'a> IntMutator<'a> {
     }
 
     /// Negate a signed value
-    fn negate_signed_int(&mut self, input: &i128, width: u32) -> InputValue {
+    fn negate_signed_int(&self, input: &i128, width: u32) -> InputValue {
         InputValue::Field(match width {
             8 => neg_as_to_field::<i8>(input),
             16 => neg_as_to_field::<i16>(input),
@@ -542,7 +542,7 @@ impl<'a> IntMutator<'a> {
     }
 
     /// Negate an unsigned value
-    fn negate_unsigned_int(&mut self, input: &u128, width: u32) -> InputValue {
+    fn negate_unsigned_int(&self, input: &u128, width: u32) -> InputValue {
         InputValue::Field(match width {
             8 => wrapping_neg_as_to_field::<u8>(input),
             16 => wrapping_neg_as_to_field::<u16>(input),
@@ -650,9 +650,8 @@ impl<'a> IntMutator<'a> {
 
     /// Mutate an input value depending on the sign and width
     pub fn mutate(&mut self, input: &InputValue, sign: &Sign, width: u32) -> InputValue {
-        let initial_field_value = match input {
-            InputValue::Field(inner_field) => inner_field,
-            _ => panic!("Shouldn't be used with other input value types"),
+        let InputValue::Field(initial_field_value) = input else {
+            panic!("Shouldn't be used with other input value types");
         };
         assert!(
             width == 1 || width == 8 || width == 16 || width == 32 || width == 64 || width == 128

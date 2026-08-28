@@ -42,14 +42,16 @@ pub fn optimize_ssa_into_acir(
         }
     }));
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        validate_ssa(&ssa);
+        validate_ssa(&ssa, true);
+
         let builder = SsaBuilder::from_ssa(
             ssa,
             options.ssa_logging.clone(),
+            options.ssa_logging_hide_unchanged,
             options.print_codegen_timings,
             None,
         );
-        optimize_ssa_builder_into_acir(builder, &options, &primary_passes(&options))
+        optimize_ssa_builder_into_acir(builder, &options, &primary_passes(&options), None)
     }));
     std::panic::set_hook(previous_hook);
     match result {
@@ -58,14 +60,14 @@ pub fn optimize_ssa_into_acir(
             let error_msg = panic_message.lock().unwrap().clone();
             Err(RuntimeError::InternalError(InternalError::General {
                 message: format!("Panic occurred: {error_msg}"),
-                call_stack: CallStack::default(),
+                call_stack: CallStack::empty(),
             }))
         }
     }
 }
 
-/// Compiles the given FunctionBuilder into a CompiledProgram
-/// its taken from noirc_driver::compile_no_check, but modified to accept ArtifactsAndWarnings
+/// Compiles the given `FunctionBuilder` into a `CompiledProgram`
+/// its taken from `noirc_driver::compile_no_check`, but modified to accept `ArtifactsAndWarnings`
 pub fn compile_from_artifacts(artifacts: ArtifactsAndWarnings) -> CompiledProgram {
     let dummy_arg_info: Vec<Vec<(u32, Visibility)>> = artifacts
         .0
@@ -90,7 +92,6 @@ pub fn compile_from_artifacts(artifacts: ArtifactsAndWarnings) -> CompiledProgra
         file_map,
         noir_version: NOIR_ARTIFACT_VERSION_STRING.to_string(),
         warnings,
-        expression_width: noirc_driver::DEFAULT_EXPRESSION_WIDTH,
     }
 }
 
@@ -98,7 +99,7 @@ pub fn compile_from_ssa(
     ssa: Ssa,
     options: &CompileOptions,
 ) -> Result<CompiledProgram, CompileError> {
-    let artifacts = optimize_ssa_into_acir(ssa, options.as_ssa_options(PathBuf::new(), options.instrument_debug))?;
+    let artifacts = optimize_ssa_into_acir(ssa, options.as_ssa_options(PathBuf::new()))?;
     Ok(compile_from_artifacts(artifacts))
 }
 

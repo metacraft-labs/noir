@@ -10,6 +10,7 @@
 
 use acvm::acir::{
     AcirField, BlackBoxFunc,
+    brillig::lengths::{FlattenedLength, SemanticLength},
     circuit::{
         AssertionPayload, ErrorSelector, ExpressionOrMemory, Opcode,
         opcodes::{AcirFunctionId, BlockId, BlockType, MemOp},
@@ -44,7 +45,7 @@ pub(crate) use generated_acir::{BrilligStdLib, BrilligStdlibFunc};
 
 #[derive(Debug, Default)]
 /// Context object which holds the relationship between
-/// `Variables`(AcirVar) and types such as `Expression` and `Witness`
+/// `Variables(AcirVar)` and types such as `Expression` and `Witness`
 /// which are placed into ACIR.
 pub(crate) struct AcirContext<F: AcirField> {
     brillig_stdlib: BrilligStdLib<F>,
@@ -76,14 +77,19 @@ impl<F: AcirField> AcirContext<F> {
         }
     }
 
-    pub(crate) fn current_witness_index(&self) -> Witness {
+    /// Returns the current witness index:
+    /// * `None` if we haven't created a witness yet
+    /// * the index of the last created witness otherwise (starting with 0)
+    pub(crate) fn current_witness_index(&self) -> Option<Witness> {
         self.acir_ir.current_witness_index()
     }
 
     pub(crate) fn extract_witnesses(&self, inputs: &[AcirValue]) -> Vec<Witness> {
         inputs
             .iter()
-            .flat_map(|value| value.clone().flatten())
+            .flat_map(|value| {
+                value.clone().flatten().expect("ICE: cannot extract witnesses from a dynamic array")
+            })
             .map(|value| {
                 self.vars
                     .get(&value.0)
@@ -95,6 +101,18 @@ impl<F: AcirField> AcirContext<F> {
             .collect()
     }
 
+    /// Returns each witness that has been constrained to hold a constant value, paired with that
+    /// value.
+    ///
+    /// Whenever a constant [`AcirVar`] is materialized into a [`Witness`] (e.g. to be used as the
+    /// index of a memory operation) it is recorded in `constant_witnesses`. This exposes that map so
+    /// the post-ACIR check can tell whether a memory-op index is a compile-time constant and what
+    /// its value is.
+    #[cfg(debug_assertions)]
+    pub(crate) fn constant_witness_values(&self) -> impl Iterator<Item = (Witness, F)> + '_ {
+        self.constant_witnesses.iter().map(|(value, witness)| (*witness, *value))
+    }
+
     /// Adds a constant to the context and assigns a Variable to represent it
     pub(crate) fn add_constant(&mut self, constant: impl Into<F>) -> AcirVar {
         let constant_data = AcirVarData::Const(constant.into());
@@ -103,13 +121,18 @@ impl<F: AcirField> AcirContext<F> {
 
     /// Returns the constant represented by the given variable.
     ///
-    /// Panics: if the variable does not represent a constant.
-    pub(crate) fn constant(&self, var: AcirVar) -> &F {
-        self.vars[&var].as_constant().expect("ICE - expected the variable to be a constant value")
+    /// Error if the variable does not represent a constant.
+    pub(crate) fn constant(&self, var: &AcirVar, name: String) -> Result<&F, RuntimeError> {
+        match self.vars.get(var) {
+            Some(AcirVarData::Const(field)) => Ok(field),
+            _ => Err(RuntimeError::InternalError(InternalError::NotAConstant {
+                name,
+                call_stack: self.get_call_stack(),
+            })),
+        }
     }
 
-    /// Adds a Variable to the context, whose exact value is resolved at
-    /// runtime.
+    /// Adds a Variable to the context, whose exact value is resolved at runtime.
     pub(crate) fn add_variable(&mut self) -> AcirVar {
         let var_index = self.acir_ir.next_witness_index();
 
@@ -127,11 +150,11 @@ impl<F: AcirField> AcirContext<F> {
             return Ok(());
         }
 
-        if let Some(w) = self.var_to_expression(lhs)?.to_witness() {
-            if self.acir_ir.input_witnesses.contains(&w) {
-                //Input witnesses are not replaced
-                return Ok(());
-            }
+        if let Some(w) = self.var_to_expression(lhs)?.to_witness()
+            && self.acir_ir.input_witnesses.contains(&w)
+        {
+            //Input witnesses are not replaced
+            return Ok(());
         }
 
         let lhs_data = self.vars.remove(&lhs).ok_or_else(|| InternalError::UndeclaredAcirVar {
@@ -214,7 +237,7 @@ impl<F: AcirField> AcirContext<F> {
         if expression.to_const().is_none() {
             self.mark_variables_equivalent(var, witness_var)?;
         }
-        debug_assert!(self.var_to_expression(witness_var)?.to_witness().is_some());
+        assert!(self.var_to_expression(witness_var)?.to_witness().is_some());
 
         Ok(witness_var)
     }
@@ -236,40 +259,49 @@ impl<F: AcirField> AcirContext<F> {
 
     /// Converts an [`AcirVar`] to an [`Expression`]
     pub(crate) fn var_to_expression(&self, var: AcirVar) -> Result<Expression<F>, InternalError> {
-        let var_data = match self.vars.get(&var) {
-            Some(var_data) => var_data,
-            None => {
-                return Err(InternalError::UndeclaredAcirVar { call_stack: self.get_call_stack() });
-            }
+        let Some(var_data) = self.vars.get(&var) else {
+            return Err(InternalError::UndeclaredAcirVar { call_stack: self.get_call_stack() });
         };
         Ok(var_data.to_expression().into_owned())
     }
 
-    /// True if the given AcirVar refers to a constant one value
+    /// True if the given `AcirVar` refers to a constant one value
     pub(crate) fn is_constant_one(&self, var: &AcirVar) -> bool {
-        match self.vars[var] {
-            AcirVarData::Const(field) => field.is_one(),
+        match self.vars.get(var) {
+            Some(AcirVarData::Const(field)) => field.is_one(),
             _ => false,
         }
     }
 
-    /// True if the given AcirVar refers to a constant value
+    /// True if the given `AcirVar` refers to a constant zero value
+    pub(crate) fn is_constant_zero(&self, var: &AcirVar) -> bool {
+        match self.vars.get(var) {
+            Some(AcirVarData::Const(field)) => field.is_zero(),
+            _ => false,
+        }
+    }
+
+    /// True if the given `AcirVar` refers to a constant value
     pub(crate) fn is_constant(&self, var: &AcirVar) -> bool {
-        matches!(self.vars[var], AcirVarData::Const(_))
+        matches!(self.vars.get(var), Some(AcirVarData::Const(_)))
     }
 
     /// Adds a new Variable to context whose value will
     /// be constrained to be the negation of `var`.
     ///
     /// Note: `Variables` are immutable.
-    pub(crate) fn neg_var(&mut self, var: AcirVar) -> AcirVar {
-        let var_data = &self.vars[&var];
+    pub(crate) fn neg_var(&mut self, var: AcirVar) -> Result<AcirVar, RuntimeError> {
+        let Some(var_data) = self.vars.get(&var) else {
+            return Err(RuntimeError::InternalError(InternalError::UndeclaredAcirVar {
+                call_stack: self.get_call_stack(),
+            }));
+        };
         let result_data = if let AcirVarData::Const(constant) = var_data {
             AcirVarData::Const(-*constant)
         } else {
             AcirVarData::Expr(-var_data.to_expression().as_ref())
         };
-        self.add_data(result_data)
+        Ok(self.add_data(result_data))
     }
 
     /// Adds a new Variable to context whose value will
@@ -279,7 +311,11 @@ impl<F: AcirField> AcirContext<F> {
         var: AcirVar,
         predicate: AcirVar,
     ) -> Result<AcirVar, RuntimeError> {
-        let var_data = &self.vars[&var];
+        let Some(var_data) = self.vars.get(&var) else {
+            return Err(RuntimeError::InternalError(InternalError::UndeclaredAcirVar {
+                call_stack: self.get_call_stack(),
+            }));
+        };
         let inverted_var = if let AcirVarData::Const(constant) = var_data {
             // Note that this will return a 0 if the inverse is not available
             self.add_data(AcirVarData::Const(constant.inverse()))
@@ -290,7 +326,7 @@ impl<F: AcirField> AcirContext<F> {
                 vec![AcirValue::Var(var, NumericType::NativeField)],
                 vec![AcirType::NumericType(NumericType::NativeField)],
             )?;
-            Self::expect_one_var(results)
+            Self::expect_one_var(&results)
         };
 
         // Check that the inverted var is valid.
@@ -307,7 +343,7 @@ impl<F: AcirField> AcirContext<F> {
     }
 
     // Returns the variable from the results, assuming it is the only result
-    fn expect_one_var(results: Vec<AcirValue>) -> AcirVar {
+    fn expect_one_var(results: &[AcirValue]) -> AcirVar {
         assert_eq!(results.len(), 1);
         match results[0] {
             AcirValue::Var(var, _) => var,
@@ -369,8 +405,13 @@ impl<F: AcirField> AcirContext<F> {
             }
             NumericType::Signed { bit_size } | NumericType::Unsigned { bit_size } => {
                 let inputs = vec![AcirValue::Var(lhs, typ), AcirValue::Var(rhs, typ)];
-                let outputs =
-                    self.black_box_function(BlackBoxFunc::XOR, inputs, Some(bit_size), 1, None)?;
+                let outputs = self.black_box_function(
+                    BlackBoxFunc::XOR,
+                    inputs,
+                    Some(bit_size),
+                    FlattenedLength(1),
+                    None,
+                )?;
                 Ok(outputs[0])
             }
             NumericType::NativeField => {
@@ -405,8 +446,13 @@ impl<F: AcirField> AcirContext<F> {
             }
             NumericType::Signed { bit_size } | NumericType::Unsigned { bit_size } => {
                 let inputs = vec![AcirValue::Var(lhs, typ), AcirValue::Var(rhs, typ)];
-                let outputs =
-                    self.black_box_function(BlackBoxFunc::AND, inputs, Some(bit_size), 1, None)?;
+                let outputs = self.black_box_function(
+                    BlackBoxFunc::AND,
+                    inputs,
+                    Some(bit_size),
+                    FlattenedLength(1),
+                    None,
+                )?;
                 Ok(outputs[0])
             }
             NumericType::NativeField => {
@@ -486,9 +532,7 @@ impl<F: AcirField> AcirContext<F> {
 
         self.acir_ir.assert_is_zero(diff_expr);
         if let Some(payload) = assert_message {
-            self.acir_ir
-                .assertion_payloads
-                .insert(self.acir_ir.last_acir_opcode_location(), payload);
+            self.acir_ir.attach_assertion_payload(payload);
         }
         self.mark_variables_equivalent(lhs, rhs)?;
 
@@ -500,15 +544,14 @@ impl<F: AcirField> AcirContext<F> {
         &self,
         assert_message: Option<&AssertionPayload<F>>,
     ) -> Option<String> {
-        assert_message.as_ref().and_then(|assertion_payload| {
-            if let Some(ErrorType::String(message)) =
-                self.acir_ir.error_types.get(&ErrorSelector::new(assertion_payload.error_selector))
-            {
-                Some(message.to_string())
-            } else {
-                None
-            }
-        })
+        let assertion_payload = assert_message.as_ref()?;
+        if let Some(ErrorType::String(message)) =
+            self.acir_ir.error_types.get(&ErrorSelector::new(assertion_payload.error_selector))
+        {
+            Some(message.clone())
+        } else {
+            None
+        }
     }
 
     /// Constrains the `lhs` and `rhs` to be non-equal.
@@ -538,15 +581,13 @@ impl<F: AcirField> AcirContext<F> {
             if self.acir_ir.opcodes().len() - old_opcodes_len == 0 {
                 return Ok(());
             }
-            self.acir_ir
-                .assertion_payloads
-                .insert(self.acir_ir.last_acir_opcode_location(), payload);
+            self.acir_ir.attach_assertion_payload(payload);
         }
 
         Ok(())
     }
 
-    /// Assert that an [AcirVar] equals zero, or fail with a message.
+    /// Assert that an [`AcirVar`] equals zero, or fail with a message.
     pub(crate) fn assert_zero_var(
         &mut self,
         var: AcirVar,
@@ -607,8 +648,16 @@ impl<F: AcirField> AcirContext<F> {
     /// Adds a new Variable to context whose value will
     /// be constrained to be the multiplication of `lhs` and `rhs`
     pub(crate) fn mul_var(&mut self, lhs: AcirVar, rhs: AcirVar) -> Result<AcirVar, RuntimeError> {
-        let lhs_data = self.vars[&lhs].clone();
-        let rhs_data = self.vars[&rhs].clone();
+        let Some(lhs_data) = self.vars.get(&lhs).cloned() else {
+            return Err(RuntimeError::InternalError(InternalError::UndeclaredAcirVar {
+                call_stack: self.get_call_stack(),
+            }));
+        };
+        let Some(rhs_data) = self.vars.get(&rhs).cloned() else {
+            return Err(RuntimeError::InternalError(InternalError::UndeclaredAcirVar {
+                call_stack: self.get_call_stack(),
+            }));
+        };
 
         let result = match (lhs_data, rhs_data) {
             // (x * 1) == (1 * x) == x
@@ -633,7 +682,7 @@ impl<F: AcirField> AcirContext<F> {
             }
             (AcirVarData::Const(constant), AcirVarData::Expr(expr))
             | (AcirVarData::Expr(expr), AcirVarData::Const(constant)) => {
-                self.add_data(AcirVarData::from(&expr * constant))
+                self.add_data(AcirVarData::from(expr * constant))
             }
             (AcirVarData::Witness(lhs_witness), AcirVarData::Witness(rhs_witness)) => {
                 let mut expr = Expression::default();
@@ -645,7 +694,7 @@ impl<F: AcirField> AcirContext<F> {
                 if expression.is_linear() =>
             {
                 let mut expr = Expression::default();
-                for term in expression.linear_combinations.iter() {
+                for term in &expression.linear_combinations {
                     expr.push_multiplication_term(term.0, term.1, witness);
                 }
                 expr.push_addition_term(expression.q_c, witness);
@@ -662,7 +711,7 @@ impl<F: AcirField> AcirContext<F> {
                 if let Some((lin, univariate)) = degree_one {
                     let mut expr = Expression::default();
                     let rhs_term = univariate.linear_combinations[0];
-                    for term in lin.linear_combinations.iter() {
+                    for term in &lin.linear_combinations {
                         expr.push_multiplication_term(term.0 * rhs_term.0, term.1, rhs_term.1);
                     }
                     expr.push_addition_term(lin.q_c * rhs_term.0, rhs_term.1);
@@ -688,7 +737,7 @@ impl<F: AcirField> AcirContext<F> {
     /// Adds a new Variable to context whose value will
     /// be constrained to be the subtraction of `lhs` and `rhs`
     pub(crate) fn sub_var(&mut self, lhs: AcirVar, rhs: AcirVar) -> Result<AcirVar, RuntimeError> {
-        let neg_rhs = self.neg_var(rhs);
+        let neg_rhs = self.neg_var(rhs)?;
         self.add_var(lhs, neg_rhs)
     }
 
@@ -964,7 +1013,7 @@ impl<F: AcirField> AcirContext<F> {
     ///
     /// `lhs<=rhs` is done by constraining `rhs-lhs` to a bit size of `bits`:
     /// - if `lhs<=rhs`, `0 <= rhs-lhs <= b < 2^bits`
-    /// - if `lhs>rhs`, `rhs-lhs = p+rhs-lhs > p-2^bits >= 2^bits`  (if `log(p) >= bits + 1`)
+    /// - if `lhs>rhs`, `rhs-lhs = p+rhs-lhs > p-2^bits >= 2^bits`  (if `log(p) > bits + 1`)
     ///
     /// n.b: we do NOT check here that `lhs` and `rhs` are indeed `bits` size
     pub(super) fn bound_constraint_with_offset(
@@ -984,9 +1033,18 @@ impl<F: AcirField> AcirContext<F> {
             num_bits::<u128>() as u32 - a.leading_zeros()
         }
 
+        // When offset is 1, we have the inequality `2^(bits) - 1 > rhs - (lhs + 1) >= 0 - 2^(bits)` by passing the
+        // extreme values of `lhs` and `rhs`.
+        //
+        // To distinguish the two cases, we need to ensure that `p - 2^(bits) > 2^(bits) - 1`, so that when `lhs > rhs`,
+        // `rhs - (lhs + offset)` will overflow the field and become a large integer which cannot be represented
+        // in `bits` bits, and thus fail the range constraint.
+        //
+        // Rearranging `2^(bits) - 1 < p - 2^(bits)` gives the condition `bits + 1 < log2(p)` for the constraints
+        // to be valid.
         assert!(
-            bits < F::max_num_bits(),
-            "range check with bit size >= the prime field size is not implemented yet"
+            bits + 1 < F::max_num_bits(),
+            "range check with bit size + 1 >= the prime field bit size is not implemented yet"
         );
 
         // If `rhs` is a constant, we can try to optimize the operation by shifting `lhs + offset` such that if
@@ -1022,10 +1080,12 @@ impl<F: AcirField> AcirContext<F> {
             let r = two_pow_bit_size_minus_one - rhs_offset;
 
             // we need to ensure lhs_offset + r does not overflow
-            if bits + bit_size_u128(r) < F::max_num_bits() {
-                // lhs_offset < rhs_offset
-                // -> lhs_offset + r < rhs_offset + r = 2^bit_size
-                // -> lhs_offset + r < 2^bit_size
+            if u32::max(bits, bit_size_u128(r)) + 1 < F::max_num_bits() {
+                // let max = u32::max(bits, bit_size_u128(r)), then
+                // - lhs_offset < 2^max
+                // - r < 2^max
+                // -> lhs_offset + r < 2^(max+1)
+                // the condition above is: 2^(max +1) < 2^bit_size
 
                 let r_var = self.add_constant(r);
                 let aor = self.add_var(lhs_offset, r_var)?;
@@ -1070,12 +1130,16 @@ impl<F: AcirField> AcirContext<F> {
         message: Option<String>,
         predicate: AcirVar,
     ) -> Result<AcirVar, RuntimeError> {
-        // If `variable` is constant then we don't need to add a constraint.
-        // We _do_ add a constraint if `variable` would fail the range check however so that we throw an error.
+        let mut return_zero = false;
         if let Some(constant) = self.var_to_expression(variable)?.to_const() {
+            // If `variable` is constant and fits in the bit_size range
+            // then we don't need to add a constraint.
             if constant.num_bits() <= bit_size {
                 return Ok(variable);
             }
+            // The range check is ensured to fail, unless the predicate is false.
+            // In both cases, the return value does not matter and we can return 0.
+            return_zero = true;
         }
         // Under a predicate, a range check must not fail, so we
         // range check `predicate * variable` instead.
@@ -1084,12 +1148,15 @@ impl<F: AcirField> AcirContext<F> {
         let witness = self.var_to_witness(witness_var)?;
         self.acir_ir.range_constraint(witness, bit_size)?;
         if let Some(message) = message {
-            let payload = self.generate_assertion_message_payload(message.clone());
-            self.acir_ir
-                .assertion_payloads
-                .insert(self.acir_ir.last_acir_opcode_location(), payload);
+            let payload = self.generate_assertion_message_payload(message);
+            self.acir_ir.attach_assertion_payload(payload);
         }
-        Ok(predicate_range)
+        if return_zero {
+            let zero = self.add_constant(F::zero());
+            Ok(zero)
+        } else {
+            Ok(predicate_range)
+        }
     }
 
     /// Returns an `AcirVar` which will be constrained to be lhs mod 2^{rhs}
@@ -1207,18 +1274,13 @@ impl<F: AcirField> AcirContext<F> {
         endian: Endian,
         input_var: AcirVar,
         radix_var: AcirVar,
-        limb_count: u32,
+        limb_count: SemanticLength,
         result_element_type: NumericType,
     ) -> Result<AcirValue, RuntimeError> {
-        let radix = match self.vars[&radix_var].as_constant() {
-            Some(radix) => radix.try_into_u128().expect("expected radix to fit within a u128"),
-            None => {
-                return Err(RuntimeError::InternalError(InternalError::NotAConstant {
-                    name: "radix".to_string(),
-                    call_stack: self.get_call_stack(),
-                }));
-            }
-        };
+        let radix = self
+            .constant(&radix_var, "radix".to_string())?
+            .try_into_u128()
+            .expect("expected radix to fit within a u128");
 
         // Match the assertions of `Field::to_le_radix` and `Field::to_be_radix`.
         assert!(2 <= radix);
@@ -1247,15 +1309,15 @@ impl<F: AcirField> AcirContext<F> {
         &mut self,
         endian: Endian,
         input_var: AcirVar,
-        limb_count: u32,
+        limb_count: SemanticLength,
         result_element_type: NumericType,
     ) -> Result<AcirValue, RuntimeError> {
         let two_var = self.add_constant(2_u128);
         self.radix_decompose(endian, input_var, two_var, limb_count, result_element_type)
     }
 
-    /// Recursive helper to flatten a single AcirValue into the result vector.
-    /// This helper differs from `flatten()` on the `AcirValue` type, as this method has access to the AcirContext
+    /// Recursive helper to flatten a single `AcirValue` into the result vector.
+    /// This helper differs from `flatten()` on the `AcirValue` type, as this method has access to the `AcirContext`
     /// which lets us flatten an `AcirValue::DynamicArray` by reading its variables from memory.
     pub(crate) fn flatten(
         &mut self,
@@ -1271,7 +1333,7 @@ impl<F: AcirField> AcirContext<F> {
                 Ok(values)
             }
             AcirValue::DynamicArray(AcirDynamicArray { block_id, len, value_types, .. }) => {
-                try_vecmap(0..len, |i| {
+                try_vecmap(0..len.to_usize(), |i| {
                     let index_var = self.add_constant(i);
 
                     Ok::<(AcirVar, NumericType), InternalError>((
@@ -1321,7 +1383,7 @@ impl<F: AcirField> AcirContext<F> {
         let value_read_witness = self.var_to_witness(value_read_var)?;
 
         // Add the memory read operation to the list of opcodes
-        let op = MemOp::read_at_mem_index(index_witness.into(), value_read_witness);
+        let op = MemOp::read_at_mem_index(index_witness, value_read_witness);
         self.acir_ir.push_opcode(Opcode::MemoryOp { block_id, op });
 
         Ok(value_read_var)
@@ -1343,13 +1405,13 @@ impl<F: AcirField> AcirContext<F> {
         let value_write_witness = self.var_to_witness(value_write_var)?;
 
         // Add the memory write operation to the list of opcodes
-        let op = MemOp::write_to_mem_index(index_witness.into(), value_write_witness.into());
+        let op = MemOp::write_to_mem_index(index_witness, value_write_witness);
         self.acir_ir.push_opcode(Opcode::MemoryOp { block_id, op });
 
         Ok(())
     }
 
-    /// Insert the MemoryInit for the Return Data array, using the provided witnesses
+    /// Insert the `MemoryInit` for the Return Data array, using the provided witnesses
     pub(crate) fn initialize_return_data(&mut self, block_id: BlockId, init: Vec<Witness>) {
         self.acir_ir.initialize_memory(block_id, init, BlockType::ReturnData);
     }
@@ -1359,10 +1421,11 @@ impl<F: AcirField> AcirContext<F> {
     pub(crate) fn initialize_array(
         &mut self,
         block_id: BlockId,
-        len: usize,
+        len: FlattenedLength,
         optional_value: Option<AcirValue>,
         databus: BlockType,
     ) -> Result<(), InternalError> {
+        let len = len.to_usize();
         let initialized_values = match optional_value {
             None => {
                 let zero = self.add_constant(F::zero());
@@ -1372,6 +1435,15 @@ impl<F: AcirField> AcirContext<F> {
             Some(value) => {
                 let mut values = Vec::new();
                 self.initialize_array_inner(&mut values, value)?;
+                if values.len() != len {
+                    return Err(InternalError::General {
+                        message: format!(
+                            "Attempted to initialize an array of flattened length {len} with {} values",
+                            values.len()
+                        ),
+                        call_stack: self.get_call_stack(),
+                    });
+                }
                 values
             }
         };
@@ -1397,7 +1469,7 @@ impl<F: AcirField> AcirContext<F> {
                 }
             }
             AcirValue::DynamicArray(AcirDynamicArray { block_id, len, value_types, .. }) => {
-                for i in 0..len {
+                for i in 0..len.to_usize() {
                     let index_var = self.add_constant(i);
                     let read = self.read_from_memory(block_id, &index_var)?;
                     let typ = value_types[i % value_types.len()];
@@ -1413,9 +1485,19 @@ impl<F: AcirField> AcirContext<F> {
         &mut self,
         id: AcirFunctionId,
         inputs: Vec<AcirValue>,
-        output_count: usize,
+        output_count: FlattenedLength,
         predicate: AcirVar,
     ) -> Result<Vec<AcirVar>, RuntimeError> {
+        let output_count = output_count.to_usize();
+
+        // A call whose predicate folds to a compile-time zero is on a statically-dead branch and is
+        // never executed. We resolve it up front to don't-care zeroed outputs and emit no `Call`
+        // opcode, mirroring the equivalent handling for Brillig calls. This keeps the
+        // `acir_post_check` invariant that no emitted call carries a compile-time zero predicate.
+        if self.var_to_expression(predicate)?.is_zero() {
+            return Ok(vecmap(0..output_count, |_| self.add_constant(F::zero())));
+        }
+
         let inputs = self.prepare_inputs_for_black_box_func_call(inputs, false)?;
         let inputs = inputs
             .iter()
@@ -1429,12 +1511,11 @@ impl<F: AcirField> AcirContext<F> {
         // See issue https://github.com/noir-lang/noir/issues/1439
         let results =
             vecmap(&outputs, |witness_index| self.add_data(AcirVarData::Witness(*witness_index)));
-        let expr: Expression<F> = if self.is_constant(&predicate) {
+        let predicate: Expression<F> = if self.is_constant(&predicate) {
             self.var_to_expression(predicate)?
         } else {
             self.var_to_witness(predicate)?.into()
         };
-        let predicate = Some(expr);
         self.acir_ir.push_opcode(Opcode::Call { id, inputs, outputs, predicate });
         Ok(results)
     }
@@ -1484,17 +1565,6 @@ enum AcirVarData<F> {
     Witness(Witness),
     Expr(Expression<F>),
     Const(F),
-}
-
-impl<F> AcirVarData<F> {
-    /// Returns a FieldElement, if the underlying `AcirVarData`
-    /// represents a constant.
-    pub(crate) fn as_constant(&self) -> Option<&F> {
-        if let AcirVarData::Const(field) = self {
-            return Some(field);
-        }
-        None
-    }
 }
 
 impl<F: AcirField> AcirVarData<F> {
@@ -1554,6 +1624,28 @@ mod tests {
         power_of_two::<FieldElement>(FieldElement::max_num_bits());
     }
 
+    #[test]
+    fn initialize_array_rejects_length_mismatch() {
+        use crate::acir::AcirValue;
+        use crate::errors::InternalError;
+        use crate::ssa::ir::types::NumericType;
+        use acvm::acir::brillig::lengths::FlattenedLength;
+        use acvm::acir::circuit::opcodes::{BlockId, BlockType};
+
+        let mut context = AcirContext::<FieldElement>::new(BrilligStdLib::default());
+        let var = context.add_constant(FieldElement::one());
+        let value = AcirValue::Array(imbl::vector![AcirValue::Var(var, NumericType::NativeField)]);
+
+        // Claim a flattened length of 2 but provide only a single value.
+        let result = context.initialize_array(
+            BlockId::new(0),
+            FlattenedLength(2),
+            Some(value),
+            BlockType::Memory,
+        );
+        assert!(matches!(result, Err(InternalError::General { .. })));
+    }
+
     proptest! {
         #[test]
         fn power_of_two_agrees_with_generic_impl(bit_size in (0..=128u32)) {
@@ -1590,13 +1682,14 @@ mod tests {
             let circuit = convert_generated_acir_into_circuit(
                 circuit,
                 &[(1, Visibility::Private)],
+                &BTreeMap::default(),
                 BTreeMap::default(),
                 BTreeMap::default(),
                 BTreeMap::default(),
             )
             .circuit;
 
-            let solver = StubbedBlackBoxSolver::default();
+            let solver = StubbedBlackBoxSolver;
 
             let mut witness_map = WitnessMap::new();
             witness_map.insert(lhs_witness,  FieldElement::from(limit));
@@ -1645,6 +1738,7 @@ mod tests {
         let circuit = convert_generated_acir_into_circuit(
             circuit,
             &[(1, Visibility::Private)],
+            &BTreeMap::default(),
             BTreeMap::default(),
             BTreeMap::default(),
             BTreeMap::default(),
@@ -1659,7 +1753,7 @@ mod tests {
         BLACKBOX::RANGE input: w1, bits: 128
         ");
 
-        let solver = StubbedBlackBoxSolver::default();
+        let solver = StubbedBlackBoxSolver;
 
         let mut witness_map = WitnessMap::new();
         witness_map.insert(lhs_witness, limit);
@@ -1672,5 +1766,27 @@ mod tests {
         let mut acvm = ACVM::new(&solver, &circuit.opcodes, witness_map, &[], &[]);
 
         assert!(matches!(acvm.solve(), ACVMStatus::Solved));
+    }
+
+    /// Exercise `bound_constraint_with_offset()` with the invalid inputs:
+    /// lhs = 2^253 - 1, rhs = 0, predicate = 1, offset = 1, bits = 253
+    #[test]
+    #[should_panic = "range check with bit size + 1 >= the prime field bit size is not implemented yet"]
+    fn bound_constraint_shifted_path_rhs_const() {
+        let mut context = AcirContext::<FieldElement>::new(BrilligStdLib::default());
+
+        let bits = 253;
+
+        let lhs = context.add_variable();
+        let rhs = context.add_variable();
+        let predicate = context.add_variable();
+        let one = context.add_constant(1_u128);
+
+        let lhs_witness = context.var_to_witness(lhs).unwrap();
+        let rhs_witness = context.var_to_witness(rhs).unwrap();
+        let predicate_witness = context.var_to_witness(predicate).unwrap();
+        context.acir_ir.input_witnesses = vec![lhs_witness, rhs_witness, predicate_witness];
+
+        context.bound_constraint_with_offset(lhs, rhs, one, bits, predicate).unwrap();
     }
 }

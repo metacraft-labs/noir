@@ -49,6 +49,11 @@ pub struct DefaultDebugForeignCallExecutor {
     pub debug_vars: DebugVars<FieldElement>,
 }
 
+// The constructors below come in two flavours, mirroring
+// [`nargo::foreign_calls::DefaultForeignCallBuilder`]: the parameters that
+// configure the JSON-RPC oracle resolver only exist when the `rpc` feature is
+// enabled, because without it there is no resolver to configure.
+#[cfg(feature = "rpc")]
 impl DefaultDebugForeignCallExecutor {
     fn make<'a, W: 'a + std::io::Write>(
         output: W,
@@ -61,7 +66,7 @@ impl DefaultDebugForeignCallExecutor {
             output,
             enable_mocks: true,
             resolver_url,
-            root_path: root_path.clone(),
+            root_path,
             package_name: Some(package_name),
         }
         .build()
@@ -89,7 +94,49 @@ impl DefaultDebugForeignCallExecutor {
         ex.load_artifact(artifact);
         Self::make(output, resolver_url, ex, root_path, package_name)
     }
+}
 
+/// Without `rpc` there is no HTTP oracle resolver to configure, so
+/// `resolver_url`, `root_path` and `package_name` have nothing to do — but the
+/// signatures stay identical to the `rpc` ones on purpose. A programmatic
+/// consumer such as `noir_tracer` is compiled both ways depending on the target,
+/// and would otherwise need a `#[cfg]` at every call site.
+#[cfg(not(feature = "rpc"))]
+impl DefaultDebugForeignCallExecutor {
+    fn make<'a, W: 'a + std::io::Write>(
+        output: W,
+        _resolver_url: Option<String>,
+        ex: DefaultDebugForeignCallExecutor,
+        _root_path: Option<PathBuf>,
+        _package_name: String,
+    ) -> impl DebugForeignCallExecutor + 'a {
+        DefaultForeignCallBuilder { output, enable_mocks: true }.build().add_layer(ex)
+    }
+
+    #[allow(clippy::new_ret_no_self, dead_code)]
+    pub fn new<'a, W: 'a + std::io::Write>(
+        output: W,
+        resolver_url: Option<String>,
+        root_path: Option<PathBuf>,
+        package_name: String,
+    ) -> impl DebugForeignCallExecutor + 'a {
+        Self::make(output, resolver_url, Self::default(), root_path, package_name)
+    }
+
+    pub fn from_artifact<'a, W: 'a + std::io::Write>(
+        output: W,
+        resolver_url: Option<String>,
+        artifact: &DebugArtifact,
+        root_path: Option<PathBuf>,
+        package_name: String,
+    ) -> impl DebugForeignCallExecutor + use<'a, W> {
+        let mut ex = Self::default();
+        ex.load_artifact(artifact);
+        Self::make(output, resolver_url, ex, root_path, package_name)
+    }
+}
+
+impl DefaultDebugForeignCallExecutor {
     pub fn load_artifact(&mut self, artifact: &DebugArtifact) {
         // TODO: handle loading from the correct DebugInfo when we support
         // debugging contracts

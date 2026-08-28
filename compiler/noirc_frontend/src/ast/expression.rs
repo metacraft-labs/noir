@@ -10,12 +10,11 @@ use crate::ast::{
 use crate::elaborator::PrimitiveType;
 use crate::node_interner::{ExprId, InternedExpressionKind, InternedStatementKind, QuotedTypeId};
 use crate::shared::Visibility;
-use crate::signed_field::SignedField;
 use crate::token::{Attributes, FmtStrFragment, IntegerTypeSuffix, Token, Tokens};
 use crate::{Kind, Type};
-use acvm::FieldElement;
 use iter_extended::vecmap;
 use noirc_errors::{Located, Location, Span};
+use num_bigint::BigInt;
 
 use super::{AsTraitPath, TraitBound, TypePath, UnsafeExpression};
 
@@ -55,7 +54,7 @@ pub enum ExpressionKind {
     Interned(InternedExpressionKind),
 
     /// Interned statements are allowed to be parsed as expressions in case they resolve
-    /// to an StatementKind::Expression or StatementKind::Semi.
+    /// to an `StatementKind::Expression` or `StatementKind::Semi`.
     InternedStatement(InternedStatementKind),
 
     Error,
@@ -78,7 +77,7 @@ pub enum IdentOrQuotedType {
     /// Already-resolved generics can be parsed as generics when a macro
     /// splices existing types into a generic list. In this case we have
     /// to validate the type refers to a named generic and treat that
-    /// as a ResolvedGeneric when this is resolved.
+    /// as a `ResolvedGeneric` when this is resolved.
     Quoted(QuotedTypeId, Location),
 }
 
@@ -100,7 +99,7 @@ impl IdentOrQuotedType {
 
 #[derive(Error, PartialEq, Eq, Debug, Clone)]
 #[error(
-    "`{typ}` is not a supported type for a numeric generic. The only supported types are integers, fields, and booleans"
+    "`{typ}` is not a supported type for a numeric generic. The only supported types are integers and fields"
 )]
 pub struct UnsupportedNumericGenericType {
     pub name: Option<String>,
@@ -138,16 +137,13 @@ impl UnresolvedGeneric {
         // See https://github.com/noir-lang/noir/issues/8504
         use crate::ast::UnresolvedTypeData::Named;
 
-        if let Named(path, _generics, _) = &typ.typ {
-            if path.segments.len() == 1 {
-                if let Some(primitive_type) =
-                    PrimitiveType::lookup_by_name(path.segments[0].ident.as_str())
-                {
-                    if let Some(typ) = primitive_type.to_integer_or_field() {
-                        return Ok(typ);
-                    }
-                }
-            }
+        if let Named(path, _generics, _) = &typ.typ
+            && path.segments.len() == 1
+            && let Some(primitive_type) =
+                PrimitiveType::lookup_by_name(path.segments[0].ident.as_str())
+            && let Some(typ) = primitive_type.to_integer_or_field()
+        {
+            return Ok(typ);
         }
 
         // Only fields and integers are supported for numeric kinds
@@ -203,21 +199,21 @@ impl From<Ident> for UnresolvedGeneric {
 
 impl ExpressionKind {
     pub fn prefix(operator: UnaryOp, rhs: Expression) -> ExpressionKind {
-        match (operator, &rhs) {
+        match (operator, rhs) {
             (
                 UnaryOp::Minus,
                 Expression {
-                    kind: ExpressionKind::Literal(Literal::Integer(field, suffix)), ..
+                    kind: ExpressionKind::Literal(Literal::Integer(value, suffix)), ..
                 },
-            ) if !field.is_negative() => {
-                ExpressionKind::Literal(Literal::Integer(-*field, *suffix))
+            ) if value >= BigInt::ZERO && value <= BigInt::from(u128::MAX) => {
+                ExpressionKind::Literal(Literal::Integer(-value, suffix))
             }
-            _ => ExpressionKind::Prefix(Box::new(PrefixExpression { operator, rhs })),
+            (operator, rhs) => ExpressionKind::Prefix(Box::new(PrefixExpression { operator, rhs })),
         }
     }
 
-    pub fn integer(contents: FieldElement, suffix: Option<IntegerTypeSuffix>) -> ExpressionKind {
-        ExpressionKind::Literal(Literal::Integer(SignedField::positive(contents), suffix))
+    pub fn integer(contents: BigInt, suffix: Option<IntegerTypeSuffix>) -> ExpressionKind {
+        ExpressionKind::Literal(Literal::Integer(contents, suffix))
     }
 
     pub fn boolean(contents: bool) -> ExpressionKind {
@@ -298,6 +294,7 @@ impl Expression {
 
 pub type BinaryOp = Located<BinaryOpKind>;
 
+// `builtin_helpers::new_binary_op` depends on the ordering here
 #[derive(PartialEq, PartialOrd, Eq, Ord, Hash, Debug, Copy, Clone, strum_macros::EnumIter)]
 pub enum BinaryOpKind {
     Add,
@@ -426,7 +423,7 @@ pub enum Literal {
     Array(ArrayLiteral),
     Vector(ArrayLiteral),
     Bool(bool),
-    Integer(SignedField, Option<IntegerTypeSuffix>),
+    Integer(BigInt, Option<IntegerTypeSuffix>),
     Str(String),
     RawStr(String, u8),
     FmtStr(Vec<FmtStrFragment>, u32 /* length */),
@@ -498,11 +495,13 @@ pub struct FunctionDefinition {
     pub where_clause: Vec<UnresolvedTraitConstraint>,
     pub return_type: FunctionReturnType,
     pub return_visibility: Visibility,
+    pub return_visibility_location: Location,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Param {
     pub visibility: Visibility,
+    pub visibility_location: Location,
     pub pattern: Pattern,
     pub typ: UnresolvedType,
     pub location: Location,
@@ -585,7 +584,7 @@ impl Display for ConstrainExpression {
                 vecmap(&self.arguments, |arg| arg.to_string()).join(", ")
             ),
             ConstrainKind::Constrain => {
-                write!(f, "constrain {}", &self.arguments[0])
+                write!(f, "constrain {}", self.arguments[0])
             }
         }
     }
@@ -829,7 +828,11 @@ impl Display for Lambda {
 
 impl Display for AsTraitPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{} as {}>::{}", self.typ, self.trait_path, self.impl_item)
+        write!(f, "<{} as {}>::{}", self.typ, self.trait_path, self.impl_item)?;
+        if let Some(turbofish) = &self.turbofish {
+            write!(f, "::{turbofish}")?;
+        }
+        Ok(())
     }
 }
 
@@ -857,6 +860,7 @@ impl FunctionDefinition {
             .iter()
             .map(|(ident, unresolved_type)| Param {
                 visibility: Visibility::Private,
+                visibility_location: Location::dummy(),
                 pattern: Pattern::Identifier(ident.clone()),
                 typ: unresolved_type.clone(),
                 location: ident.location().merge(unresolved_type.location),
@@ -876,18 +880,21 @@ impl FunctionDefinition {
             where_clause,
             return_type: return_type.clone(),
             return_visibility: Visibility::Private,
+            return_visibility_location: Location::dummy(),
         }
     }
 
     pub fn signature(&self) -> String {
-        let parameters =
-            vecmap(&self.parameters, |Param { visibility, pattern, typ, location: _ }| {
-                if *visibility == Visibility::Public {
+        let parameters = vecmap(
+            &self.parameters,
+            |Param { visibility, visibility_location: _, pattern, typ, location: _ }| {
+                if matches!(visibility, Visibility::Public) {
                     format!("{pattern}: {visibility} {typ}")
                 } else {
                     format!("{pattern}: {typ}")
                 }
-            });
+            },
+        );
 
         let where_clause = vecmap(&self.where_clause, ToString::to_string);
         let where_clause_str = if !where_clause.is_empty() {

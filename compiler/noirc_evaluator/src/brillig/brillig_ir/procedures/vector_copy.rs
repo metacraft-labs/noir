@@ -1,15 +1,18 @@
 use acvm::{AcirField, brillig_vm::offsets};
 
 use super::ProcedureId;
-use crate::brillig::brillig_ir::{
-    BrilligBinaryOp, BrilligContext,
-    brillig_variable::BrilligVector,
-    debug_show::DebugToString,
-    registers::{RegisterAllocator, ScratchSpace},
+use crate::brillig::{
+    assert_usize,
+    brillig_ir::{
+        BrilligBinaryOp, BrilligContext,
+        brillig_variable::BrilligVector,
+        debug_show::DebugToString,
+        registers::{RegisterAllocator, ScratchSpace},
+    },
 };
 
 impl<F: AcirField + DebugToString, Registers: RegisterAllocator> BrilligContext<F, Registers> {
-    /// Copy arguments to [ScratchSpace] and call [ProcedureId::VectorCopy].
+    /// Copy arguments to [`ScratchSpace`] and call [`ProcedureId::VectorCopy`].
     ///
     /// Conditionally copies a source vector to a destination vector.
     /// If the reference count of the source vector is 1, then we can directly copy the pointer of the source vector to the destination vector.
@@ -26,10 +29,12 @@ impl<F: AcirField + DebugToString, Registers: RegisterAllocator> BrilligContext<
         self.add_procedure_call_instruction(ProcedureId::VectorCopy);
 
         self.mov_instruction(destination_vector.pointer, destination_vector_pointer_return);
+
+        self.codegen_count_if_copy_occurred(source_vector.pointer, destination_vector.pointer);
     }
 }
 
-/// Compile [ProcedureId::VectorCopy].
+/// Compile [`ProcedureId::VectorCopy`].
 pub(super) fn compile_vector_copy_procedure<F: AcirField + DebugToString>(
     brillig_context: &mut BrilligContext<F, ScratchSpace>,
 ) {
@@ -53,7 +58,7 @@ pub(super) fn compile_vector_copy_procedure<F: AcirField + DebugToString>(
             ctx.codegen_usize_op_in_place(
                 allocation_size.address,
                 BrilligBinaryOp::Add,
-                offsets::VECTOR_META_COUNT,
+                assert_usize(offsets::VECTOR_META_COUNT),
             );
             ctx.codegen_allocate_mem(target_vector.pointer, allocation_size.address);
 
@@ -67,6 +72,11 @@ pub(super) fn compile_vector_copy_procedure<F: AcirField + DebugToString>(
             // Copying a vector this way is an implicit side effect of setting an item by index through a mutable variable;
             // unlike with pop and push, we won't end up with a new vector handle, so we can split the RC between the old and the new.
             ctx.codegen_decrement_rc(source_vector.pointer, rc.address);
+
+            // Increase our array copy counter if that flag is set
+            if ctx.count_array_copies() {
+                ctx.codegen_increment_array_copy_counter();
+            }
         }
     });
 }

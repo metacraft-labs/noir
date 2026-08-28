@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use acvm::{AcirField, FieldElement};
+use acvm::{AcirField, FieldElement, acir::brillig::lengths::SemanticLength};
 use insta::assert_snapshot;
 
 use crate::ssa::{
@@ -29,6 +29,7 @@ use super::{Ssa, Value};
 mod black_box;
 mod instructions;
 mod intrinsics;
+mod purity;
 
 #[track_caller]
 fn executes_with_no_errors(src: &str) {
@@ -116,6 +117,17 @@ fn test_truncate_signed() {
 }
 
 #[test]
+fn u1_is_in_range_only_for_zero_and_one() {
+    let u1 = |n: u32| {
+        NumericValue::int_from_field(FieldElement::from(n), NumericType::unsigned(1)).unwrap()
+    };
+    assert!(u1(0).is_in_range());
+    assert!(u1(1).is_in_range());
+    assert!(!u1(2).is_in_range());
+    assert!(!u1(5).is_in_range());
+}
+
+#[test]
 fn test_shl() {
     let binary = Binary { lhs: ValueId::new(0), rhs: ValueId::new(1), operator: BinaryOp::Shl };
 
@@ -136,7 +148,7 @@ fn test_shl() {
             (1, 8),
             Err(InterpreterError::Overflow {
                 operator: BinaryOp::Shl,
-                instruction: "`` (i8 1 << i8 8)".to_string(),
+                instruction: "`` (shl i8 1, i8 8)".to_string(),
             }),
         ),
     ];
@@ -145,12 +157,13 @@ fn test_shl() {
         assert_eq!(
             super::evaluate_binary(
                 &binary,
-                NumericValue::I8(lhs.into()),
-                NumericValue::I8(rhs.into()),
+                NumericValue::i8(lhs),
+                NumericValue::i8(rhs),
                 true,
+                false,
                 display
             ),
-            expected_result.map(|i| NumericValue::I8(i.into())),
+            expected_result.map(NumericValue::i8),
             "{lhs} << {rhs}",
         );
     }
@@ -162,7 +175,10 @@ fn value_snapshot_detaches_from_original() {
     let v0 = {
         let a0 = Value::array(vec![Value::bool(false), Value::bool(false)], vec![Type::bool()]);
         let a1 = Value::array(vec![Value::bool(false), Value::bool(false)], vec![Type::bool()]);
-        Value::array(vec![a0, a1], vec![Type::Array(Arc::new(vec![Type::bool()]), 2)])
+        Value::array(
+            vec![a0, a1],
+            vec![Type::Array(Arc::new(vec![Type::bool()]), SemanticLength(2))],
+        )
     };
     // Take a clone and a snapshot, to demonstrate the difference.
     let v1 = v0.clone();
@@ -171,7 +187,7 @@ fn value_snapshot_detaches_from_original() {
     // Access `array[0][0]`
     fn with_0_0<F>(value: &Value, f: F)
     where
-        F: FnOnce(&mut bool),
+        F: FnOnce(&mut Value),
     {
         let Value::ArrayOrVector(ArrayValue { elements, .. }) = value else {
             unreachable!("values are arrays")
@@ -182,21 +198,17 @@ fn value_snapshot_detaches_from_original() {
             unreachable!("inner values are arrays")
         };
         let mut elements = elements.borrow_mut();
-        let mut value = &mut elements[0];
-        let Value::Numeric(NumericValue::U1(b)) = &mut value else {
-            unreachable!("elements are bool");
-        };
-        f(b);
+        f(&mut elements[0]);
     }
 
     // Update the original.
-    with_0_0(&v0, |b| {
-        *b = true;
+    with_0_0(&v0, |v| {
+        *v = Value::bool(true);
     });
     // The clone is also changed.
-    with_0_0(&v1, |b| assert!(*b));
+    with_0_0(&v1, |v| assert_eq!(v.as_bool(), Some(true)));
     // The snapshot is not changed.
-    with_0_0(&v2, |b| assert!(!(*b)));
+    with_0_0(&v2, |v| assert_eq!(v.as_bool(), Some(false)));
 }
 
 #[test]
@@ -282,7 +294,7 @@ fn run_flattened_function() {
         Value::array(vec![Value::bool(false), Value::bool(true)], vec![Type::unsigned(1)]),
     ];
 
-    let v1_element_types = vec![Type::Array(Arc::new(vec![Type::unsigned(1)]), 2)];
+    let v1_element_types = vec![Type::Array(Arc::new(vec![Type::unsigned(1)]), SemanticLength(2))];
     let v1 = Value::array(v1_elements, v1_element_types);
 
     let result = expect_value_with_args(src, vec![Value::bool(true), v1.clone()]);
@@ -304,7 +316,7 @@ fn loads_passed_to_a_call() {
         jmp b1(Field 0)
       b1(v0: Field):
         v4 = eq v0, Field 0
-        jmpif v4 then: b3, else: b2
+        jmpif v4 then: b3(), else: b2()
       b2():
         v9 = load v1 -> Field
         v10 = eq v9, Field 2
@@ -339,7 +351,7 @@ fn without_defunctionalize() {
     b0(v0: u1):
       v1 = allocate -> &mut function
       store f1 at v1
-      jmpif v0 then: b1, else: b2
+      jmpif v0 then: b1(), else: b2()
     b1():
       call f2(v1, f1)
       jmp b3()
@@ -387,7 +399,7 @@ fn keep_repeat_loads_with_alias_store() {
     let src = "
     acir(inline) fn main f0 {
       b0(v0: u1):
-        jmpif v0 then: b2, else: b1
+        jmpif v0 then: b2(), else: b1()
       b1():
         v6 = allocate -> &mut Field
         store Field 1 at v6
@@ -429,7 +441,10 @@ fn accepts_globals() {
         brillig(inline) predicate_pure fn main f0 {
         b0():
             v0 = make_array [Field 1, Field 2] : [Field; 2]
-            constrain v0 == g2
+            v1 = array_get v0, index u32 0 -> Field
+            v2 = array_get g2, index u32 0 -> Field
+            constrain v1 == v2
+            constrain v1 == g0
             return
         }
     ";
@@ -505,7 +520,7 @@ fn is_odd_is_even_recursive_calls() {
         brillig(inline) fn is_even f1 {
           b0(v0: u32):
             v3 = eq v0, u32 0
-            jmpif v3 then: b2, else: b1
+            jmpif v3 then: b2(), else: b1()
           b1():
             v5 = call f3(v0) -> u32
             v7 = call f2(v5) -> u1
@@ -518,7 +533,7 @@ fn is_odd_is_even_recursive_calls() {
         brillig(inline) fn is_odd f2 {
           b0(v0: u32):
             v3 = eq v0, u32 0
-            jmpif v3 then: b2, else: b1
+            jmpif v3 then: b2(), else: b1()
           b1():
             v5 = call f3(v0) -> u32
             v7 = call f1(v5) -> u1
@@ -551,7 +566,7 @@ fn store_with_aliases() {
             jmp b1(Field 0)
           b1(v3: Field):
             v4 = eq v3, Field 0
-            jmpif v4 then: b2, else: b3
+            jmpif v4 then: b2(), else: b3()
           b2():
             v5 = load v2 -> &mut Field
             store Field 2 at v5
@@ -633,7 +648,7 @@ acir(inline) fn main f0 {
     jmp b1(u32 0)
   b1(v2: u32):
     v52 = lt v2, u32 5
-    jmpif v52 then: b2, else: b3
+    jmpif v52 then: b2(), else: b3()
   b2():
     v167 = load v49 -> u32
     v168 = load v50 -> [u32]
@@ -764,7 +779,7 @@ acir(inline) fn append f1 {
     jmp b1(u32 0)
   b1(v4: u32):
     v8 = lt v4, v2
-    jmpif v8 then: b2, else: b3
+    jmpif v8 then: b2(), else: b3()
   b2():
     v11 = lt v4, v2
     constrain v11 == u1 1, "Index out of bounds"
@@ -791,7 +806,7 @@ acir(inline) fn map f2 {
     jmp b1(u32 0)
   b1(v3: u32):
     v8 = lt v3, v0
-    jmpif v8 then: b2, else: b3
+    jmpif v8 then: b2(), else: b3()
   b2():
     v11 = lt v3, v0
     constrain v11 == u1 1, "Index out of bounds"
@@ -822,7 +837,7 @@ acir(inline) fn eq f4 {
     jmp b1(u32 0)
   b1(v4: u32):
     v8 = lt v4, v0
-    jmpif v8 then: b2, else: b3
+    jmpif v8 then: b2(), else: b3()
   b2():
     v10 = load v6 -> u1
     v11 = lt v4, v0
@@ -847,7 +862,7 @@ acir(inline) fn fold f5 {
     jmp b1(u32 0)
   b1(v4: u32):
     v7 = lt v4, v0
-    jmpif v7 then: b2, else: b3
+    jmpif v7 then: b2(), else: b3()
   b2():
     v9 = lt v4, v0
     constrain v9 == u1 1, "Index out of bounds"
@@ -876,7 +891,7 @@ acir(inline) fn reduce f7 {
     jmp b1(u32 1)
   b1(v3: u32):
     v10 = lt v3, v0
-    jmpif v10 then: b2, else: b3
+    jmpif v10 then: b2(), else: b3()
   b2():
     v12 = load v8 -> Field
     v13 = lt v3, v0
@@ -902,7 +917,7 @@ acir(inline) fn all f9 {
     jmp b1(u32 0)
   b1(v3: u32):
     v7 = lt v3, v0
-    jmpif v7 then: b2, else: b3
+    jmpif v7 then: b2(), else: b3()
   b2():
     v9 = lt v3, v0
     constrain v9 == u1 1, "Index out of bounds"
@@ -929,7 +944,7 @@ acir(inline) fn any f11 {
     jmp b1(u32 0)
   b1(v3: u32):
     v7 = lt v3, v0
-    jmpif v7 then: b2, else: b3
+    jmpif v7 then: b2(), else: b3()
   b2():
     v9 = lt v3, v0
     constrain v9 == u1 1, "Index out of bounds"
@@ -986,7 +1001,7 @@ acir(inline) fn regression_4418 f16 {
     store v2 at v3
     v5 = eq v0, Field 0
     v6 = not v5
-    jmpif v6 then: b1, else: b2
+    jmpif v6 then: b1(), else: b2()
   b1():
     v7 = load v3 -> [u8; 32]
     v10 = array_set v7, index u32 0, value u8 10
@@ -1004,7 +1019,7 @@ acir(inline) fn regression_vector_call_result f17 {
     store v4 at v6
     v8 = eq v0, Field 0
     v9 = not v8
-    jmpif v9 then: b1, else: b2
+    jmpif v9 then: b1(), else: b2()
   b1():
     v16 = load v5 -> u32
     v17 = load v6 -> [Field]
@@ -1078,11 +1093,11 @@ acir(inline) fn merge_vectors_return f19 {
     v7 = make_array [Field 0, Field 0] : [Field]
     v8 = eq v0, v1
     v9 = not v8
-    jmpif v9 then: b1, else: b2
+    jmpif v9 then: b1(), else: b2()
   b1():
     v12 = eq v0, Field 20
     v13 = not v12
-    jmpif v13 then: b3, else: b4
+    jmpif v13 then: b3(), else: b4()
   b2():
     jmp b6(u32 2, v7)
   b3():
@@ -1108,11 +1123,11 @@ acir(inline) fn to_be_bytes f20 {
     jmp b1(u32 0)
   b1(v1: u32):
     v56 = lt v1, u32 32
-    jmpif v56 then: b2, else: b3
+    jmpif v56 then: b2(), else: b3()
   b2():
     v59 = load v52 -> u1
     v60 = not v59
-    jmpif v60 then: b4, else: b5
+    jmpif v60 then: b4(), else: b5()
   b3():
     v57 = load v52 -> u1
     constrain v57 == u1 1
@@ -1126,7 +1141,7 @@ acir(inline) fn to_be_bytes f20 {
     v64 = array_get v51, index v1 -> u8
     v65 = eq v62, v64
     v66 = not v65
-    jmpif v66 then: b6, else: b7
+    jmpif v66 then: b6(), else: b7()
   b5():
     v73 = unchecked_add v1, u32 1
     jmp b1(v73)
@@ -1293,7 +1308,7 @@ acir(inline) fn merge_vectors_mutate f24 {
     store v3 at v6
     v7 = eq v0, v1
     v8 = not v7
-    jmpif v8 then: b1, else: b2
+    jmpif v8 then: b1(), else: b2()
   b1():
     v14 = load v4 -> u32
     v15 = load v6 -> [Field]
@@ -1327,7 +1342,7 @@ acir(inline) fn merge_vectors_mutate_in_loop f25 {
     store v4 at v7
     v8 = eq v0, v1
     v9 = not v8
-    jmpif v9 then: b1, else: b2
+    jmpif v9 then: b1(), else: b2()
   b1():
     jmp b3(u32 0)
   b2():
@@ -1339,7 +1354,7 @@ acir(inline) fn merge_vectors_mutate_in_loop f25 {
     jmp b6()
   b3(v2: u32):
     v17 = lt v2, u32 5
-    jmpif v17 then: b4, else: b5
+    jmpif v17 then: b4(), else: b5()
   b4():
     v20 = load v5 -> u32
     v21 = load v7 -> [Field]
@@ -1365,7 +1380,7 @@ acir(inline) fn merge_vectors_mutate_two_ifs f26 {
     store v3 at v6
     v7 = eq v0, v1
     v8 = not v7
-    jmpif v8 then: b1, else: b2
+    jmpif v8 then: b1(), else: b2()
   b1():
     v14 = load v4 -> u32
     v15 = load v6 -> [Field]
@@ -1387,7 +1402,7 @@ acir(inline) fn merge_vectors_mutate_two_ifs f26 {
     jmp b3()
   b3():
     v23 = eq v0, Field 20
-    jmpif v23 then: b4, else: b5
+    jmpif v23 then: b4(), else: b5()
   b4():
     v24 = load v4 -> u32
     v25 = load v6 -> [Field]
@@ -1419,7 +1434,7 @@ acir(inline) fn merge_vectors_mutate_between_ifs f27 {
     store v3 at v6
     v7 = eq v0, v1
     v8 = not v7
-    jmpif v8 then: b1, else: b2
+    jmpif v8 then: b1(), else: b2()
   b1():
     v14 = load v4 -> u32
     v15 = load v6 -> [Field]
@@ -1446,7 +1461,7 @@ acir(inline) fn merge_vectors_mutate_between_ifs f27 {
     store v25 at v4
     store v26 at v6
     v28 = eq v0, Field 20
-    jmpif v28 then: b4, else: b5
+    jmpif v28 then: b4(), else: b5()
   b4():
     v29 = load v4 -> u32
     v30 = load v6 -> [Field]
@@ -1462,7 +1477,7 @@ acir(inline) fn merge_vectors_mutate_between_ifs f27 {
     store v37 at v6
     v38 = eq v0, Field 20
     v39 = not v38
-    jmpif v39 then: b6, else: b7
+    jmpif v39 then: b6(), else: b7()
   b6():
     v40 = load v4 -> u32
     v41 = load v6 -> [Field]
@@ -1489,7 +1504,7 @@ acir(inline) fn merge_vectors_push_then_pop f28 {
     store v3 at v6
     v7 = eq v0, v1
     v8 = not v7
-    jmpif v8 then: b1, else: b2
+    jmpif v8 then: b1(), else: b2()
   b1():
     v14 = load v4 -> u32
     v15 = load v6 -> [Field]
@@ -1516,7 +1531,7 @@ acir(inline) fn merge_vectors_push_then_pop f28 {
     store v25 at v4
     store v26 at v6
     v28 = eq v0, Field 20
-    jmpif v28 then: b4, else: b5
+    jmpif v28 then: b4(), else: b5()
   b4():
     v29 = load v4 -> u32
     v30 = load v6 -> [Field]
@@ -1548,7 +1563,7 @@ acir(inline) fn merge_vectors_push_then_insert f29 {
     store v3 at v6
     v7 = eq v0, v1
     v8 = not v7
-    jmpif v8 then: b1, else: b2
+    jmpif v8 then: b1(), else: b2()
   b1():
     v14 = load v4 -> u32
     v15 = load v6 -> [Field]
@@ -1575,7 +1590,7 @@ acir(inline) fn merge_vectors_push_then_insert f29 {
     store v25 at v4
     store v26 at v6
     v28 = eq v0, Field 20
-    jmpif v28 then: b4, else: b5
+    jmpif v28 then: b4(), else: b5()
   b4():
     v29 = load v4 -> u32
     v30 = load v6 -> [Field]
@@ -1618,7 +1633,7 @@ acir(inline) fn merge_vectors_remove_between_ifs f30 {
     store v3 at v6
     v7 = eq v0, v1
     v8 = not v7
-    jmpif v8 then: b1, else: b2
+    jmpif v8 then: b1(), else: b2()
   b1():
     v14 = load v4 -> u32
     v15 = load v6 -> [Field]
@@ -1651,7 +1666,7 @@ acir(inline) fn merge_vectors_remove_between_ifs f30 {
     v32 = eq v29, v1
     constrain v29 == v1
     v34 = eq v0, Field 20
-    jmpif v34 then: b4, else: b5
+    jmpif v34 then: b4(), else: b5()
   b4():
     v35 = load v30 -> u32
     v36 = load v31 -> [Field]
@@ -1667,7 +1682,7 @@ acir(inline) fn merge_vectors_remove_between_ifs f30 {
     store v43 at v31
     v44 = eq v0, Field 20
     v45 = not v44
-    jmpif v45 then: b6, else: b7
+    jmpif v45 then: b6(), else: b7()
   b6():
     v46 = load v30 -> u32
     v47 = load v31 -> [Field]
@@ -1785,6 +1800,27 @@ fn signed_integer_casting() {
 }
 
 #[test]
+fn cast_of_out_of_range_acir_value_relabels() {
+    // In an ACIR function an unchecked op does field arithmetic and can leave a value out of its
+    // type's range (here `unchecked_add u8 255, 1` = 256). A `cast` must relabel that value's type
+    // while keeping its bits — matching ACIR, where a cast is a no-op on the underlying field — and
+    // must not reject it the way a fresh constant would. This loops/casts the way the fuzzer found.
+    let src = r#"
+      acir(inline) fn main f0 {
+        b0():
+          v2 = unchecked_add u8 255, u8 1
+          v3 = cast v2 as i8
+          return v3
+      }
+      "#;
+    let value = expect_value(src);
+    assert_eq!(
+        value,
+        Value::int_from_field(FieldElement::from(256u32), NumericType::signed(8)).unwrap()
+    );
+}
+
+#[test]
 fn signed_integer_casting_2() {
     // fn main() -> pub i64 {
     //     (-(func_4() as i64))
@@ -1837,7 +1873,7 @@ fn infinite_loop_with_step_limit() {
       b0(v0: u1):
         jmp b1()
       b1():
-        jmpif v0 then: b2, else: b3
+        jmpif v0 then: b2(), else: b3()
       b2():
         return
       b3():
@@ -1877,4 +1913,62 @@ fn call_stack_is_cleared_between_entry_calls() {
 
     interpreter.interpret_function(main_id, vec![Value::u32(0)]).expect("0 should succeed");
     assert_eq!(interpreter.call_stack.len(), 1, "should clear the previous leftover");
+}
+
+#[test]
+fn allow_empty_zst_array() {
+    let src = r#"  
+acir(inline) fn main f0 {  
+  b0():  
+    v0 = make_array [] : [(); 3]  
+    return  
+}  
+    "#;
+    let ssa = Ssa::from_str(src).unwrap();
+    let _ = ssa.interpret(vec![]).unwrap();
+}
+
+#[test]
+fn infinite_recursion() {
+    let src = r#"
+    acir(inline) predicate_pure fn main f0 {
+    b0():
+      call f1()
+      return
+    }
+    brillig(inline) predicate_pure fn recur f1 {
+      b0():
+        call f1()
+        return
+    }
+    "#;
+    let ssa = Ssa::from_str(src).unwrap();
+    let result = ssa.interpret(vec![]);
+    let Err(InterpreterError::StackOverflow { .. }) = result else {
+        panic!("unexpected result: {result:?}")
+    };
+}
+
+#[test]
+fn acir_unchecked_signed_add_print_reduces() {
+    // ACIR `main` computes an i8 via `unchecked_add` whose logical value is 0, but in ACIR
+    // mode the interpreter stores the unreduced two's-complement field (256). It hands that
+    // value to a Brillig print wrapper (mirroring the AST fuzzer's generated `print_wrapper`).
+    // `print` must observe the reduced value 0, not the raw field 256.
+    let src = r#"
+        acir(inline) impure fn main f0 {
+          b0():
+            v2 = unchecked_add i8 -1, i8 1
+            call f1(v2)
+            return
+        }
+        brillig(inline) impure fn print_wrapper f1 {
+          b0(v0: i8):
+            v3 = make_array b"{\"kind\":\"signedinteger\",\"width\":8}"
+            call print(u1 1, v0, v3, u1 0)
+            return
+        }
+    "#;
+    let out = expect_printed_output(src);
+    assert_eq!(out, "0\n", "print observed raw unreduced ACIR field instead of reduced 0");
 }

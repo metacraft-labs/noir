@@ -88,8 +88,11 @@ impl ChunkFormatter<'_, '_> {
             ExpressionKind::Quote(..) => {
                 group.group(self.format_quote());
             }
-            ExpressionKind::Unquote(..) => {
-                unreachable!("Should not be present in the AST")
+            ExpressionKind::Unquote(inner) => {
+                group.text(self.chunk(|formatter| {
+                    formatter.write_token(Token::DollarSign);
+                }));
+                self.format_expression(*inner, group);
             }
             ExpressionKind::Comptime(block_expression, _span) => {
                 group.group(self.format_comptime_expression(
@@ -129,7 +132,10 @@ impl ChunkFormatter<'_, '_> {
                 }));
             }
             Literal::Integer(..) => group.text(self.chunk(|formatter| {
-                if formatter.is_at(Token::Minus) {
+                // A `-` in front of an integer literal is folded into the literal itself, and
+                // because negating zero yields zero every `-` in front of a literal zero folds
+                // into the same literal.
+                while formatter.is_at(Token::Minus) {
                     formatter.write_token(Token::Minus);
                     formatter.skip_comments_and_whitespace();
                 }
@@ -154,13 +160,7 @@ impl ChunkFormatter<'_, '_> {
 
         group.text(self.chunk(|formatter| {
             if is_vector {
-                if formatter.is_at(Token::DeprecatedVectorStart) {
-                    // Support the old vector syntax `&[1, 2, 3]`
-                    formatter.bump();
-                    formatter.write("@");
-                } else {
-                    formatter.write_token(Token::At);
-                }
+                formatter.write_token(Token::At);
             }
             formatter.write_left_bracket();
         }));
@@ -353,6 +353,10 @@ impl ChunkFormatter<'_, '_> {
             _ => panic!("Unexpected delimiter: {delimiter_start}"),
         };
 
+        // Everything between the delimiters is the quote body.
+        let body_source = &quote_source_code[1..quote_source_code.len() - 1];
+        let formatted_body = format_quote_body(body_source, self.config);
+
         // We use the current token rather than the Tokens we got from `Token::Quote` because
         // the current token has whitespace and comments in it, while the one we got from
         // the parser doesn't.
@@ -361,15 +365,66 @@ impl ChunkFormatter<'_, '_> {
         };
 
         let mut group = ChunkGroup::new();
-        group.verbatim(self.chunk(|formatter| {
-            formatter.write("quote");
-            formatter.write_space();
-            formatter.write(&delimiter_start.to_string());
-            for token in tokens.0 {
-                formatter.write_source_span(token.span());
+        if let Some(formatted_body) = formatted_body {
+            // Stay on one line only if the author wrote it on one line *and* the
+            // formatted content fits on one line. If the source spans multiple lines
+            // we preserve that shape — `quote { fn foo() {} }` and the version
+            // written across three lines are both valid, and we shouldn't flip
+            // between them.
+            let single_line_body = !body_source.contains('\n') && !formatted_body.contains('\n');
+            group.force_multiple_lines = !single_line_body;
+            group.text(self.chunk(|formatter| {
+                formatter.write("quote");
+                formatter.write_space();
+                formatter.write(&delimiter_start.to_string());
+            }));
+            group.increase_indentation();
+            if single_line_body {
+                // Allow `quote { use $t; }` to stay on a single line when it fits.
+                group.space_or_line();
+                group.text(TextChunk::new(formatted_body));
+            } else {
+                group.line();
+                // Emit each line of the formatted body as its own text chunk, with `line`
+                // chunks between them. This way the chunk renderer takes care of writing
+                // the outer indentation at every line break while the body's own
+                // internal indentation is preserved in each chunk's text. Blank lines
+                // in the body become double `line` chunks so they survive the round-trip.
+                let mut lines = formatted_body.lines();
+                if let Some(first_line) = lines.next() {
+                    group.text(TextChunk::new(first_line.to_string()));
+                }
+                let mut pending_blank = false;
+                for line in lines {
+                    if line.trim().is_empty() {
+                        pending_blank = true;
+                        continue;
+                    }
+                    group.lines(pending_blank);
+                    pending_blank = false;
+                    group.text(TextChunk::new(line.to_string()));
+                }
             }
-            formatter.write(&delimiter_end.to_string());
-        }));
+            group.decrease_indentation();
+            if single_line_body {
+                group.space_or_line();
+            } else {
+                group.line();
+            }
+            group.text(self.chunk(|formatter| {
+                formatter.write(&delimiter_end.to_string());
+            }));
+        } else {
+            group.verbatim(self.chunk(|formatter| {
+                formatter.write("quote");
+                formatter.write_space();
+                formatter.write(&delimiter_start.to_string());
+                for token in tokens.0 {
+                    formatter.write_source_span(token.span());
+                }
+                formatter.write(&delimiter_end.to_string());
+            }));
+        }
         group
     }
 
@@ -457,16 +512,16 @@ impl ChunkFormatter<'_, '_> {
                     //       let y = x + 1;
                     //       y * 2
                     //     })
-                    if expr_index == exprs_len - 1 {
-                        if let ExpressionKind::Lambda(lambda) = expr.kind {
-                            let mut lambda_group = formatter.format_lambda(*lambda);
-                            lambda_group.group.kind = GroupKind::LambdaAsLastExpressionInList {
-                                first_line_width: lambda_group.first_line_width,
-                                indentation: None,
-                            };
-                            chunks.group(lambda_group.group);
-                            return;
-                        }
+                    if expr_index == exprs_len - 1
+                        && let ExpressionKind::Lambda(lambda) = expr.kind
+                    {
+                        let mut lambda_group = formatter.format_lambda(*lambda);
+                        lambda_group.group.kind = GroupKind::LambdaAsLastExpressionInList {
+                            first_line_width: lambda_group.first_line_width,
+                            indentation: None,
+                        };
+                        chunks.group(lambda_group.group);
+                        return;
                     }
                     expr_index += 1;
 
@@ -571,7 +626,7 @@ impl ChunkFormatter<'_, '_> {
             group.trailing_comma();
         }
 
-        group.text(chunk);
+        group.trailing_comment_at_block_end(chunk);
 
         if force_trailing_comma {
             group.text(TextChunk::new(",".to_string()));
@@ -588,7 +643,7 @@ impl ChunkFormatter<'_, '_> {
     fn format_constructor(&mut self, constructor: ConstructorExpression) -> ChunkGroup {
         let mut group = ChunkGroup::new();
         group.text(self.chunk(|formatter| {
-            formatter.format_type(constructor.typ);
+            formatter.format_type_in_expression(constructor.typ);
             formatter.write_space();
             formatter.write_left_brace();
         }));
@@ -693,7 +748,7 @@ impl ChunkFormatter<'_, '_> {
 
                 increase_indentation = true;
             }
-        };
+        }
 
         group.trailing_comment(self.skip_comments_and_whitespace_chunk());
 
@@ -811,9 +866,21 @@ impl ChunkFormatter<'_, '_> {
 
         group.space_or_line();
         group.text(self.chunk(|formatter| {
-            let tokens_count =
-                if infix.operator.contents == BinaryOpKind::ShiftRight { 2 } else { 1 };
-            for _ in 0..tokens_count {
+            let tokens_count = if matches!(
+                infix.operator.contents,
+                BinaryOpKind::ShiftRight | BinaryOpKind::ShiftLeft
+            ) {
+                2
+            } else {
+                1
+            };
+            for index in 0..tokens_count {
+                // `<<` and `>>` are lexed as two separate tokens so that nested generic types
+                // are easier to parse, which means whitespace or a comment can sit between the
+                // two halves of a shift operator.
+                if index > 0 {
+                    formatter.skip_comments_and_whitespace();
+                }
                 formatter.write_current_token();
                 formatter.bump();
             }
@@ -1298,7 +1365,7 @@ impl ChunkFormatter<'_, '_> {
         }
 
         // Finally format the comment, if any
-        group.text(self.chunk(|formatter| {
+        group.trailing_comment_at_block_end(self.chunk(|formatter| {
             formatter.skip_comments_and_whitespace_writing_multiple_lines_if_found();
         }));
 
@@ -1351,10 +1418,73 @@ fn force_if_chunks_to_multiple_lines(group: &mut ChunkGroup, group_tag: GroupTag
         group.force_multiple_lines = true;
     }
 
-    for chunk in group.chunks.iter_mut() {
+    for chunk in &mut group.chunks {
         if let Chunk::Group(inner_group) = chunk {
             force_if_chunks_to_multiple_lines(inner_group, group_tag);
         }
+    }
+}
+
+/// Tries to parse the body of a `quote { ... }` as Noir and, if successful, formats it.
+/// We try three grammars and return the first that parses cleanly:
+///
+/// 1. a sequence of items (for bodies that generate top-level declarations),
+/// 2. a single expression (this catches block expressions like `{ $exprs }` before
+///    the statement parser does, where they would otherwise be forced multi-line),
+/// 3. a single statement (for things like `let x = 1;` that aren't expressions).
+///
+/// Returns `None` if none apply, so the caller can fall back to verbatim emission.
+///
+/// As a safety net we also reject any formatting that would change the body's token
+/// stream — the regular formatter performs token-level rewrites (e.g. collapsing a
+/// single-statement lambda body `|x| { e }` to `|x| e`) that are safe in normal code
+/// but can break semantics under macro substitution.
+fn format_quote_body(body_source: &str, config: &crate::Config) -> Option<String> {
+    use noirc_frontend::parser;
+
+    let candidate = if let Ok(module) = parser::parse_program_in_quote_body(body_source)
+        && !module.items.is_empty()
+    {
+        Some(crate::format(body_source, module, config))
+    } else if let Ok(expression) = parser::parse_expression_in_quote_body(body_source) {
+        Some(crate::format_expression(body_source, expression, config))
+    } else if let Ok(statement) = parser::parse_statement_in_quote_body(body_source) {
+        Some(crate::format_statement(body_source, statement, config))
+    } else {
+        None
+    };
+
+    let formatted = candidate?;
+    let trimmed = formatted.trim();
+    if trimmed.is_empty() || !quote_body_tokens_match(body_source, trimmed) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// Compares two snippets by their non-trivia token streams. Used to ensure the
+/// formatter didn't change anything other than whitespace/comments when rewriting a
+/// quote body.
+fn quote_body_tokens_match(a: &str, b: &str) -> bool {
+    use noirc_frontend::lexer::Lexer;
+    use noirc_frontend::token::Token;
+
+    fn collect(source: &str) -> Option<Vec<Token>> {
+        let mut tokens = Vec::new();
+        for result in Lexer::new_with_dummy_file(source) {
+            let located = result.ok()?;
+            let token = located.into_token();
+            if matches!(token, Token::EOF) {
+                break;
+            }
+            tokens.push(token);
+        }
+        Some(tokens)
+    }
+
+    match (collect(a), collect(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -1405,6 +1535,20 @@ mod tests {
     }
 
     #[test]
+    fn format_repeated_negative_zero() {
+        let src = "global x =  - - - 0 ;";
+        let expected = "global x = ---0;\n";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_negative_zero_with_comment_before_it() {
+        let src = "global x = - // negate\n-0;";
+        let expected = "global x = - // negate\n-0;\n";
+        assert_format(src, expected);
+    }
+
+    #[test]
     fn format_ref_mut_integer() {
         let src = "global x = & mut 42 ;";
         let expected = "global x = &mut 42;\n";
@@ -1442,13 +1586,6 @@ mod tests {
     #[test]
     fn format_standard_vector() {
         let src = "global x = @ [ 1 , 2 , 3 , ] ;";
-        let expected = "global x = @[1, 2, 3];\n";
-        assert_format(src, expected);
-    }
-
-    #[test]
-    fn format_old_vector_syntax() {
-        let src = "global x = &[ 1 , 2 , 3 , ] ;";
         let expected = "global x = @[1, 2, 3];\n";
         assert_format(src, expected);
     }
@@ -1615,6 +1752,16 @@ global y = 1;
     }
 
     #[test]
+    fn format_as_trait_path_with_turbofish() {
+        let src = "fn main ( ) { < i32 as foo > :: bar :: < Field > ( ) ; }";
+        let expected = "fn main() {
+    <i32 as foo>::bar::<Field>();
+}
+";
+        assert_format(src, expected);
+    }
+
+    #[test]
     fn format_index() {
         let src = "global x = foo [ bar ] ;";
         let expected = "global x = foo[bar];\n";
@@ -1652,6 +1799,27 @@ global y = 1;
     fn format_infix() {
         let src = "global x =  a  +  b  ;";
         let expected = "global x = a + b;\n";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_shift_written_as_two_separate_tokens() {
+        let src = "global x =  a  <  <  b  ;";
+        let expected = "global x = a << b;\n";
+        assert_format(src, expected);
+
+        let src = "global x =  a  >  >  b  ;";
+        let expected = "global x = a >> b;\n";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_shift_with_a_comment_between_its_two_tokens() {
+        let src = "global x = a < // shift\n< b;";
+        let expected = "global x = a
+    < // shift
+    < b;
+";
         assert_format(src, expected);
     }
 
@@ -1735,6 +1903,13 @@ global y = 1;
     fn format_call() {
         let src = "global x =  foo :: bar ( 1, 2 )  ;";
         let expected = "global x = foo::bar(1, 2);\n";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_dep_call() {
+        let src = "global x =  dep :: foo :: bar ( 1, 2 )  ;";
+        let expected = "global x = ::foo::bar(1, 2);\n";
         assert_format(src, expected);
     }
 
@@ -2259,6 +2434,24 @@ global y = 1;
     }
 
     #[test]
+    fn format_unquote_in_regular_expression() {
+        // `$foo` and `$(expr)` parse as `ExpressionKind::Unquote` even outside of a
+        // `quote { }` block. The program may not type-check, but it's syntactically
+        // valid Noir, so the formatter must not panic.
+        let src = "fn main ( )  {
+    let x  =  $foo ;
+    let y  =  $( bar + 1 ) ;
+}
+";
+        let expected = "fn main() {
+    let x = $foo;
+    let y = $(bar + 1);
+}
+";
+        assert_format(src, expected);
+    }
+
+    #[test]
     fn format_quote_with_newlines() {
         let src = "fn foo() {
     quote {
@@ -2278,6 +2471,223 @@ global y = 1;
     fn format_quote_with_bracket_delimiter() {
         let src = "global x = quote [ 1  2  3 $four $(five) ];";
         let expected = "global x = quote [ 1  2  3 $four $(five) ];\n";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_with_parseable_function_body() {
+        let src = "pub comptime fn outside() -> Quoted {
+    quote {
+        fn body() -> Field {
+let     x   =    1   +    2 ;
+            x
+        }
+    }
+}
+";
+        let expected = "pub comptime fn outside() -> Quoted {
+    quote {
+        fn body() -> Field {
+            let x = 1 + 2;
+            x
+        }
+    }
+}
+";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_with_multiple_parseable_items() {
+        let src = "pub comptime fn outside() -> Quoted {
+    quote {
+        fn foo (   ) ->Field{1}
+        fn bar(   )->Field{2}
+    }
+}
+";
+        let expected = "pub comptime fn outside() -> Quoted {
+    quote {
+        fn foo() -> Field {
+            1
+        }
+        fn bar() -> Field {
+            2
+        }
+    }
+}
+";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_with_dollar_paren_in_path_does_not_panic() {
+        // After consuming `::` the path parser only has one token of lookahead, so in
+        // quote-body mode it optimistically commits when the next token is `$`. If
+        // what follows is `$(...)` (not a `$ident` placeholder) the path parser must
+        // bail out gracefully instead of panicking.
+        let src = "global x = quote { foo::$(bar) };\n";
+        let expected = src;
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_with_attribute_on_unquote_does_not_panic() {
+        // The body has a leading `#[foo]` attribute followed by `$bar`. The statement
+        // parser would silently consume the attribute and leave the formatter's lexer
+        // pointing at `#[`, which used to make the formatter panic when writing the
+        // unquote. We must fall back to verbatim instead.
+        let src = "fn main() {
+    quote {
+        #[foo]
+        $bar
+    }
+}
+";
+        let expected = src;
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_falls_back_when_unparseable() {
+        // The body `foo bar` isn't a valid Noir item sequence so the formatter must
+        // leave it verbatim.
+        let src = "global x = quote { foo  bar };\n";
+        let expected = src;
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_with_dollar_placeholder_in_identifier_position() {
+        // `$name` appears where a function name is expected. The formatter's parser
+        // accepts `$ident` as an identifier when reading a quote body so we can still
+        // format it.
+        let src = "pub comptime fn outside() -> Quoted {
+    quote {
+        fn $name() ->Field{
+            $value
+        }
+    }
+}
+";
+        let expected = "pub comptime fn outside() -> Quoted {
+    quote {
+        fn $name() -> Field {
+            $value
+        }
+    }
+}
+";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_with_expression_body() {
+        let src = "global x = quote { foo   +   bar };\n";
+        let expected = "global x = quote { foo + bar };\n";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_with_statement_body() {
+        let src = "global x = quote { let  y   =    1 ;  };\n";
+        let expected = "global x = quote { let y = 1; };\n";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_wraps_single_line_body_when_formatted_form_is_multi_line() {
+        // If the formatted body can't fit on one line we lay the quote out across
+        // multiple lines even if the author wrote it on a single line — the result
+        // is more readable than packing a multi-statement block back onto one line.
+        let src = "comptime fn outside() -> Quoted {
+    quote { fn foo() {   1     } }
+}
+";
+        let expected = "comptime fn outside() -> Quoted {
+    quote {
+        fn foo() {
+            1
+        }
+    }
+}
+";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_keeps_multi_line_body_multi_line() {
+        // The author wrote the body across multiple lines; even though the formatted
+        // content fits on a single line, we keep the multi-line shape.
+        let src = "comptime fn outside() -> Quoted {
+    quote {
+        fn foo() {}
+    }
+}
+";
+        let expected = src;
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_keeps_short_parseable_body_on_one_line() {
+        // A short body that fits on a single line should not be split across multiple
+        // lines just because the formatter understands it.
+        let src = "comptime fn foo() -> Quoted {
+    quote { use $t; }
+}
+";
+        let expected = src;
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_with_dollar_placeholder_in_struct() {
+        let src = "pub comptime fn outside() -> Quoted {
+    quote {
+        struct Foo<$t>{
+            x : $t ,
+        }
+    }
+}
+";
+        let expected = "pub comptime fn outside() -> Quoted {
+    quote {
+        struct Foo<$t> {
+            x: $t,
+        }
+    }
+}
+";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_preserves_blank_lines_between_items() {
+        let src = "pub comptime fn outside() -> Quoted {
+    quote {
+        fn foo() {}
+
+        fn bar() {}
+    }
+}
+";
+        let expected = src;
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_quote_with_inner_comment() {
+        let src = "pub comptime fn outside() -> Quoted {
+    quote {
+        // a comment
+        fn body() -> Field {
+            1
+        }
+    }
+}
+";
+        let expected = src;
         assert_format(src, expected);
     }
 
@@ -2348,6 +2758,47 @@ global y = 1;
     1;
     2
 };
+";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_lambda_with_comment_between_parameters_and_body() {
+        // Regression test for https://github.com/noir-lang/noir-claude/issues/1646:
+        // the comment's terminating newline was dropped, so the lambda body was
+        // swallowed into the comment while the program still compiled.
+        let src = "fn main(x: Field, y: Field) {
+    let check = |v| // every checked value must equal y
+{ assert(v == y); };
+    check(x);
+}
+";
+        let expected = "fn main(x: Field, y: Field) {
+    let check = |v| // every checked value must equal y
+    { assert(v == y); };
+    check(x);
+}
+";
+        assert_format(src, expected);
+    }
+
+    #[test]
+    fn format_lambda_as_last_call_argument_with_comment_between_parameters_and_body() {
+        // Regression test for https://github.com/noir-lang/noir-claude/issues/1646.
+        // A lambda as the last call argument is formatted through a fast path that
+        // writes the group in one line, which is a separate way for the comment's
+        // terminating newline to be lost.
+        let src = "fn main() {
+    foo(1, |x| // doubles the input
+    {
+        x * 2
+    });
+}
+";
+        let expected = "fn main() {
+    foo(1, |x| // doubles the input
+    x * 2);
+}
 ";
         assert_format(src, expected);
     }

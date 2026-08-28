@@ -1,0 +1,51 @@
+[package]
+name = "noir_tracer_wasm"
+description = "wasm32 shell over `noir_tracer`: trace a compiled Noir program entirely in memory"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+acvm = { workspace = true, features = ["bn254"] }
+bn254_blackbox_solver.workspace = true
+noir_tracer.workspace = true
+noirc_abi.workspace = true
+noirc_artifacts.workspace = true
+nargo.workspace = true
+codetracer_trace_types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+# The `wasm-bindgen` binding, for a JS host. On by default.
+#
+# Turning it OFF leaves only the `extern "C"` entry points, which makes the
+# module **import-free** -- it then instantiates and runs in a bare WebAssembly
+# engine (wasmtime, or `WebAssembly.instantiate` with no import object). Nothing
+# in the tracing path actually needs an ambient capability: `getrandom`'s
+# `wasm_js` backend is reachable only from code the linker drops.
+default = ["js"]
+js = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true, optional = true }
+# Unused dependencies, present only to turn on features that the real users of
+# these crates need on wasm.  This is the idiom `compiler/wasm`,
+# `acvm-repo/acvm_js` and `tooling/noirc_abi_wasm` already use for `getrandom`
+# and `rust-embed`.
+#
+# `uuid` is pulled in by `codetracer_trace_types`, which mints the UUIDv7
+# `recording_id`.  On `wasm32-unknown-unknown` uuid refuses to compile without
+# an explicit source of randomness (`compile_error!` in `uuid::rng`), and it
+# cannot pick one itself because there is no ambient entropy on that target.
+uuid = { version = "1", features = ["js"] }
+console_error_panic_hook = { workspace = true, optional = true }
+getrandom = { workspace = true, features = ["wasm_js"] }
+getrandom_v2 = { package = "getrandom", version = "^0.2.0", features = ["js"] }
+getrandom_v4 = { package = "getrandom", version = "0.4.0-rc.0", features = ["wasm_js"] }

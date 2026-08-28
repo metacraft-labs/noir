@@ -55,7 +55,7 @@ fn run_with_generator<Generator: FlamegraphGenerator>(
         let function_name = if bytecode.functions.len() > 1 {
             format!("{}_{}", circuit.function_name.as_str(), func_idx)
         } else {
-            circuit.function_name.to_owned()
+            circuit.function_name.clone()
         };
 
         println!("Opcode count for {}: {}", function_name, circuit.opcodes.len());
@@ -78,8 +78,7 @@ fn run_with_generator<Generator: FlamegraphGenerator>(
             &debug_artifact,
             artifact_path.to_str().unwrap(),
             &function_name,
-            &Path::new(&output_path)
-                .join(Path::new(&format!("{}_acir_opcodes.svg", &function_name))),
+            &Path::new(&output_path).join(Path::new(&format!("{function_name}_acir_opcodes.svg"))),
         )?;
     }
 
@@ -113,7 +112,7 @@ fn run_with_generator<Generator: FlamegraphGenerator>(
                     brillig_index,
                 }],
                 count: 1,
-                brillig_function_id: Some(BrilligFunctionId(brillig_fn_index as u32)),
+                brillig_function_id: Some(BrilligFunctionId::new(brillig_fn_index as u32)),
             })
             .collect();
 
@@ -153,9 +152,10 @@ mod tests {
     use acir::{
         FieldElement,
         circuit::{
-            Circuit, ExpressionWidth, Opcode, Program,
+            Circuit, Opcode, Program,
             brillig::{BrilligBytecode, BrilligFunctionId},
         },
+        native_types::Expression,
     };
     use color_eyre::eyre;
     use fm::codespan_files::Files;
@@ -207,7 +207,6 @@ mod tests {
             },
             debug_symbols: ProgramDebugInfo { debug_infos: vec![DebugInfo::default()] },
             file_map: BTreeMap::default(),
-            expression_width: ExpressionWidth::Bounded { width: 4 },
         };
 
         // Write the artifact to a file
@@ -232,22 +231,22 @@ mod tests {
 
         let acir: Vec<Opcode<FieldElement>> = vec![
             Opcode::BrilligCall {
-                id: BrilligFunctionId(0),
+                id: BrilligFunctionId::new(0),
                 inputs: vec![],
                 outputs: vec![],
-                predicate: None,
+                predicate: Expression::one(),
             },
             Opcode::BrilligCall {
-                id: BrilligFunctionId(1),
+                id: BrilligFunctionId::new(1),
                 inputs: vec![],
                 outputs: vec![],
-                predicate: None,
+                predicate: Expression::one(),
             },
             Opcode::BrilligCall {
-                id: BrilligFunctionId(2),
+                id: BrilligFunctionId::new(2),
                 inputs: vec![],
                 outputs: vec![],
-                predicate: None,
+                predicate: Expression::one(),
             },
         ];
 
@@ -272,7 +271,6 @@ mod tests {
             },
             debug_symbols: ProgramDebugInfo { debug_infos: vec![DebugInfo::default()] },
             file_map: BTreeMap::default(),
-            expression_width: ExpressionWidth::Bounded { width: 4 },
         };
 
         // Write the artifact to a file

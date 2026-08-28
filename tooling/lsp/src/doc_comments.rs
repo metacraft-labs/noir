@@ -5,7 +5,7 @@ use noirc_frontend::{Type, hir::def_map::ModuleId, node_interner::ReferenceId};
 
 use crate::requests::ProcessRequestCallbackArgs;
 
-/// Given a ReferenceId, returns the ModuleId it belongs to along with whether it represents
+/// Given a `ReferenceId`, returns the `ModuleId` it belongs to along with whether it represents
 /// a `CurrentType`.
 pub(crate) fn current_module_and_type(
     id: ReferenceId,
@@ -14,8 +14,13 @@ pub(crate) fn current_module_and_type(
     match id {
         ReferenceId::Module(module_id) => {
             let parent_module =
-                get_parent_module(ModuleDefId::ModuleId(module_id), args.interner, args.def_maps)?;
-            Some((parent_module, None))
+                get_parent_module(ModuleDefId::ModuleId(module_id), args.interner, args.def_maps);
+            if let Some(parent_module) = parent_module {
+                Some((parent_module, None))
+            } else {
+                // If there's no parent module, it means we are in the crate root module
+                Some((module_id, None))
+            }
         }
         ReferenceId::Type(type_id)
         | ReferenceId::StructMember(type_id, _)

@@ -7,13 +7,13 @@ use crate::{
 use super::{Parser, parse_many::without_separator};
 
 impl Parser<'_> {
-    /// InnerDocComments = inner_doc_comment*
+    /// `InnerDocComments` = `inner_doc_comment`*
     pub(super) fn parse_inner_doc_comments(&mut self) -> Vec<DocComment> {
         self.parse_many("inner doc comments", without_separator(), Self::parse_inner_doc_comment)
     }
 
     fn parse_inner_doc_comment(&mut self) -> Option<DocComment> {
-        self.eat_kind(TokenKind::InnerDocComment).map(|token| {
+        self.eat_kind(&TokenKind::InnerDocComment).map(|token| {
             let location = token.location();
             match token.into_token() {
                 Token::LineComment(comment, Some(DocStyle::Inner)) => {
@@ -21,7 +21,7 @@ impl Parser<'_> {
                     DocComment::from(location, comment)
                 }
                 Token::BlockComment(comment, Some(DocStyle::Inner)) => {
-                    let comment = fix_block_comment(comment);
+                    let comment = fix_block_comment(&comment);
                     DocComment::from(location, comment)
                 }
                 _ => unreachable!(),
@@ -29,14 +29,14 @@ impl Parser<'_> {
         })
     }
 
-    /// OuterDocComments = OuterDocComment*
+    /// `OuterDocComments` = `OuterDocComment`*
     pub(super) fn parse_outer_doc_comments(&mut self) -> Vec<DocComment> {
         self.parse_many("outer doc comments", without_separator(), Self::parse_outer_doc_comment)
     }
 
-    /// OuterDocComment = outer_doc_comment
+    /// `OuterDocComment` = `outer_doc_comment`
     pub(super) fn parse_outer_doc_comment(&mut self) -> Option<DocComment> {
-        self.eat_kind(TokenKind::OuterDocComment).map(|token| {
+        self.eat_kind(&TokenKind::OuterDocComment).map(|token| {
             let location = token.location();
             match token.into_token() {
                 Token::LineComment(comment, Some(DocStyle::Outer)) => {
@@ -44,7 +44,7 @@ impl Parser<'_> {
                     DocComment::from(location, comment)
                 }
                 Token::BlockComment(comment, Some(DocStyle::Outer)) => {
-                    let comment = fix_block_comment(comment);
+                    let comment = fix_block_comment(&comment);
                     DocComment::from(location, comment)
                 }
                 _ => unreachable!(),
@@ -78,15 +78,8 @@ fn fix_line_comment(comment: String) -> String {
 }
 
 /// Strips leading '*' from a block comment if all non-empty lines have it.
-fn fix_block_comment(comment: String) -> String {
-    let all_stars = comment.lines().enumerate().all(|(index, line)| {
-        if index == 0 || line.trim().is_empty() {
-            // The first line never has a star. Then we ignore empty lines.
-            true
-        } else {
-            line.trim_start().starts_with('*')
-        }
-    });
+fn fix_block_comment(comment: &str) -> String {
+    let all_stars = block_comment_has_all_leading_stars(comment);
 
     let mut fixed_comment = String::new();
     for (index, line) in comment.lines().enumerate() {
@@ -94,11 +87,9 @@ fn fix_block_comment(comment: String) -> String {
             fixed_comment.push('\n');
         }
 
-        if all_stars {
-            if let Some(line) = line.trim_start().strip_prefix("*") {
-                fixed_comment.push_str(line.strip_prefix(' ').unwrap_or(line));
-                continue;
-            }
+        if all_stars && let Some(line) = line.trim_start().strip_prefix("*") {
+            fixed_comment.push_str(line.strip_prefix(' ').unwrap_or(line));
+            continue;
         }
 
         if let Some(line) = line.strip_prefix(' ') {
@@ -109,6 +100,18 @@ fn fix_block_comment(comment: String) -> String {
         fixed_comment.push_str(line);
     }
     fixed_comment.trim().to_string()
+}
+
+/// Returns true if a block comment has a '*' at the start of every non-empty line.
+pub fn block_comment_has_all_leading_stars(comment: &str) -> bool {
+    comment.lines().enumerate().all(|(index, line)| {
+        if index == 0 || line.trim().is_empty() {
+            // The first line never has a star. Then we ignore empty lines.
+            true
+        } else {
+            line.trim_start().starts_with('*')
+        }
+    })
 }
 
 #[cfg(test)]

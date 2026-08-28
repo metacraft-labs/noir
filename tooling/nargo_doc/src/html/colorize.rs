@@ -151,9 +151,9 @@ fn colorize_token(token: &LocatedToken, line: &str, result: &mut String) {
         | Token::Minus
         | Token::Star
         | Token::Slash
+        | Token::Backslash
         | Token::Percent
         | Token::Ampersand
-        | Token::DeprecatedVectorStart
         | Token::At
         | Token::Caret
         | Token::ShiftLeft
