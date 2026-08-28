@@ -23,7 +23,7 @@ pub mod tail_diff_vecs;
 use tail_diff_vecs::tail_diff_vecs;
 
 pub mod sink;
-pub use sink::TraceSink;
+pub use sink::{SOURCE_VIEW_KIND_RAW, TraceSink};
 
 use acvm::acir::circuit::brillig::{BrilligBytecode, BrilligFunctionId};
 use acvm::{AcirField, BlackBoxFunctionSolver, FieldElement};
@@ -34,7 +34,7 @@ use noir_debugger::context::{DebugCommandResult, DebugContext};
 use noir_debugger::foreign_calls::DefaultDebugForeignCallExecutor;
 use noirc_artifacts::debug::DebugArtifact;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -409,7 +409,8 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
     TraceSink::enable_column_motions_support(tracer);
 
     // Register every Noir source file the debugger knows about
-    // together with its per-line byte-length table.  The Nim writer
+    // together with its per-line byte-length table *and its source
+    // text*.  The Nim writer
     // ignores `register_path_with_line_lengths` for paths it has
     // already interned, so this has to happen before any
     // `register_step` / `start` call lands.  Skipping the
@@ -427,6 +428,7 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
     // on a path with no `line_lengths`, surfacing the raw byte cursor
     // as a fake line.
     let debug_artifact = tracing_context.debug_context.debug_artifact();
+    let mut registered_paths: HashSet<PathBuf> = HashSet::new();
     for debug_file in debug_artifact.file_map.values() {
         // Noir injects a synthetic `__debug/lib.nr` helper crate to
         // back its `__debug_*` builtins.  The debugger filters those
@@ -447,9 +449,60 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
         // which makes the column decoder fall back to the raw byte
         // cursor as a fake line.
         let path: PathBuf = options.strip(&debug_file.path);
+        if !registered_paths.insert(path.clone()) {
+            // Two `FileId`s resolving to the same stripped path: the writer
+            // would ignore the re-registration, and embedding the source a
+            // second time would put a duplicate view in `source_views.dat`.
+            continue;
+        }
         let line_lengths = compute_line_lengths(&debug_file.source);
         if let Err(err) = TraceSink::register_path_with_line_lengths(tracer, &path, &line_lengths) {
             warn!("register_path_with_line_lengths failed for {}: {err}", path.display());
+            continue;
+        }
+
+        // Embed the source text itself, so the container satisfies the
+        // format's self-containment guarantee: a trace "includes all source
+        // code and debug symbols needed for executing the replay on a
+        // different machine from where the program was built and recorded"
+        // (`codetracer-specs/Trace-Files/Trace-Files-Overview.md`), and the
+        // seek-based reader resolves a source line from "the trace's embedded
+        // source files" (`Trace-Files/Seek-Based-CTFS-Reader.md`).  Until this
+        // call existed the loop computed `line_lengths` *from* the source and
+        // then dropped the source on the floor, so `ct-print --full` reported
+        // `source_views: []` and a viewer handed only the `.ct` stepped
+        // correctly through code it could not display.
+        //
+        // This is unconditional on purpose.  A self-contained container is the
+        // format's contract, not a mode; making it a flag would only create a
+        // way to record the broken thing again.  (Web delivery separately
+        // de-duplicates source across traces sharing a code hash via the
+        // content-addressed bundles at `/src/{chain}/{codeHash}/{bundleHash}
+        // .json` — Trace-Artifacts §2.5 / Source-Resolution §5.  That is a
+        // transport optimisation layered on top, not a substitute: a
+        // downloaded `.ct` has no bundle server to ask.)
+        //
+        // `debug_file.source` is the exact text the compiler compiled, held in
+        // the `DebugArtifact`'s file map.  We deliberately do NOT re-read the
+        // file from disk: what is on disk now can differ from what was
+        // compiled, and there is no filesystem under wasm.
+        //
+        // The same workdir-stripped `path` is used as for the line-length
+        // registration above, for the same identity reason: the view has to
+        // hang off the very path id that `register_step` later interns, or the
+        // reader would look for the source of one path and find it filed under
+        // another.
+        if let Err(err) = TraceSink::register_source_view(
+            tracer,
+            &path,
+            SOURCE_VIEW_KIND_RAW,
+            &path.to_string_lossy(),
+            debug_file.source.as_bytes(),
+            // No sourcemap: this is the original text, not a reformatting of
+            // it, so generated and original positions coincide.
+            &[],
+        ) {
+            warn!("register_source_view failed for {}: {err}", path.display());
         }
     }
 

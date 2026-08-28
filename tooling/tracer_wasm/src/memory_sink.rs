@@ -58,8 +58,28 @@ pub struct MemoryTrace {
     /// `paths.dat` Layout A needs these to recover columns; nothing in the
     /// low-level event stream carries them, so they are kept alongside.
     pub line_lengths: Vec<Vec<u32>>,
+    /// The source text of each registered path, in registration order — the
+    /// in-memory stand-in for the container's `source_views.dat`. Kept so a
+    /// wasm-side recording can still be turned into a *self-contained*
+    /// container by the host; see [`MemorySink::register_source_view`].
+    pub source_views: Vec<SourceView>,
     pub capabilities: Capabilities,
     pub workdir: Option<PathBuf>,
+}
+
+/// One embedded view of a source path (spec §"Alternate Source Views").
+///
+/// For Noir this is always the verbatim compiled text
+/// (`view_kind == noir_tracer::SOURCE_VIEW_KIND_RAW`, empty `sourcemap`), but
+/// the record mirrors the writer's full shape so a host encoder can forward it
+/// unchanged.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SourceView {
+    pub path_id: PathId,
+    pub view_kind: u8,
+    pub view_name: String,
+    pub content: Vec<u8>,
+    pub sourcemap: Vec<u8>,
 }
 
 pub struct MemorySink {
@@ -197,6 +217,34 @@ impl TraceSink for MemorySink {
             line,
         }));
         id
+    }
+
+    /// Keep the embedded source text alongside the event stream.
+    ///
+    /// Nothing in `TraceLowLevelEvent` can carry it (the CTFS
+    /// `source_views.dat` stream has no low-level-event equivalent), so it
+    /// lands in `MemoryTrace::source_views` next to `line_lengths`, which is
+    /// there for the same reason. A host that later encodes a container feeds
+    /// these to the writer's `register_source_view` so the wasm-recorded
+    /// container is as self-contained as the native one.
+    fn register_source_view(
+        &mut self,
+        path: &Path,
+        view_kind: u8,
+        view_name: &str,
+        content: &[u8],
+        sourcemap: &[u8],
+    ) -> Result<u64, Box<dyn Error>> {
+        let path_id = self.ensure_path_id(path);
+        let index = self.trace.source_views.len() as u64;
+        self.trace.source_views.push(SourceView {
+            path_id,
+            view_kind,
+            view_name: view_name.to_string(),
+            content: content.to_vec(),
+            sourcemap: sourcemap.to_vec(),
+        });
+        Ok(index)
     }
 
     fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId {

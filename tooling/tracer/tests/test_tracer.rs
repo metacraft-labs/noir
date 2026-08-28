@@ -940,3 +940,156 @@ fn test_while_loop_body_assignments_are_recorded() {
          stopped after the four entry bindings"
     );
 }
+
+// ===========================================================================
+// Self-containment: the container must carry the source it recorded
+// ===========================================================================
+
+/// Every source path the recording mentions must have its **text** embedded
+/// in the container.
+///
+/// The trace format's central portability promise is that a trace "is
+/// self-contained in that it includes all source code and debug symbols
+/// needed for executing the replay on a different machine from where the
+/// program was built and recorded"
+/// (`codetracer-specs/Trace-Files/Trace-Files-Overview.md`), and the
+/// seek-based reader is specified against "the trace's embedded source files"
+/// (`Trace-Files/Seek-Based-CTFS-Reader.md`).
+///
+/// Until `trace_circuit` called `register_source_view`, `nargo trace`
+/// containers reported `source_views: []`: the recorder read
+/// `DebugFile::source` only to compute the per-line length table and then
+/// dropped it. Every other gate in this repository still passed — the
+/// manifest validated, the steps replayed, `ct-print` succeeded — because
+/// none of them ever asked whether the code being stepped through could be
+/// *displayed*. This test is the gate that asks.
+///
+/// `a_3_two_files` is the fixture of choice: three separate `.nr` files, so
+/// the test pins not just "some source is present" but that each file's text
+/// is filed under its own path id. A single-file fixture would pass even if
+/// every view were attached to path 0.
+///
+/// ## What is and is not checked here
+///
+/// `ct-print --full` deliberately does not inline the view bytes (they would
+/// swamp the JSON), so it surfaces `path_id`, `view_kind`, `view_name`,
+/// `content_len` and `map_len`. This test therefore pins the exact byte
+/// length of each view against the file on disk, plus the view→path
+/// attribution and the view kind. Byte-for-byte content round-tripping
+/// through `source_views.dat` is covered on the writer side by
+/// `codetracer-trace-format-nim/tests/test_source_views.nim`.
+///
+/// Comparing against the on-disk file is sound *here* because the fixture is
+/// compiled from that file moments earlier in this same test. The recorder
+/// itself must never re-read from disk — it embeds `DebugFile::source`, the
+/// text the compiler actually consumed, because a working tree can drift from
+/// what was compiled and because there is no filesystem under wasm.
+#[test]
+fn test_source_views_embed_the_compiled_source() {
+    const NAME: &str = "test_source_views_embed_the_compiled_source";
+    const FIXTURE: &str = "a_3_two_files";
+
+    // Note the `panic!` rather than the `return` the other tests use. Those
+    // honour the `CODETRACER_TRACER_TESTS_ALLOW_SKIP` opt-out; this one does
+    // not, on purpose. A silently-skipped assertion is exactly the failure
+    // mode that let empty `source_views` ship, and the whole point of this
+    // test is to be un-skippable.
+    let Some(doc) = record_and_dump_full(NAME, FIXTURE) else {
+        panic!(
+            "{NAME} must not be skipped. Unlike the other tests here it \
+             ignores CODETRACER_TRACER_TESTS_ALLOW_SKIP: a trace with no \
+             embedded source is the defect this test exists to catch, and a \
+             skipped run reports exactly what a broken run would."
+        )
+    };
+
+    let paths = string_array(&doc, "paths");
+    let views = doc["source_views"].as_array().expect("`source_views` should be a JSON array");
+
+    // ---- the container is self-contained ------------------------------------
+    assert!(
+        !views.is_empty(),
+        "{FIXTURE}: `source_views` is empty — the container steps through code \
+         it cannot display. paths={paths:?}"
+    );
+    assert_eq!(
+        doc["metadata"]["flags"]["has_alternate_source_views"].as_bool(),
+        Some(true),
+        "meta.dat capability flag bit 5 (FlagHasAlternateSourceViews) must be \
+         set once source views exist; flags={}",
+        doc["metadata"]["flags"]
+    );
+    assert_eq!(
+        doc["counts"]["source_views"].as_u64(),
+        Some(paths.len() as u64),
+        "{FIXTURE}: expected one embedded source per registered path \
+         (paths={paths:?}), got {} view(s): {views:?}",
+        views.len()
+    );
+
+    // ---- each view is a raw, sourcemap-less view of a distinct path ---------
+    let mut seen_path_ids: Vec<u64> = Vec::new();
+    for view in views {
+        let path_id = view["path_id"].as_u64().expect("source_view.path_id");
+        assert!(
+            path_id < paths.len() as u64,
+            "source view names path_id {path_id} but the trace has only {} \
+             path(s): {paths:?}",
+            paths.len()
+        );
+        assert!(
+            !seen_path_ids.contains(&path_id),
+            "path_id {path_id} has more than one embedded source view: {views:?}"
+        );
+        seen_path_ids.push(path_id);
+
+        // 0 = raw: Noir embeds the compiled text verbatim, so there is nothing
+        // to map generated positions back through.
+        assert_eq!(view["view_kind"].as_u64(), Some(0), "view_kind should be raw; {view}");
+        assert_eq!(view["map_len"].as_u64(), Some(0), "a raw view carries no sourcemap; {view}");
+        assert!(
+            view["content_len"].as_u64().expect("source_view.content_len") > 0,
+            "embedded source must not be empty; {view}"
+        );
+    }
+
+    // ---- the text is the fixture's, and lands on the right path -------------
+    // Matching on the trailing `src/<file>` rather than on the whole string
+    // keeps this independent of how `--strip-paths` rewrites prefixes.
+    let src_dir = trace_fixture(FIXTURE).join("src");
+    let mut compared = 0usize;
+    for file in ["main.nr", "foo.nr", "bar.nr"] {
+        let suffix = format!("src/{file}");
+        let on_disk = std::fs::read(src_dir.join(file))
+            .unwrap_or_else(|err| panic!("reading {}/{file}: {err}", src_dir.display()));
+
+        let view = views
+            .iter()
+            .find(|v| v["view_name"].as_str().is_some_and(|n| n.ends_with(&suffix)))
+            .unwrap_or_else(|| panic!("no embedded source view for {suffix}; views={views:?}"));
+
+        assert_eq!(
+            view["content_len"].as_u64(),
+            Some(on_disk.len() as u64),
+            "embedded source for {suffix} must be the compiled text \
+             ({} bytes on disk); view={view}",
+            on_disk.len()
+        );
+
+        // The view has to hang off the same path id `register_step` interns,
+        // or a reader looking up the source of one file finds another's.
+        let path_id = view["path_id"].as_u64().expect("source_view.path_id") as usize;
+        assert!(
+            paths[path_id].ends_with(&suffix),
+            "source view for {suffix} is filed under path_id {path_id}, which \
+             is {:?}",
+            paths[path_id]
+        );
+        compared += 1;
+    }
+    assert_eq!(
+        compared, 3,
+        "{FIXTURE} has three source files; all three must have been compared \
+         against their on-disk bytes"
+    );
+}

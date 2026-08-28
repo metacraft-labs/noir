@@ -175,6 +175,35 @@ fn records_capabilities_paths_and_line_lengths() {
     // from `DebugArtifact.file_map`, in memory, with no file read.
     assert!(!t.line_lengths[0].is_empty());
 
+    // ...and so was the source text itself, from the same in-memory
+    // `DebugFile::source`. Without it a host encoding a container from this
+    // trace would produce one that steps through code it cannot display; see
+    // `noir_tracer::TraceSink::register_source_view`.
+    assert_eq!(t.source_views.len(), t.paths.len(), "one embedded source per path");
+    let view = &t.source_views[0];
+    assert_eq!(view.path_id.0, 0, "the view must be filed under its own path id");
+    assert_eq!(view.view_kind, noir_tracer::SOURCE_VIEW_KIND_RAW);
+    assert!(view.sourcemap.is_empty(), "raw views carry no sourcemap");
+    let compiled = String::from_utf8(view.content.clone()).expect("Noir source is UTF-8");
+    assert!(
+        compiled.contains("fn main"),
+        "the embedded text must be the compiled a_1_mul source; got {compiled:?}"
+    );
+    assert_eq!(
+        view.content.len(),
+        // `compute_line_lengths` excludes the terminator from each line's
+        // count, so summing it and adding the newlines back must reproduce the
+        // byte length of the text the view carries. This is what ties the two
+        // derivations to the *same* path id: a view filed under the wrong path
+        // would disagree here.
+        {
+            let lens: usize = t.line_lengths[0].iter().map(|n| *n as usize).sum();
+            let newlines = compiled.matches('\n').count();
+            lens + newlines
+        },
+        "line_lengths and the embedded source must describe the same text"
+    );
+
     // No workdir was supplied, so none was recorded -- the recorder no longer
     // invents one from `std::env::current_dir()`.
     assert_eq!(t.workdir, None);

@@ -16,7 +16,7 @@
 //! ```
 
 pub mod memory_sink;
-pub use memory_sink::{Capabilities, MemorySink, MemoryTrace};
+pub use memory_sink::{Capabilities, MemorySink, MemoryTrace, SourceView};
 
 use acvm::FieldElement;
 use bn254_blackbox_solver::Bn254BlackBoxSolver;
