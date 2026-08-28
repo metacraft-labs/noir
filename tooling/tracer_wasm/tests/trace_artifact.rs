@@ -73,7 +73,13 @@ fn debug_artifact_for(test_name: &str, fixture: &str) -> Option<(String, String)
         return None;
     }
 
-    let tmp = std::env::temp_dir().join(format!("noir_tracer_wasm_{fixture}"));
+    // Per-*test* scratch dir, not per-fixture: three tests here compile
+    // `a_1_mul`, cargo runs them in parallel by default, and they were all
+    // writing `artifact.json` at the same shared path. The reader then saw one
+    // `nargo` process's JSON with another's tail spliced on
+    // ("trailing characters at line 1 column ..."), which looks like a tracer
+    // defect and is not one.
+    let tmp = std::env::temp_dir().join(format!("noir_tracer_wasm_{test_name}_{fixture}"));
     std::fs::create_dir_all(&tmp).expect("temp dir");
     let artifact_path = tmp.join("artifact.json");
     let out = Command::new(&nargo)
