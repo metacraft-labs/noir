@@ -16,12 +16,28 @@ use tracing_web::MakeWebConsoleWriter;
 
 mod compile;
 mod compile_new;
+mod compile_vfs;
 mod errors;
+pub mod vfs;
 
 pub use compile::{compile_contract, compile_program};
 
 // Expose the new Context-Centric API
 pub use compile_new::{CompilerContext, CrateIDWrapper, compile_contract_, compile_program_};
+
+// Compiling a package TREE that lives in memory: `Nargo.toml` honoured, local `path`
+// dependencies resolved inside the virtual filesystem, `git` dependencies refused by name.
+// See `src/vfs.rs`.
+pub use compile_vfs::{
+    VfsRequest, VfsResponse, compile_contract_from_vfs, compile_program_from_vfs, resolve_vfs_plan,
+    run_request, run_request_json,
+};
+
+// The bare `nv_*` C ABI. Re-exported rather than left inside a private module so that
+// `unreachable_pub` is satisfied by the entry points being genuinely reachable, which is
+// what they are: they are the module's exports.
+#[cfg(target_arch = "wasm32")]
+pub use compile_vfs::abi;
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 
 #[derive(Serialize, Deserialize)]
