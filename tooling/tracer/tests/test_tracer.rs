@@ -42,6 +42,111 @@
 //! Round 2 (MN+1 in the spec) will add struct destructuring,
 //! BoundedVec, generics, oracle calls, std::hash, std::ec, recursion
 //! and Aztec.nr contract constructs.
+//!
+//! ==========================================================================
+//! READ THIS BEFORE YOU DIAGNOSE A FAILURE HERE. As of 2026-08-30, on the
+//! reconciled `blocktracer` (1.0.0-beta.26), **all six tests pass — and that is
+//! not the same statement as "the three known defects were fixed".** One was
+//! fixed, one was repinned, and one turned out to be a defect in the test
+//! rather than in the recorder. The account is at the bottom of this block; do
+//! not read the six greens as six answers.
+//!
+//! HOW TO BUILD AND RUN THEM. The only obstacle is that
+//! `codetracer_trace_writer_nim`'s `build.rs` compiles a Nim static library at
+//! build time and therefore needs the Nim toolchain on `PATH`. `noir` has no
+//! `.envrc` of its own, so borrow the writer's:
+//!
+//!     direnv exec ../codetracer-trace-format \
+//!         cargo test -p noir_tracer --test test_tracer
+//!
+//! or, without a dev shell, skip the `nimble install --depsOnly` step the
+//! build script runs (its own doc comment names the variable):
+//!
+//!     CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL=1 \
+//!         cargo build -p nargo_cli --bin nargo
+//!     CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL=1 \
+//!         cargo test -p noir_tracer --test test_tracer
+//!
+//! **Rebuild `nargo` before you trust a result.** These tests SPAWN the
+//! workspace `nargo` binary; `cargo test -p noir_tracer` does not rebuild it.
+//! A stale `nargo` is how a baseline measurement was got wrong once already —
+//! reverting `tracer_glue.rs` and re-running `cargo test` measured the OLD
+//! expectations against the NEW recorder and produced an attribution that was
+//! exactly backwards. Take baselines in a separate `git worktree`.
+//!
+//! WHAT WAS REPINNED HERE, AND WHY EACH ONE MOVED. Every count below was
+//! measured, and the two causes are separated because they belong to different
+//! people:
+//!
+//!   * `counts["values"]` and `events.len()` in all five fixtures, and the
+//!     column list in `test_multi_stmt_per_line_column_aware`: **not this
+//!     repository's change.** `noir/Cargo.toml:144` resolves
+//!     `codetracer_trace_writer` to `codetracer_trace_writer_nim` in the
+//!     sibling `codetracer-trace-format` checkout **by bare path, at no pinned
+//!     revision**, and that checkout has moved 45 commits since this file was
+//!     last touched. `register_step_with_column`'s own doc comment there now
+//!     reads: *"Current split-stream traces therefore carry one absolute step
+//!     at the requested `(line, column)` instead of an intermediate column-1
+//!     step plus a separate delta step."* That is `[1, 9, 1, 27, 1, 45]`
+//!     becoming `[9, 27, 45]`, and it is `values` going from `2·steps - 1` to
+//!     `steps` (19 -> 10, 33 -> 17, 21 -> 11, 155 -> 78, 47 -> 24).
+//!
+//!   * `counts["types"]` and the `types` table in `a_2_function_calls`,
+//!     `assert` and `types_test`: **this repository's change, and it was not
+//!     declared.** Rendering a `Field` as `ValueRecord::String` instead of
+//!     `ValueRecord::Int` removes exactly ONE type-table entry — the nameless
+//!     companion that gets registered for a `TypeKind::Int` type the first
+//!     time it carries an `Int` VALUE. Measured across three fixtures in a
+//!     clean worktree: `assert` `[None, Field, type_1]` -> `[None, Field]`,
+//!     `a_2_function_calls` `[None, Field, type_1, ()]` -> `[None, Field, ()]`,
+//!     and `types_test` loses the entry after `Field` while the two companions
+//!     after `u32` and `i8` survive and renumber (`type_3` -> `type_2`,
+//!     `type_6` -> `type_5`). `a_1_mul`, whose only companion follows `u32`,
+//!     is untouched. So the rendering change is NOT type-table-neutral, and
+//!     `tracer_glue.rs`'s claim that a `Field` stays "under the SAME
+//!     `(TypeKind::Int, "Field")` type record" is true of the TYPE and not of
+//!     the TABLE.
+//!
+//! THE THREE THAT WERE RED, RE-MEASURED ACROSS THE RECONCILIATION (2026-08-30).
+//! Both sides were measured, in separate worktrees, with `nargo` REBUILT for
+//! each and with `CODETRACER_NARGO_BIN` / `CODETRACER_CT_PRINT_BIN` set — see
+//! the skip warning below, which is why "6 passed in 0.00 s" is not a result.
+//!
+//! Baseline, `blocktracer` @ `4d2381630` (1.0.0-beta.18): **3 pass / 3 fail.**
+//! Reconciled, this tree (1.0.0-beta.26): **6 pass / 0 fail.** The three greens
+//! have three different meanings and they must not be collapsed into one:
+//!
+//!   1. `test_a_1_mul_via_ct_print_full` — **REPINNED, NOT FIXED, AND THE PIN
+//!      NO LONGER SAYS SO.** The question was which step a stepper should stop
+//!      on: the pin wanted `[None, None, None, Some(3), …]` and the recorder
+//!      produced `[None, None, Some(3), …]`. Upstream's rewritten SSA pipeline
+//!      changed step granularity, so the sequence is now fourteen entries with
+//!      every value doubled, and the reconciliation branch re-pinned it to
+//!      exactly what the tree emits — two leading `None`s, not three. The
+//!      *comparison* is still exact and still capable of failing; what is gone
+//!      is the record that the expectation was ever in doubt. It is in doubt.
+//!      `register_call` fires before the parameters are bound, which is the
+//!      explanation for two, and nothing has established that two is right.
+//!   2. `test_a_2_function_calls_via_ct_print_full` — **STILL A RECORDER
+//!      DEFECT, AND NOW PINNED AS ONE.** `("main", 142)` in a thirteen-line
+//!      file is what the recorder emits at beta.18 and at beta.26 alike, so the
+//!      reconciliation moved nothing. The reconciliation branch re-pinned it
+//!      into the expected sequence with no comment, which is exactly the
+//!      "a repin writes a recorder defect into a test" hazard. The pin is kept,
+//!      because the sequence assertion has to compare against what the tree
+//!      emits — but it is now declared: `test_a_2_last_step_line_is_the_known
+//!      _out_of_range_defect` asserts the defect is STILL THERE and names the
+//!      file's real length, so fixing the recorder trips this file instead of
+//!      passing silently. That is the same shape the line-3 gap below uses.
+//!   3. `test_multi_stmt_per_line_column_aware` — **RETIRED, AND IT WAS A
+//!      DEFECT IN THE TEST.** The assertion looked for a step on **line 4**;
+//!      the `assert(a + b + c == 6);` it is about is on **line 3**. It never
+//!      reached its own assertion, because an earlier one in the same test
+//!      always failed first. The reconciliation branch found the off-by-one and
+//!      replaced it with a pin on the real gap — line 3 produces no step of its
+//!      own — written so that fixing the gap trips the test. So the third red
+//!      was never a recorder defect at all.
+//! ==========================================================================
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -61,8 +166,19 @@ use std::process::Command;
 /// the sibling repositories — see `CARRY-VS-UPSTREAM.md` §5), that is a
 /// green suite proving the tracer works while never once running it.
 ///
+/// AND IT WAS MEASURED, not reasoned about. `cargo test` CAPTURES stderr for a
+/// test that PASSES, so the `SKIP:` line this file used to print — written
+/// precisely to make skipping loud — was the one thing the runner swallowed.
+/// Reproduced on 2026-08-30 with `CARGO_TARGET_DIR` pointed away from the
+/// worktree: `test result: ok. 6 passed; 0 failed` in **0.00 s**, over a tree
+/// whose real result is 3 pass / 3 fail. The elapsed time was the only thing on
+/// the screen that said so, which is why a baseline taken in 0.00 s over tests
+/// that SPAWN a compiler is not a baseline.
+///
 /// Set `CODETRACER_TRACER_TESTS_ALLOW_SKIP=1` to get the old behaviour
-/// locally. Never set it in CI.
+/// locally. Never set it in CI — a run under that variable still reports
+/// `ok. N passed` with nothing in the summary line marking it vacuous, so it
+/// inherits the whole original defect.
 fn skipping_allowed() -> bool {
     matches!(std::env::var("CODETRACER_TRACER_TESTS_ALLOW_SKIP").as_deref(), Ok("1") | Ok("true"))
 }
@@ -298,6 +414,38 @@ fn assert_path_strip_normalised(doc: &serde_json::Value, fixture: &str) {
     );
 }
 
+/// A `Field`-typed value's small integer, decoded from the rendering `tracer_glue.rs` now uses.
+///
+/// **THE SHAPE IS ASSERTED, NOT TOLERATED.** A `Field` is 254 bits and no longer arrives as
+/// `ValueRecord::Int`: `aztec-avm-runtime/SOURCE-MAPPING.md` §4 settled the rendering by measuring
+/// five candidates against both pinned readers, and the verdict is `0x` + 64 lowercase big-endian
+/// hex in `ValueRecord::String`, under the same `(TypeKind::Int, "Field")` type record, so that one
+/// field element has one spelling on both sides of a joined Aztec recording. This helper therefore
+/// asserts the variant, the `0x` prefix, the FIXED 66-character width (no leading-zero stripping)
+/// and lowercase hex before it decodes anything — a helper that merely parsed the number would let
+/// the rendering drift back without a test noticing.
+///
+/// It also asserts the top 48 hex digits are zero, which is what makes returning an `i64` honest:
+/// these fixtures' fields are small, and a value that had grown past 64 bits would fail here rather
+/// than be silently truncated the way `to_i128() as i64` used to truncate it.
+fn field_small_int(v: &serde_json::Value) -> i64 {
+    assert_eq!(
+        v["kind"].as_str(),
+        Some("String"),
+        "a Field renders as ValueRecord::String; see tracer_glue.rs's Field arm: {v}"
+    );
+    let text = v["text"].as_str().expect("a Field's String carries text");
+    assert_eq!(text.len(), 66, "0x + 64 hex, fixed width: {text}");
+    assert!(text.starts_with("0x"), "a Field is 0x-prefixed: {text}");
+    let body = &text[2..];
+    assert!(
+        body.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "lowercase hex only: {text}"
+    );
+    assert!(body[..48].chars().all(|c| c == '0'), "this fixture's Field fits in 64 bits: {text}");
+    i64::from_str_radix(&body[48..], 16).expect("the low 64 bits parse")
+}
+
 // ===========================================================================
 // Round 1 fixtures
 // ===========================================================================
@@ -443,7 +591,7 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(3), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(2), "varnames; counts={counts}");
-    assert_eq!(counts["types"].as_u64(), Some(4), "types; counts={counts}");
+    assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
     // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
     assert_eq!(counts["steps"].as_u64(), Some(20), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
@@ -452,7 +600,7 @@ fn test_a_2_function_calls_via_ct_print_full() {
 
     assert_eq!(string_array(&doc, "functions"), vec!["main", "foo", "bar"]);
     assert_eq!(string_array(&doc, "varnames"), vec!["x", "y"]);
-    assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "type_1", "()"]);
+    assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "()"]);
     assert_path_strip_normalised(&doc, "a_2_function_calls");
 
     // 5 call_entry + 20 step events + 5 call_exit = 30 wire-level events.
@@ -526,6 +674,93 @@ fn test_a_2_function_calls_via_ct_print_full() {
         .map(|e| e["return_value"]["r"].as_str().unwrap_or("<missing>"))
         .collect();
     assert_eq!(foo_exits, vec!["()", "()"]);
+}
+
+/// THE `("main", 142)` DEFECT, PINNED AS A DEFECT RATHER THAN SWALLOWED BY THE
+/// SEQUENCE ABOVE.
+///
+/// `a_2_function_calls/src/main.nr` is **thirteen lines long** and the recorder
+/// records its last step at **line 142**. Measured on both sides of the 2026-08
+/// upstream reconciliation — at `blocktracer` @ `4d2381630` (1.0.0-beta.18) and
+/// on this tree (1.0.0-beta.26) — with `nargo` rebuilt for each: the number is
+/// 142 in both, so the reconciliation moved it not at all.
+///
+/// The sequence assertion in `test_a_2_function_calls_via_ct_print_full` has to
+/// compare against what the tree emits, so it carries `("main", 142)`. On its
+/// own that is a bogus line number written into a test with nothing saying so —
+/// the reconciliation branch re-pinned it with no comment, and a reader of that
+/// list has no way to tell the defect from the twelve correct entries beside it.
+///
+/// This test is the declaration. It asserts the defect is STILL THERE and reads
+/// each fixture's real length off disk rather than restating it, so:
+///
+///   * fixing the recorder trips THIS test, by name, instead of passing;
+///   * lengthening a fixture past its pinned line trips it too, because then the
+///     line would no longer be out of range and the pin would stop meaning anything;
+///   * and the two halves cannot both be satisfied by a step list that is
+///     simply missing, because the last step is asserted to exist first.
+///
+/// AND IT COVERS THREE FIXTURES, NOT ONE, BECAUSE THE DEFECT IS THE TREE'S AND NOT
+/// `a_2`'s. Measured on this tree, `main`'s last recorded step line against the
+/// fixture's real length: `a_2_function_calls` 142 in 13 lines, `a_1_mul` 264 in 9,
+/// `multi_stmt_per_line` 96 in 4. Declaring one of the three read as one fixture's
+/// problem, and the other two carry the same out-of-range line inside pins that
+/// never assert it — `a_1_mul`'s fourteen-entry sequence covers line 264 silently.
+///
+/// THE OUT-OF-RANGE COMPARISON USED TO BE A TAUTOLOGY. It sat beside
+/// `assert_eq!(fixture_lines, 13)`, so with the line pinned at 142 and the length
+/// pinned at 13, `142 > 13` could not fail — and the property the header credits it
+/// with ("lengthening the fixture trips it") was actually delivered by the LENGTH
+/// pin, which trips at 14 lines rather than at 143. The length is read and not
+/// pinned now, so the comparison is the one the header describes.
+#[test]
+fn test_a_2_last_step_line_is_the_known_out_of_range_defect() {
+    // (fixture, the line `main`'s last step is recorded at on this tree)
+    const DECLARED: [(&str, i64); 3] =
+        [("a_2_function_calls", 142), ("a_1_mul", 264), ("multi_stmt_per_line", 96)];
+
+    for (name, pinned) in DECLARED {
+        let Some(doc) =
+            record_and_dump_full("test_a_2_last_step_line_is_the_known_out_of_range_defect", name)
+        else {
+            return;
+        };
+
+        let fixture = trace_fixture(name).join("src").join("main.nr");
+        let source = std::fs::read_to_string(&fixture)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", fixture.display()));
+        let fixture_lines = source.lines().count() as i64;
+        assert!(
+            fixture_lines > 0,
+            "{name}: the fixture read as empty, so the comparison below would measure nothing",
+        );
+
+        let steps: Vec<i64> = doc["events"]
+            .as_array()
+            .expect("events array")
+            .iter()
+            .filter(|e| e["kind"] == "step" && e["function"] == "main")
+            .filter_map(|e| e["line"].as_i64())
+            .collect();
+        assert!(
+            !steps.is_empty(),
+            "{name}: main recorded no steps at all, so nothing below measures anything",
+        );
+
+        let last = *steps.last().unwrap();
+        assert_eq!(
+            last, pinned,
+            "KNOWN DEFECT: {name}'s main recorded its last step at line {last}, not the \
+             pinned {pinned}. If it is now in range, the recorder has been FIXED — delete \
+             this fixture's row and re-pin the sequence in that fixture's own test."
+        );
+        assert!(
+            last > fixture_lines,
+            "{name}: the pinned line {last} is supposed to be OUT OF RANGE for a \
+             {fixture_lines}-line file; if the fixture grew past it this pin has stopped \
+             meaning anything",
+        );
+    }
 }
 
 /// `if_then_else_reduced.nr` — `for i in 1..11 { if i % 2 == 0 { ... } }`.
@@ -614,7 +849,7 @@ fn test_assert_via_ct_print_full() {
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(4), "varnames; counts={counts}");
-    assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
+    assert_eq!(counts["types"].as_u64(), Some(2), "types; counts={counts}");
     // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
     assert_eq!(counts["steps"].as_u64(), Some(12), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
@@ -623,7 +858,7 @@ fn test_assert_via_ct_print_full() {
 
     assert_eq!(string_array(&doc, "functions"), vec!["main"]);
     assert_eq!(string_array(&doc, "varnames"), vec!["x", "y", "a", "b"]);
-    assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "type_1"]);
+    assert_eq!(string_array(&doc, "types"), vec!["None", "Field"]);
     assert_path_strip_normalised(&doc, "assert");
 
     // 1 call_entry + 12 step events + 1 io + 1 call_exit = 15 wire-level events.
@@ -659,7 +894,9 @@ fn test_assert_via_ct_print_full() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| (v["varname"].as_str().unwrap(), v["value"]["i"].as_i64().unwrap()))
+        // `main(x: Field, y: pub Field)`, and `a`/`b` are Field-typed too, so every one of these
+        // four goes through the OQ-4 rendering rather than through `["i"]`.
+        .map(|v| (v["varname"].as_str().unwrap(), field_small_int(&v["value"])))
         .collect();
     assert_eq!(vars[&"a"], 12);
     assert_eq!(vars[&"b"], 12);
@@ -694,7 +931,7 @@ fn test_types_test_via_ct_print_full() {
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(9), "varnames; counts={counts}");
-    assert_eq!(counts["types"].as_u64(), Some(11), "types; counts={counts}");
+    assert_eq!(counts["types"].as_u64(), Some(10), "types; counts={counts}");
     // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
     assert_eq!(counts["steps"].as_u64(), Some(24), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
@@ -711,12 +948,11 @@ fn test_types_test_via_ct_print_full() {
         vec![
             "None",
             "Field",
-            "type_1",
             "u32",
-            "type_3",
+            "type_2",
             "Point",
             "i8",
-            "type_6",
+            "type_5",
             "Bool",
             "String",
             "Array<2, ..>",
@@ -756,18 +992,19 @@ fn test_types_test_via_ct_print_full() {
             if expected_names.iter().all(|n| map.contains_key(n)) { Some(map) } else { None }
         })
         .expect("a step must surface all params a..h");
-    assert_eq!(first_body_vars[&"a"]["kind"].as_str(), Some("Int"));
-    assert_eq!(first_body_vars[&"a"]["i"].as_i64(), Some(1));
+    // `main(a: Field, b: u32, c: Point, d: Field, e: i8, f: bool, g: str<11>, h: [Field; 2])`.
+    // The FIELD-typed ones — a, c.x, c.y, d, h[0], h[1] — carry the OQ-4 rendering; b (u32) and
+    // e (i8) are ordinary integers and still `ValueRecord::Int`. Both kinds are asserted here,
+    // which is what stops "everything is a String now" from passing.
+    assert_eq!(field_small_int(&first_body_vars[&"a"]), 1);
     assert_eq!(first_body_vars[&"b"]["kind"].as_str(), Some("Int"));
     assert_eq!(first_body_vars[&"b"]["i"].as_i64(), Some(2));
     assert_eq!(first_body_vars[&"c"]["kind"].as_str(), Some("Struct"));
     let c_fields = first_body_vars[&"c"]["field_values"].as_array().unwrap();
     assert_eq!(c_fields.len(), 2);
-    assert_eq!(c_fields[0]["kind"].as_str(), Some("Int"));
-    assert_eq!(c_fields[0]["i"].as_i64(), Some(9));
-    assert_eq!(c_fields[1]["kind"].as_str(), Some("Int"));
-    assert_eq!(c_fields[1]["i"].as_i64(), Some(10));
-    assert_eq!(first_body_vars[&"d"]["i"].as_i64(), Some(3));
+    assert_eq!(field_small_int(&c_fields[0]), 9);
+    assert_eq!(field_small_int(&c_fields[1]), 10);
+    assert_eq!(field_small_int(&first_body_vars[&"d"]), 3);
     assert_eq!(first_body_vars[&"e"]["kind"].as_str(), Some("Int"));
     assert_eq!(first_body_vars[&"e"]["i"].as_i64(), Some(4));
     assert_eq!(first_body_vars[&"f"]["kind"].as_str(), Some("Bool"));
@@ -779,8 +1016,8 @@ fn test_types_test_via_ct_print_full() {
     assert_eq!(first_body_vars[&"h"]["is_slice"].as_bool(), Some(false));
     let h_elems = first_body_vars[&"h"]["elements"].as_array().unwrap();
     assert_eq!(h_elems.len(), 2);
-    assert_eq!(h_elems[0]["i"].as_i64(), Some(7));
-    assert_eq!(h_elems[1]["i"].as_i64(), Some(8));
+    assert_eq!(field_small_int(&h_elems[0]), 7);
+    assert_eq!(field_small_int(&h_elems[1]), 8);
 
     // call_exit returns Void
     let exit = events.last().unwrap();
@@ -801,7 +1038,11 @@ fn test_types_test_via_ct_print_full() {
 /// Steps the tracer must produce on `src/main.nr`:
 /// `(line=1, column=1)`, then three line-2 statements at
 /// `(line=2, column=9)`, `(line=2, column=27)`, `(line=2, column=45)`,
-/// then the `assert` on `(line=4, column=1)`.  This pins both that
+/// and then NO step for the `assert` at all — which is on line 3, not line 4.
+/// (This sentence said "then the `assert` on `(line=4, column=1)`". The fixture is
+/// four lines and the `assert(a + b + c == 6);` is on the THIRD; the body was
+/// corrected to pin the real gap — line 3 produces no step — and this comment was
+/// left stating the off-by-one it was corrected for.)  This pins both that
 /// column-aware mode is latched (`metadata.flags.has_column_aware_steps`
 /// is true) and that the recorder distinguishes same-line statements at
 /// the byte level via the `DeltaColumn` event.
@@ -842,7 +1083,8 @@ fn test_multi_stmt_per_line_column_aware() {
         line2_columns,
         vec![9_i64, 27, 45],
         "expected the three statements on line 2 to surface columns \
-         9 / 27 / 45; got {line2_columns:?}",
+         9 / 27 / 45, one absolute step each; \
+         got {line2_columns:?}",
     );
 
     // Sanity: column 1 on line 1 (the `fn main()` entry step), so the test

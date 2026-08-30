@@ -2,7 +2,7 @@ use crate::{SourceLocation, StackFrame, stack_frame::Variable};
 
 use crate::sink::TraceSink;
 use acvm::FieldElement;
-use acvm::acir::AcirField; // necessary, for `to_i128` to work
+use acvm::acir::AcirField; // necessary, for `to_i128` and `to_hex` to work
 use codetracer_trace_types::{EventLogKind, FullValueRecord, Line, TypeKind, ValueRecord};
 use noirc_printable_type::{PrintableType, PrintableValue};
 use std::path::{Path, PathBuf};
@@ -134,6 +134,18 @@ fn register_variable(tracer: &mut dyn TraceSink, variable: &Variable) {
     TraceSink::register_variable_with_full_value(tracer, &variable.name, value_record);
 }
 
+/// A field element as `0x` + 64 lowercase big-endian hex — the whole 254 bits, always 66
+/// characters.
+///
+/// `AcirField::to_hex` is `hex::encode(self.to_be_bytes())` and `to_be_bytes` is
+/// `serialize_uncompressed` reversed, so for BN254 it is exactly 32 bytes and 64 hex digits with
+/// leading zeros intact. The `0x` prefix is added here rather than left to a reader, because the
+/// public half of a joined Aztec recording writes it and the two strings have to be equal as
+/// strings.
+fn field_to_hex(field_value: &FieldElement) -> String {
+    format!("0x{}", field_value.to_hex())
+}
+
 /// Registers a value of a given type. Registers the type, if it's the first time it occurs.
 fn register_value(
     tracer: &mut dyn TraceSink,
@@ -151,7 +163,43 @@ fn register_value(
             if let PrintableValue::Field(field_value) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
                 let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
-                ValueRecord::Int { i: field_value.to_i128() as i64, type_id }
+                // A `Field` is 254 bits and an `i64` is 64, so the old
+                // `ValueRecord::Int { i: field_value.to_i128() as i64 }` here could not represent
+                // one: `to_i128` PANICS above 127 bits (`acir_field/src/field_element.rs`, gated on
+                // `num_bits() <= 127`) and `as i64` silently folds the sign on everything between
+                // 64 and 127. An Aztec contract address is full width, so the recorder aborted on
+                // the values that matter most. Fixing that is the smaller half of this change.
+                //
+                // The larger half is CROSS-HALF AGREEMENT. `aztec-avm-runtime` records the public
+                // side of one Aztec transaction and this recorder records the private side, and
+                // M26 puts both in one recording. A field element that renders as `Int 4` in one
+                // frame and as `0x000…04` in the next is a defect a reader cannot see and cannot
+                // work around. `aztec-avm-runtime/SOURCE-MAPPING.md` §4 settled the rendering by
+                // MEASUREMENT rather than preference — five renderings written by the pinned
+                // writer and read by both pinned readers, of which `ValueRecord::BigInt`, the
+                // obvious full-precision choice, is REFUSED by `ct-print` with `cbor: expected
+                // byte string (major 2), got major 3` — and the verdict is this one:
+                //
+                //     `0x` + 64 lowercase big-endian hex, in `ValueRecord::String`,
+                //     under the SAME `(TypeKind::Int, "Field")` type record.
+                //
+                // `String` and not `Raw`, because `Raw` is this recorder's escape hatch for values
+                // it CANNOT represent (`"()"`, `"fn"` below) and a field element is not one of
+                // those. The width is FIXED at 64 characters with no leading-zero stripping, so
+                // two renderings of one value are one string and a reader never has to normalise.
+                //
+                // ONE CONSEQUENCE THAT IS NOT NEUTRAL, and it is stated here because the sentence
+                // above is easy to over-read. The TYPE RECORD is unchanged — still
+                // `(TypeKind::Int, "Field")`, ensured on the line above. The TYPE TABLE is not:
+                // the writer registers a nameless companion type for a `TypeKind::Int` type the
+                // first time that type carries an `Int` VALUE, and a `Field` no longer carries
+                // one, so the companion is never created. Measured in a clean worktree across
+                // three fixtures: `assert`'s table goes `[None, Field, type_1]` -> `[None, Field]`,
+                // `a_2_function_calls`' `[None, Field, type_1, ()]` -> `[None, Field, ()]`, and
+                // `types_test` loses the entry after `Field` while the companions after `u32` and
+                // `i8` survive and renumber. `a_1_mul`, whose only companion follows `u32`, is
+                // untouched. `tests/test_tracer.rs`' header carries the full measurement.
+                ValueRecord::String { text: field_to_hex(field_value), type_id }
             } else {
                 // Note(stanm): panic here, because this means the compiler frontend is broken, which
                 // is not the responsibility of this module. Should not be reachable in integration
