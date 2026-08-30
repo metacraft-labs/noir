@@ -780,24 +780,32 @@ pub fn compile_resolved(
     if as_contract {
         match noirc_driver::compile_contract(&mut context, root_id, &options) {
             Ok((contract, warnings)) => {
-                let optimized = nargo::ops::optimize_contract(contract);
+                // NO SEPARATE OPTIMIZATION PASS, AND THAT IS UPSTREAM'S CHANGE RATHER THAN A
+                // DROPPED STEP. Until 1.0.0-beta.25 this called `nargo::ops::optimize_contract`.
+                // `08f44a128` (*chore!: ACIR instrumentation and optimization*) DELETED
+                // `tooling/nargo/src/ops/optimize.rs` and folded the ACIR optimizers into
+                // compilation itself — `compile_cmd.rs`'s own comment now reads "the program is
+                // fully optimized during compilation". `compiler/wasm/src/compile.rs` dropped the
+                // call in the same commit, and this is the same edit in the same shape; the
+                // artifact is optimized, by the compiler, before it is returned.
                 let positioned = position_diagnostics(
                     &warnings.into_iter().collect::<Vec<_>>(),
                     &context.file_manager,
                 );
-                Ok((CompiledFromVfs::Contract(Box::new(optimized.into())), positioned))
+                Ok((CompiledFromVfs::Contract(Box::new(contract.into())), positioned))
             }
             Err(errors) => Err(position_diagnostics(&errors, &context.file_manager)),
         }
     } else {
         match noirc_driver::compile_main(&mut context, root_id, &options, None) {
             Ok((program, warnings)) => {
-                let optimized = nargo::ops::optimize_program(program);
+                // See the contract arm above: `nargo::ops::optimize_program` no longer exists and
+                // the optimization it performed happens inside `compile_main`.
                 let positioned = position_diagnostics(
                     &warnings.into_iter().collect::<Vec<_>>(),
                     &context.file_manager,
                 );
-                Ok((CompiledFromVfs::Program(Box::new(optimized.into())), positioned))
+                Ok((CompiledFromVfs::Program(Box::new(program.into())), positioned))
             }
             Err(errors) => Err(position_diagnostics(&errors, &context.file_manager)),
         }
