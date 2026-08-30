@@ -57,6 +57,9 @@ impl Function {
             return;
         }
 
+        #[cfg(debug_assertions)]
+        make_constrain_not_equal_pre_check(self);
+
         self.simple_optimization(|context| {
             // This Noir code:
             //
@@ -108,6 +111,16 @@ impl Function {
     }
 }
 
+/// Pre-check condition for [`Function::make_constrain_not_equal`].
+///
+/// Panics if:
+///   - Any ACIR function contains > 1 block, i.e. the CFG hasn't been flattened yet.
+#[cfg(debug_assertions)]
+fn make_constrain_not_equal_pre_check(function: &Function) {
+    // flatten_cfg must have run
+    super::checks::assert_cfg_is_flattened(function);
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -151,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    /// https://github.com/noir-lang/noir/issues/10929
+    /// <https://github.com/noir-lang/noir/issues/10929>
     /// When side effects is not one, the transformation
     /// should NOT happen because `Constrain` and `ConstrainNotEqual` have different
     /// semantics with respect to `enable_side_effects`:

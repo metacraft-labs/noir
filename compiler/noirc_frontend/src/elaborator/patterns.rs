@@ -5,6 +5,8 @@ use noirc_errors::{Located, Location};
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
+use crate::hir::def_collector::dc_crate::CompilationError;
+use crate::node_interner::DefinitionId;
 use crate::{
     DataType, Kind, Type, TypeAlias,
     ast::{ERROR_IDENT, Ident, ItemVisibility, Path, PathSegment, Pattern},
@@ -14,13 +16,31 @@ use crate::{
         type_check::{Source, TypeCheckError},
     },
     hir_def::{expr::HirIdent, stmt::HirPattern},
-    node_interner::{DefinitionId, DefinitionKind, FuncId, TypeAliasId, TypeId},
+    node_interner::{DefinitionKind, FuncId, TypeAliasId, TypeId},
 };
 
 use super::{
     Elaborator, ResolverMeta,
     path_resolution::{PathResolutionItem, TypedPath, TypedPathSegment},
 };
+
+/// Represents a variable in the source code.
+pub(crate) struct Variable {
+    /// The identifier of the variable.
+    pub(crate) ident: HirIdent,
+    /// The scope index where the variable is declared.
+    pub(crate) scope: usize,
+}
+
+/// The result of [`Elaborator::resolve_path_as_value`] and [`Elaborator::resolve_path_as_value_or_error`].
+pub(crate) enum PathValue {
+    /// A variable was found.
+    Variable(Variable),
+    /// A definition was found.
+    Definition { id: DefinitionId, item: PathResolutionItem },
+    /// A type alias that is numeric, infinitely recursive or one that errored, was found.
+    TypeAlias(TypeAliasId),
+}
 
 impl Elaborator<'_> {
     /// Elaborate a pattern, which can appear in a `let <pattern> = <expr>`, or a `match` statement.
@@ -32,12 +52,14 @@ impl Elaborator<'_> {
     ///
     /// `parameter_names_in_list` keeps track of parameter names, and their location, across multiple
     /// patterns in a list. If a name is found multiple times, an error is captured.
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(super) fn elaborate_pattern(
         &mut self,
         pattern: Pattern,
-        expected_type: Type,
+        expected_type: &Type,
         definition_kind: DefinitionKind,
         warn_if_unused: bool,
+        warn_if_not_mutated: bool,
         parameter_names_in_list: &mut HashMap<String, Location>,
     ) -> HirPattern {
         self.elaborate_pattern_mut(
@@ -47,6 +69,7 @@ impl Elaborator<'_> {
             None,
             &mut Vec::new(),
             warn_if_unused,
+            warn_if_not_mutated,
             &mut HashSet::default(),
             parameter_names_in_list,
         )
@@ -57,13 +80,16 @@ impl Elaborator<'_> {
     ///
     /// `parameter_names_in_list` keeps track of parameter names, and their location, across multiple
     /// patterns in a list. If a name is found multiple times, an error is captured.
+    #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "trace", skip_all)]
     pub fn elaborate_pattern_and_store_ids(
         &mut self,
         pattern: Pattern,
-        expected_type: Type,
+        expected_type: &Type,
         definition_kind: DefinitionKind,
         created_ids: &mut Vec<HirIdent>,
         warn_if_unused: bool,
+        warn_if_not_mutated: bool,
         parameter_names_in_list: &mut HashMap<String, Location>,
     ) -> HirPattern {
         self.elaborate_pattern_mut(
@@ -73,6 +99,7 @@ impl Elaborator<'_> {
             None,
             created_ids,
             warn_if_unused,
+            warn_if_not_mutated,
             &mut HashSet::default(),
             parameter_names_in_list,
         )
@@ -86,15 +113,17 @@ impl Elaborator<'_> {
     /// - `parameter_names_in_list` keeps track of parameter names, and their location, across multiple
     ///   patterns in a list. If a name is found multiple times, an error is captured.
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "trace", skip_all)]
     fn elaborate_pattern_mut(
         &mut self,
         pattern: Pattern,
-        expected_type: Type,
+        expected_type: &Type,
         definition: DefinitionKind,
         // Location of the `mut` keyword.
         mutable: Option<Location>,
         new_definitions: &mut Vec<HirIdent>,
         warn_if_unused: bool,
+        warn_if_not_mutated: bool,
         pattern_names: &mut HashSet<String>,
         parameter_names_in_list: &mut HashMap<String, Location>,
     ) -> HirPattern {
@@ -134,10 +163,11 @@ impl Elaborator<'_> {
                         mutable.is_some(),
                         true, // allow_shadowing
                         warn_if_unused,
+                        warn_if_not_mutated,
                         definition,
                     )
                 };
-                self.interner.push_definition_type(ident.id, expected_type);
+                self.interner.push_definition_type(ident.id, expected_type.clone());
                 new_definitions.push(ident.clone());
                 HirPattern::Identifier(ident)
             }
@@ -157,6 +187,7 @@ impl Elaborator<'_> {
                     Some(location),
                     new_definitions,
                     warn_if_unused,
+                    warn_if_not_mutated,
                     pattern_names,
                     parameter_names_in_list,
                 );
@@ -173,33 +204,32 @@ impl Elaborator<'_> {
                         let tuple =
                             Type::Tuple(vecmap(&fields, |_| self.interner.next_type_variable()));
 
-                        self.push_err(TypeCheckError::TypeMismatchWithSource {
-                            expected: expected_type,
-                            actual: tuple,
+                        self.push_err(self.new_type_mismatch_with_source_error(
+                            &tuple,
+                            &expected_type,
+                            Source::Assignment,
                             location,
-                            source: Source::Assignment,
-                        });
+                        ));
                         None
                     }
                 };
 
                 // Only check tuple arity if the expected type was actually a tuple.
                 // If it wasn't, we've already issued a type mismatch error above.
-                if let Some(field_types) = &field_types {
-                    if fields.len() != field_types.len() {
-                        self.push_err(TypeCheckError::TupleMismatch {
-                            tuple_types: field_types.clone(),
-                            actual_count: fields.len(),
-                            location,
-                        });
-                    }
+                if let Some(field_types) = &field_types
+                    && fields.len() != field_types.len()
+                {
+                    self.push_err(TypeCheckError::TupleMismatch {
+                        tuple_types: field_types.clone(),
+                        actual_count: fields.len(),
+                        location,
+                    });
                 }
 
+                let error = Type::Error;
                 let fields = vecmap(fields.into_iter().enumerate(), |(i, field)| {
-                    let field_type = field_types
-                        .as_ref()
-                        .and_then(|types| types.get(i).cloned())
-                        .unwrap_or(Type::Error);
+                    let field_type =
+                        field_types.as_ref().and_then(|types| types.get(i)).unwrap_or(&error);
                     self.elaborate_pattern_mut(
                         field,
                         field_type,
@@ -207,6 +237,7 @@ impl Elaborator<'_> {
                         mutable,
                         new_definitions,
                         warn_if_unused,
+                        warn_if_not_mutated,
                         pattern_names,
                         parameter_names_in_list,
                     )
@@ -236,6 +267,7 @@ impl Elaborator<'_> {
                 mutable,
                 new_definitions,
                 warn_if_unused,
+                warn_if_not_mutated,
                 pattern_names,
                 parameter_names_in_list,
             ),
@@ -248,6 +280,7 @@ impl Elaborator<'_> {
                     mutable,
                     new_definitions,
                     warn_if_unused,
+                    warn_if_not_mutated,
                     pattern_names,
                     parameter_names_in_list,
                 )
@@ -256,12 +289,13 @@ impl Elaborator<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "trace", skip_all)]
     fn elaborate_struct_pattern(
         &mut self,
         name: TypedPath,
         fields: Vec<(Ident, Pattern)>,
         location: Location,
-        expected_type: Type,
+        expected_type: &Type,
         definition: DefinitionKind,
         mutable: Option<Location>,
         new_definitions: &mut Vec<HirIdent>,
@@ -277,7 +311,8 @@ impl Elaborator<'_> {
             // shadowing here lets us avoid further errors if we define ERROR_IDENT
             // multiple times.
             let name = ERROR_IDENT.into();
-            let identifier = this.add_variable_decl(name, false, true, true, definition.clone());
+            let identifier =
+                this.add_variable_decl(name, false, true, true, true, definition.clone());
             HirPattern::Identifier(identifier)
         };
 
@@ -297,34 +332,40 @@ impl Elaborator<'_> {
 
         let turbofish_location = last_segment.turbofish_location();
 
+        let mut errors = Vec::new();
         let generics = self.resolve_struct_turbofish_generics(
             &struct_type.borrow(),
             generics,
             last_segment.generics,
             turbofish_location,
+            &mut errors,
         );
+        self.push_errors(errors);
 
         let actual_type = Type::DataType(struct_type.clone(), generics);
+        let struct_id = struct_type.borrow().id;
 
-        self.unify(&actual_type, &expected_type, || TypeCheckError::TypeMismatchWithSource {
-            expected: expected_type.clone(),
-            actual: actual_type.clone(),
+        self.unify_or_type_mismatch_with_source(
+            &actual_type,
+            expected_type,
+            Source::Assignment,
             location,
-            source: Source::Assignment,
-        });
+        );
+
+        // The struct's fields may still be deferred, so resolve them now before
+        // `resolve_constructor_pattern_fields` reads them.
+        self.define_struct_fields_if_undefined(struct_id);
 
         let fields = self.resolve_constructor_pattern_fields(
             fields,
             location,
-            actual_type.clone(),
+            &actual_type,
             definition,
             mutable,
             new_definitions,
             pattern_names,
             parameter_names_in_list,
         );
-
-        let struct_id = struct_type.borrow().id;
 
         self.interner.add_type_reference(struct_id, name_location, is_self_type);
 
@@ -340,11 +381,12 @@ impl Elaborator<'_> {
     /// Ensures all fields are present, none are repeated, and all
     /// are part of the struct.
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "trace", skip_all)]
     fn resolve_constructor_pattern_fields(
         &mut self,
         fields: Vec<(Ident, Pattern)>,
         location: Location,
-        typ: Type,
+        typ: &Type,
         definition: DefinitionKind,
         mutable: Option<Location>,
         new_definitions: &mut Vec<HirIdent>,
@@ -353,7 +395,7 @@ impl Elaborator<'_> {
     ) -> Vec<(Ident, HirPattern)> {
         let mut ret = Vec::with_capacity(fields.len());
         let mut seen_fields = HashSet::default();
-        let Type::DataType(struct_type, _) = &typ else {
+        let Type::DataType(struct_type, _) = typ else {
             unreachable!("Should be validated as struct before getting here")
         };
         let mut unseen_fields = struct_type
@@ -367,47 +409,34 @@ impl Elaborator<'_> {
                 .unwrap_or((Type::Error, ItemVisibility::Public));
             let resolved = self.elaborate_pattern_mut(
                 pattern,
-                field_type,
+                &field_type,
                 definition.clone(),
                 mutable,
                 new_definitions,
                 true, // warn_if_unused
+                true, // warn_if_not_mutated
                 pattern_names,
                 parameter_names_in_list,
             );
 
-            if unseen_fields.contains(&field) {
-                unseen_fields.remove(&field);
-                seen_fields.insert(field.clone());
-
+            if self.check_constructor_field(
+                &field,
+                &mut seen_fields,
+                &mut unseen_fields,
+                struct_type,
+            ) {
                 self.check_struct_field_visibility(
                     &struct_type.borrow(),
                     field.as_str(),
                     visibility,
                     field.location(),
                 );
-            } else if seen_fields.contains(&field) {
-                // duplicate field
-                self.push_err(ResolverError::DuplicateField { field: field.clone() });
-            } else {
-                // field not required by struct
-                self.push_err(ResolverError::NoSuchField {
-                    field: field.clone(),
-                    struct_definition: struct_type.borrow().name.clone(),
-                });
             }
 
             ret.push((field, resolved));
         }
 
-        if !unseen_fields.is_empty() {
-            self.push_err(ResolverError::MissingFields {
-                location,
-                missing_fields: unseen_fields.into_iter().map(|field| field.to_string()).collect(),
-                struct_definition: struct_type.borrow().name.clone(),
-            });
-        }
-
+        self.report_missing_fields(unseen_fields, location, struct_type);
         ret
     }
 
@@ -416,13 +445,15 @@ impl Elaborator<'_> {
     ///
     /// Returns the created identifier.
     ///
-    /// Panics if the `definition` is [DefinitionKind::Global].
+    /// Panics if the `definition` is [`DefinitionKind::Global`].
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(super) fn add_variable_decl(
         &mut self,
         name: Ident,
         mutable: bool,
         allow_shadowing: bool,
         warn_if_unused: bool,
+        warn_if_not_mutated: bool,
         definition: DefinitionKind,
     ) -> HirIdent {
         if let DefinitionKind::Global(_) = definition {
@@ -436,18 +467,26 @@ impl Elaborator<'_> {
             self.interner.push_definition(name.clone(), mutable, comptime, definition, location);
         let ident = HirIdent::non_trait_method(id, location);
 
-        self.add_existing_variable_to_scope(name, ident.clone(), warn_if_unused, allow_shadowing);
+        self.add_existing_variable_to_scope(
+            name,
+            ident.clone(),
+            warn_if_unused,
+            warn_if_not_mutated,
+            allow_shadowing,
+        );
 
         ident
     }
 
-    /// Add a [ResolverMeta] to the last scope for a given [HirIdent], which already has its definition interned,
+    /// Add a [`ResolverMeta`] to the last scope for a given [`HirIdent`], which already has its definition interned,
     /// unless its name is `"_"`.
+    #[tracing::instrument(level = "trace", skip_all)]
     pub fn add_existing_variable_to_scope(
         &mut self,
         name: String,
         ident: HirIdent,
         warn_if_unused: bool,
+        warn_if_not_mutated: bool,
         allow_shadowing: bool,
     ) {
         if name == "_" {
@@ -455,18 +494,22 @@ impl Elaborator<'_> {
         }
 
         let second_location = ident.location;
-        let resolver_meta = ResolverMeta { num_times_used: 0, ident, warn_if_unused };
+        let resolver_meta = ResolverMeta {
+            used: false,
+            mutated: false,
+            ident,
+            warn_if_unused,
+            warn_if_not_mutated,
+        };
 
         let old_value = self.scopes.get_mut_scope().add_key_value(name.clone(), resolver_meta);
 
-        if !allow_shadowing {
-            if let Some(old_value) = old_value {
-                self.push_err(ResolverError::DuplicateDefinition {
-                    name,
-                    first_location: old_value.ident.location,
-                    second_location,
-                });
-            }
+        if !allow_shadowing && let Some(old_value) = old_value {
+            self.push_err(ResolverError::DuplicateDefinition {
+                name,
+                first_location: old_value.ident.location,
+                second_location,
+            });
         }
     }
 
@@ -474,17 +517,25 @@ impl Elaborator<'_> {
     /// This will increment its use counter by one and return the variable if found.
     /// If the variable is not found, an error is returned.
     ///
-    /// This method is private and is expected to be called through [Self::get_ident_from_path_or_error].
-    fn use_variable(&mut self, name: &Ident) -> Result<(HirIdent, usize), ResolverError> {
+    /// This method is private and is expected to be called through [`Self::resolve_path_as_value_or_error`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn use_variable(&mut self, name: &Ident) -> Result<Variable, ResolverError> {
         // Find the definition for this Ident
         let scope_tree = self.scopes.current_scope_tree();
         let variable = scope_tree.find(name.as_str());
 
         let location = name.location();
         if let Some((variable_found, scope)) = variable {
-            variable_found.num_times_used += 1;
+            variable_found.used = true;
             let id = variable_found.ident.id;
-            Ok((HirIdent::non_trait_method(id, location), scope))
+            let ident = HirIdent::non_trait_method(id, location);
+            let variable = Variable { ident, scope };
+            Ok(variable)
+        } else if self.parent_runtime_variables.contains(name.as_str()) {
+            Err(ResolverError::RuntimeVarReferencedInComptime {
+                name: name.to_string(),
+                location: name.location(),
+            })
         } else {
             Err(ResolverError::VariableNotDeclared {
                 name: name.to_string(),
@@ -498,40 +549,45 @@ impl Elaborator<'_> {
     /// Looks up the generics of the function in [FuncMeta][crate::hir_def::function::FuncMeta].
     ///
     /// If there is no turbofish, it returns `None`.
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(super) fn resolve_function_turbofish_generics(
         &mut self,
         func_id: &FuncId,
         resolved_turbofish: Option<Vec<Located<Type>>>,
         location: Location,
     ) -> Option<Vec<Type>> {
-        resolved_turbofish.map(|resolved_turbofish| {
+        resolved_turbofish.map(|mut resolved_turbofish| {
             let direct_generic_kinds =
-                vecmap(&self.interner.function_meta(func_id).direct_generics, |generic| {
-                    generic.kind()
+                vecmap(&self.function_meta(*func_id).direct_generics, |generic| generic.kind());
+            let expected = direct_generic_kinds.len();
+            let actual = resolved_turbofish.len();
+
+            if actual != expected {
+                self.push_err(TypeCheckError::IncorrectTurbofishGenericCount {
+                    expected_count: expected,
+                    actual_count: actual,
+                    location,
                 });
 
-            if resolved_turbofish.len() != direct_generic_kinds.len() {
-                let type_check_err = TypeCheckError::IncorrectTurbofishGenericCount {
-                    expected_count: direct_generic_kinds.len(),
-                    actual_count: resolved_turbofish.len(),
-                    location,
-                };
-                self.push_err(type_check_err);
+                // Pad so the result has the expected length for future checks
+                resolved_turbofish.resize(expected, Located::from(location, Type::Error));
             }
 
             self.resolve_turbofish_generics(direct_generic_kinds, resolved_turbofish)
         })
     }
 
-    /// Resolve generics using the generic kinds of a struct [DataType].
+    /// Resolve generics using the generic kinds of a struct [`DataType`].
     ///
     /// If there are no turbofish, returns the generics of the struct itself, as constructed by the caller.
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(super) fn resolve_struct_turbofish_generics(
         &mut self,
         struct_type: &DataType,
         generics: Vec<Type>,
         resolved_turbofish: Option<Vec<Located<Type>>>,
         location: Location,
+        errors: &mut Vec<CompilationError>,
     ) -> Vec<Type> {
         let kinds = vecmap(&struct_type.generics, |generic| generic.kind());
         self.resolve_item_turbofish_generics(
@@ -541,12 +597,14 @@ impl Elaborator<'_> {
             generics,
             resolved_turbofish,
             location,
+            errors,
         )
     }
 
     /// Resolve generics using the generics and generic kinds of a [Trait][crate::hir_def::traits::Trait].
     ///
     /// If there are no turbofish, returns the generics of the trait itself, as constructed by the caller.
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(super) fn resolve_trait_turbofish_generics(
         &mut self,
         trait_name: &str,
@@ -554,6 +612,7 @@ impl Elaborator<'_> {
         generics: Vec<Type>,
         resolved_turbofish: Option<Vec<Located<Type>>>,
         location: Location,
+        errors: &mut Vec<CompilationError>,
     ) -> Vec<Type> {
         self.resolve_item_turbofish_generics(
             "trait",
@@ -562,18 +621,21 @@ impl Elaborator<'_> {
             generics,
             resolved_turbofish,
             location,
+            errors,
         )
     }
 
-    /// Resolve generics using the generic and generic kinds of a [TypeAlias].
+    /// Resolve generics using the generic and generic kinds of a [`TypeAlias`].
     ///
     /// If there are no turbofish, returns the generics of the trait itself, as constructed by the caller.
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(super) fn resolve_alias_turbofish_generics(
         &mut self,
         type_alias: &TypeAlias,
         generics: Vec<Type>,
         resolved_turbofish: Option<Vec<Located<Type>>>,
         location: Location,
+        errors: &mut Vec<CompilationError>,
     ) -> Vec<Type> {
         let kinds = vecmap(&type_alias.generics, |generic| generic.kind());
         self.resolve_item_turbofish_generics(
@@ -583,6 +645,7 @@ impl Elaborator<'_> {
             generics,
             resolved_turbofish,
             location,
+            errors,
         )
     }
 
@@ -590,6 +653,8 @@ impl Elaborator<'_> {
     /// check if we have a non-empty turbofish with the expected number of generics,
     /// and if so try unify them with the expected kinds, otherwise return the default
     /// generics of the type.
+    #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(super) fn resolve_item_turbofish_generics(
         &mut self,
         item_kind: &'static str,
@@ -598,8 +663,9 @@ impl Elaborator<'_> {
         generics: Vec<Type>,
         resolved_turbofish: Option<Vec<Located<Type>>>,
         location: Location,
+        errors: &mut Vec<CompilationError>,
     ) -> Vec<Type> {
-        debug_assert_eq!(
+        assert_eq!(
             generics.len(),
             item_generic_kinds.len(),
             "ICE: generics count should match the expected kinds"
@@ -610,12 +676,15 @@ impl Elaborator<'_> {
         };
 
         if turbofish_generics.len() != generics.len() {
-            self.push_err(TypeCheckError::GenericCountMismatch {
-                item: format!("{item_kind} {item_name}"),
-                expected: generics.len(),
-                found: turbofish_generics.len(),
-                location,
-            });
+            errors.push(
+                TypeCheckError::GenericCountMismatch {
+                    item: format!("{item_kind} {item_name}"),
+                    expected: generics.len(),
+                    found: turbofish_generics.len(),
+                    location,
+                }
+                .into(),
+            );
             return generics;
         }
 
@@ -625,35 +694,39 @@ impl Elaborator<'_> {
     /// Given the generic [Kind]s of a type, and the list of generic types in a non-empty turbofish,
     /// which have already been verified to match the expected number of generics, run type checking
     /// to ensure each turbofish generic matches the expected kind, and return the unified types.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn resolve_turbofish_generics(
         &mut self,
         kinds: Vec<Kind>,
         turbofish_generics: Vec<Located<Type>>,
     ) -> Vec<Type> {
+        // Use zip (not zip_eq) since callers like resolve_function_turbofish_generics
+        // may push an error for mismatched counts but still call this function.
         let kinds_with_types = kinds.into_iter().zip(turbofish_generics);
 
         vecmap(kinds_with_types, |(kind, located_type)| {
             let location = located_type.location();
             let typ = located_type.contents;
-            let typ = typ.substitute_kind_any_with_kind(&kind);
             self.check_type_kind(typ, &kind, location)
         })
     }
 
-    /// Create a validated [TypedPath] from a [Path] by resolving all generics in every [PathSegment] in it.
+    /// Create a validated [`TypedPath`] from a [Path] by resolving all generics in every [`PathSegment`] in it.
     ///
     /// Pushes an error if the first segment is `Self` and it has turbofish generics.
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(crate) fn validate_path(&mut self, path: Path) -> TypedPath {
         let mut segments = vecmap(path.segments, |segment| self.validate_path_segment(segment));
 
-        if let Some(first_segment) = segments.first_mut() {
-            if first_segment.generics.is_some() && first_segment.ident.is_self_type_name() {
-                self.push_err(PathResolutionError::TurbofishNotAllowedOnItem {
-                    item: "self type".to_string(),
-                    location: first_segment.turbofish_location(),
-                });
-                first_segment.generics = None;
-            }
+        if let Some(first_segment) = segments.first_mut()
+            && first_segment.generics.is_some()
+            && first_segment.ident.is_self_type_name()
+        {
+            self.push_err(PathResolutionError::TurbofishNotAllowedOnItem {
+                item: "self type".to_string(),
+                location: first_segment.turbofish_location(),
+            });
+            first_segment.generics = None;
         }
 
         TypedPath {
@@ -664,8 +737,9 @@ impl Elaborator<'_> {
         }
     }
 
-    /// Create a validated [TypedPathSegment] from a [PathSegment] by resolving all turbofish generics
-    /// in it with [Kind::Any], allowing wildcards, and marking them as _used_.
+    /// Create a validated [`TypedPathSegment`] from a [PathSegment] by resolving all turbofish generics
+    /// in it with [`Kind::Any`], allowing wildcards, and marking them as _used_.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn validate_path_segment(&mut self, segment: PathSegment) -> TypedPathSegment {
         let generics = segment.generics.map(|generics| {
             vecmap(generics, |generic| {
@@ -678,11 +752,13 @@ impl Elaborator<'_> {
         TypedPathSegment { ident: segment.ident, generics, location: segment.location }
     }
 
-    /// Get the [DataType] of a [TypeId] and call [Elaborator::resolve_struct_turbofish_generics].
+    /// Get the [`DataType`] of a [`TypeId`] and call [`Elaborator::resolve_struct_turbofish_generics`].
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(super) fn resolve_struct_id_turbofish_generics(
         &mut self,
         struct_id: TypeId,
         mut turbofish: Option<Turbofish>,
+        errors: &mut Vec<CompilationError>,
     ) -> Vec<Type> {
         let struct_type = self.interner.get_type(struct_id);
         let struct_type = struct_type.borrow();
@@ -693,17 +769,20 @@ impl Elaborator<'_> {
                 struct_generics,
                 Some(turbofish.generics),
                 turbofish.location,
+                errors,
             )
         } else {
             struct_generics
         }
     }
 
-    /// Get the [TypeAlias] of a [TypeAliasId] and call [Elaborator::resolve_alias_turbofish_generics].
+    /// Get the [TypeAlias] of a [`TypeAliasId`] and call [`Elaborator::resolve_alias_turbofish_generics`].
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(super) fn resolve_type_alias_id_turbofish_generics(
         &mut self,
         type_alias_id: TypeAliasId,
         generics: Option<Turbofish>,
+        errors: &mut Vec<CompilationError>,
     ) -> Vec<Type> {
         let type_alias = self.interner.get_type_alias(type_alias_id);
         let type_alias = type_alias.borrow();
@@ -717,70 +796,77 @@ impl Elaborator<'_> {
                 alias_generics,
                 Some(generics.generics),
                 generics.location,
+                errors,
             )
         } else {
             alias_generics
         }
     }
 
-    /// Resolve a [TypedPath] into a local or global [HirIdent].
+    /// Resolve a [`TypedPath`] into a local or global [`HirIdent`].
     ///
-    /// If it cannot be found, then it pushes the error and returns an ident with a [DefinitionId::dummy_id].
-    pub(crate) fn get_ident_from_path(
-        &mut self,
-        path: TypedPath,
-    ) -> ((HirIdent, usize), Option<PathResolutionItem>) {
-        let location = Location::new(path.last_ident().span(), path.location.file);
-
-        self.get_ident_from_path_or_error(path).unwrap_or_else(|error| {
-            self.push_err(error);
-            let id = DefinitionId::dummy_id();
-            ((HirIdent::non_trait_method(id, location), 0), None)
-        })
+    /// If it cannot be found, then it pushes the error and returns [None].
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub(crate) fn resolve_path_as_value(&mut self, path: TypedPath) -> Option<PathValue> {
+        match self.resolve_path_as_value_or_error(path) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.push_err(error);
+                None
+            }
+        }
     }
 
-    /// Resolve a [TypedPath] into a local or global [HirIdent], or return `Err` if it could not be found.
-    pub(crate) fn get_ident_from_path_or_error(
+    /// Resolve a [`TypedPath`] into a local or global [`HirIdent`], or return `Err` if it could not be found.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub(crate) fn resolve_path_as_value_or_error(
         &mut self,
         path: TypedPath,
-    ) -> Result<((HirIdent, usize), Option<PathResolutionItem>), ResolverError> {
-        let location = Location::new(path.last_ident().span(), path.location.file);
-        let use_variable_result = path.as_single_segment().map(|segment| {
-            let result = self.use_variable(&segment.ident);
-            if result.is_ok() && segment.generics.is_some() {
-                let item = "local variables".to_string();
-                let location = segment.turbofish_location();
-                self.push_err(PathResolutionError::TurbofishNotAllowedOnItem { item, location });
-            }
-            result
-        });
-
-        let error = match use_variable_result {
-            Some(Ok(found)) => return Ok((found, None)),
-            // Try to look it up as a global, but still issue the first error if we fail
-            Some(Err(error)) => match self.lookup_global(path) {
-                Ok((id, item)) => {
-                    return Ok(((HirIdent::non_trait_method(id, location), 0), Some(item)));
+    ) -> Result<PathValue, ResolverError> {
+        // If the path is a single segment, try to resolve it as a local variable first
+        let use_variable_error = match path.as_single_segment() {
+            Some(segment) => match self.use_variable(&segment.ident) {
+                Ok(variable) => {
+                    // Succeed even if the variable has turbofish on it, but report an error for that
+                    if segment.generics.is_some() {
+                        let item = "local variables".to_string();
+                        let location = segment.turbofish_location();
+                        let error =
+                            PathResolutionError::TurbofishNotAllowedOnItem { item, location };
+                        self.push_err(error);
+                    }
+                    return Ok(PathValue::Variable(variable));
                 }
-                Err(_) => error,
+                Err(error) => Some(error),
             },
-            None => match self.lookup_global(path) {
-                Ok((dummy_id, PathResolutionItem::TypeAlias(type_alias_id)))
-                    if dummy_id == DefinitionId::dummy_id() =>
-                {
-                    // Allow path which resolves to a type alias
-                    return Ok((
-                        (HirIdent::non_trait_method(dummy_id, location), 4),
-                        Some(PathResolutionItem::TypeAlias(type_alias_id)),
-                    ));
-                }
-                Ok((id, item)) => {
-                    return Ok(((HirIdent::non_trait_method(id, location), 0), Some(item)));
-                }
-                Err(error) => error,
-            },
+            None => None,
         };
 
-        Err(error)
+        match self.lookup_path_as_value(path) {
+            Ok(ident) => Ok(ident),
+            Err(ResolverError::PathResolutionError(PathResolutionError::Unresolved(ident))) => {
+                // If we can't resolve a path, but we have an error from trying to resolve a variable
+                // (in which case the path was a single segment), prefer saying "variable not found"
+                // instead of "Cannot resolve '...' in path".
+                match use_variable_error {
+                    Some(error) => Err(error),
+                    None => Err(ResolverError::PathResolutionError(
+                        PathResolutionError::Unresolved(ident),
+                    )),
+                }
+            }
+            Err(item_as_value_error) => {
+                match use_variable_error {
+                    // If the path was "_" then we want to preserve that error as it's clearer
+                    // than the error of an item not being found (it will mention that "_" is
+                    // not valid as an expression).
+                    Some(ResolverError::VariableNotDeclared { name, .. }) if name != "_" => {
+                        Err(item_as_value_error)
+                    }
+                    Some(use_variable_error) => Err(use_variable_error),
+                    None => Err(item_as_value_error),
+                }
+            }
+        }
     }
 }

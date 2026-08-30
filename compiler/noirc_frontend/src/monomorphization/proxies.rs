@@ -13,16 +13,15 @@
 //! dispatch functions for them in the `defunctionalize` pass.
 //!
 //! The pass also automatically wraps direct calls to oracle functions from constrained functions,
-//! which, after creating wrapper for function values, would only present an inconvenience for users
+//! which, after creating wrappers for function values, would only present an inconvenience for users
 //! if they have to keep creating wrappers themselves.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use iter_extended::vecmap;
 use noirc_errors::Location;
 
 use crate::{
-    hir_def::function::FunctionSignature,
     monomorphization::{
         ast::{
             Call, Definition, Expression, FuncId, Function, Ident, IdentId, InlineType, LocalId,
@@ -43,7 +42,7 @@ impl Program {
         let mut context = ProxyContext::new(self.functions.len() as u32);
 
         // Replace foreign function identifier definitions with proxy function IDs.
-        for function in self.functions.iter_mut() {
+        for function in &mut self.functions {
             context.in_unconstrained = function.unconstrained;
             context.visit_expr(&mut function.body);
         }
@@ -58,7 +57,7 @@ impl Program {
 struct ProxyContext {
     next_func_id: u32,
     in_unconstrained: bool,
-    replacements: HashMap<(Definition, /*unconstrained*/ bool), FuncId>,
+    replacements: HashMap<(Definition, Type, /*unconstrained*/ bool), FuncId>,
     proxies: Vec<(FuncId, (Ident, /*unconstrained*/ bool))>,
 }
 
@@ -86,21 +85,18 @@ impl ProxyContext {
             // Note that if we see a function in `Call::func` then it will be an `Ident`, not a `Tuple`,
             // even though its `Ident::typ` will be a `Tuple([Function, Function])`.
 
-            // If this is a direct from ACIR to an Oracle, we want to create a proxy.
-            if !self.in_unconstrained {
-                if let Expression::Call(Call { func, arguments, return_type: _, location: _ }) =
+            // If this is a direct call from ACIR to an Oracle, we want to create a proxy.
+            if !self.in_unconstrained
+                && let Expression::Call(Call { func, arguments, return_type: _, location: _ }) =
                     expr
-                {
-                    if let Expression::Ident(ident) = func.as_mut() {
-                        if matches!(ident.definition, Definition::Oracle(_)) {
-                            self.redirect_to_proxy(ident, true);
-                            for arg in arguments {
-                                self.visit_expr(arg);
-                            }
-                            return false;
-                        }
-                    }
+                && let Expression::Ident(ident) = func.as_mut()
+                && matches!(ident.definition, Definition::Oracle { .. })
+            {
+                self.redirect_to_proxy(ident, true);
+                for arg in arguments {
+                    self.visit_expr(arg);
                 }
+                return false;
             }
 
             // If this is a foreign function value, we want to replace it with proxies.
@@ -120,11 +116,14 @@ impl ProxyContext {
     /// Get or create a replacement proxy for the function definition in the [Ident],
     /// and replace the definition with the ID of the new global proxy function.
     fn redirect_to_proxy(&mut self, ident: &mut Ident, mut unconstrained: bool) {
-        // If we are calling an oracle, there is no reason to create an unconstrained proxy,
+        // If we are calling an oracle, there is no reason to create a constrained proxy,
         // since such a call would be rejected by the SSA validation.
-        unconstrained |= matches!(ident.definition, Definition::Oracle(_));
+        unconstrained |= matches!(ident.definition, Definition::Oracle { .. });
 
-        let key = (ident.definition.clone(), unconstrained);
+        // The proxy's signature is derived from `ident.typ` (see `make_proxy`), so the same
+        // string-keyed foreign definition used at different monomorphized types needs distinct
+        // proxies. Keying on the type as well as the definition keeps those instantiations apart.
+        let key = (ident.definition.clone(), (*ident.typ).clone(), unconstrained);
 
         let proxy_id = match self.replacements.get(&key) {
             Some(id) => *id,
@@ -192,7 +191,10 @@ impl<'a> ForeignFunctionValue<'a> {
 
 /// Check if the definition is that of a function defined by a "name" rather than an ID.
 fn is_foreign_func(definition: &Definition) -> bool {
-    matches!(definition, Definition::Builtin(_) | Definition::LowLevel(_) | Definition::Oracle(_))
+    matches!(
+        definition,
+        Definition::Builtin(_) | Definition::LowLevel(_) | Definition::Oracle { .. }
+    )
 }
 
 /// Check that the identifier is of a pair of constrained and unconstrained function types.
@@ -209,7 +211,7 @@ fn is_func_pair(typ: &Type) -> bool {
 ///
 /// The body of the function will be a single forwarding call to the original.
 fn make_proxy(id: FuncId, ident: Ident, unconstrained: bool) -> Function {
-    let Type::Tuple(items) = &ident.typ else {
+    let Type::Tuple(items) = ident.typ.as_ref() else {
         unreachable!("ICE: expected pair of functions; got {}", ident.typ);
     };
 
@@ -234,11 +236,8 @@ fn make_proxy(id: FuncId, ident: Ident, unconstrained: bool) -> Function {
         let mutable = false;
         let name = format!("p{i}");
         let vis = Visibility::Private;
-        (id, mutable, name, typ, vis)
+        (id, mutable, name, Rc::new(typ), vis)
     });
-
-    // The function signature only matters for entry points.
-    let func_sig = FunctionSignature::default();
 
     let call = {
         let func = Ident {
@@ -266,7 +265,7 @@ fn make_proxy(id: FuncId, ident: Ident, unconstrained: bool) -> Function {
         Call {
             func: Box::new(Expression::Ident(func)),
             arguments,
-            return_type: *ret.clone(),
+            return_type: ret.as_ref().clone(),
             location: Location::dummy(),
         }
     };
@@ -276,20 +275,18 @@ fn make_proxy(id: FuncId, ident: Ident, unconstrained: bool) -> Function {
         name,
         parameters,
         body: Expression::Call(call),
-        return_type: *ret,
+        return_type: ret.as_ref().clone(),
         return_visibility: Visibility::Private,
         unconstrained,
         inline_type: InlineType::InlineAlways,
-        func_sig,
+        is_entry_point: false, // This only matters for creating artifacts
+        allow_constant_return: false,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        hir::{def_collector::dc_crate::CompilationError, resolution::errors::ResolverError},
-        test_utils::{get_monomorphized, get_monomorphized_with_error_filter},
-    };
+    use crate::test_utils::{GetProgramOptions, get_monomorphized, get_monomorphized_with_options};
 
     #[test]
     fn creates_proxies_for_acir_to_oracle_calls() {
@@ -352,6 +349,62 @@ mod tests {
     }
 
     #[test]
+    fn creates_separate_proxies_for_different_foreign_instantiations() {
+        let src = "
+        unconstrained fn main() {
+            call_one(foo);
+            call_two(foo);
+        }
+
+        unconstrained fn call_one(f: unconstrained fn(Field) -> Field) {
+            f(0);
+        }
+
+        unconstrained fn call_two(f: unconstrained fn(bool) -> bool) {
+            f(true);
+        }
+
+        #[builtin(black_box)]
+        pub fn foo<T>(x: T) -> T {}
+        ";
+
+        let program = get_monomorphized_with_options(
+            src,
+            GetProgramOptions { root_and_stdlib: true, ..Default::default() },
+        )
+        .unwrap();
+
+        insta::assert_snapshot!(program, @r"
+        unconstrained fn main$f0() -> () {
+            call_one$f1((foo$f3, foo$f4));;
+            call_two$f2((foo$f5, foo$f6));
+        }
+        unconstrained fn call_one$f1(f$l0: (fn(Field) -> Field, unconstrained fn(Field) -> Field)) -> () {
+            f$l0.1(0);
+        }
+        unconstrained fn call_two$f2(f$l1: (fn(bool) -> bool, unconstrained fn(bool) -> bool)) -> () {
+            f$l1.1(true);
+        }
+        #[inline_always]
+        fn foo_proxy$f3(p0$l0: Field) -> Field {
+            foo$black_box(p0$l0)
+        }
+        #[inline_always]
+        unconstrained fn foo_proxy$f4(p0$l0: Field) -> Field {
+            foo$black_box(p0$l0)
+        }
+        #[inline_always]
+        fn foo_proxy$f5(p0$l0: bool) -> bool {
+            foo$black_box(p0$l0)
+        }
+        #[inline_always]
+        unconstrained fn foo_proxy$f6(p0$l0: bool) -> bool {
+            foo$black_box(p0$l0)
+        }
+        ");
+    }
+
+    #[test]
     fn creates_proxies_for_builtin_values() {
         let src = "
         unconstrained fn main() {
@@ -367,15 +420,10 @@ mod tests {
         }
         ";
 
-        let program = get_monomorphized_with_error_filter(src, |err| {
-            matches!(
-                err,
-                // Ignore the error about creating a builtin function.
-                CompilationError::ResolverError(
-                    ResolverError::LowLevelFunctionOutsideOfStdlib { .. }
-                )
-            )
-        })
+        let program = get_monomorphized_with_options(
+            src,
+            GetProgramOptions { root_and_stdlib: true, ..Default::default() },
+        )
         .unwrap();
 
         insta::assert_snapshot!(program, @r"

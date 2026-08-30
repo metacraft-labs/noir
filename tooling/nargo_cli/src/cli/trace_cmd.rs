@@ -8,16 +8,16 @@ use nargo_toml::{PackageSelection, get_package_manifest, resolve_workspace_from_
 use noir_tracer::tracer_glue::begin_trace;
 use noir_tracer::tracer_glue::finish_trace;
 use noirc_abi::InputMap;
-use noirc_abi::input_parser::Format;
 use noirc_artifacts::debug::DebugArtifact;
 use noirc_artifacts::program::CompiledProgram;
 use noirc_driver::{CompileOptions, NOIR_ARTIFACT_VERSION_STRING};
 use noirc_frontend::graph::CrateName;
 
-use super::fs::inputs::read_inputs_from_file;
+use noir_artifact_cli::fs::inputs::read_inputs_from_file;
+
 use crate::errors::CliError;
 
-use codetracer_trace_writer::{create_trace_writer, TraceEventsFileFormat};
+use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
 
 use super::NargoConfig;
 
@@ -75,13 +75,7 @@ pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliErro
     let compiled_program =
         compile_bin_package_for_debugging(&workspace, package, &compile_options)?;
 
-    trace_program_and_decode(
-        compiled_program,
-        package,
-        &args.prover_name,
-        &args.out_dir,
-        args.compile_options.pedantic_solving,
-    )
+    trace_program_and_decode(compiled_program, package, &args.prover_name, &args.out_dir)
 }
 
 fn trace_program_and_decode(
@@ -89,13 +83,14 @@ fn trace_program_and_decode(
     package: &Package,
     prover_name: &str,
     out_dir: &str,
-    pedantic_solving: bool,
 ) -> Result<(), CliError> {
     // Parse the initial witness values from Prover.toml
-    let (inputs_map, _) =
-        read_inputs_from_file(&package.root_dir, prover_name, Format::Toml, &program.abi)?;
+    let (inputs_map, _) = read_inputs_from_file(
+        &package.root_dir.join(prover_name).with_extension("toml"),
+        &program.abi,
+    )?;
 
-    trace_program(&program, &package.name, &inputs_map, out_dir, pedantic_solving)
+    trace_program(&program, &package.name, &inputs_map, out_dir)
 }
 
 pub(crate) fn trace_program(
@@ -103,7 +98,6 @@ pub(crate) fn trace_program(
     crate_name: &CrateName,
     inputs_map: &InputMap,
     out_dir: &str,
-    pedantic_solving: bool,
 ) -> Result<(), CliError> {
     let initial_witness = compiled_program.abi.encode(inputs_map, None)?;
 
@@ -120,7 +114,7 @@ pub(crate) fn trace_program(
         create_trace_writer(crate_name_string.as_str(), &[], TraceEventsFileFormat::Ctfs);
     begin_trace(&mut *tracer, out_dir, &crate_name_string);
     if let Err(error) = noir_tracer::trace_circuit(
-        &Bn254BlackBoxSolver(pedantic_solving),
+        &Bn254BlackBoxSolver,
         &compiled_program.program.functions,
         &debug_artifact,
         initial_witness,

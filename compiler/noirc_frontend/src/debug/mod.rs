@@ -1,12 +1,9 @@
-use crate::ast::PathSegment;
-use crate::parse_program;
+use crate::ast::{PathKind, PathSegment};
 use crate::parser::{ParsedModule, ParsedSubModule};
-use crate::signed_field::SignedField;
 use crate::token::FunctionAttributeKind;
 use crate::{ast, ast::Path, parser::ItemKind};
-use fm::FileId;
 use noirc_artifacts::debug::{DebugFnId, DebugFunction};
-use noirc_errors::{Location, Span};
+use noirc_errors::{Located, Location, Span};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::mem::take;
@@ -55,7 +52,7 @@ impl Default for DebugInstrumenter {
 }
 
 impl DebugInstrumenter {
-    pub fn instrument_module(&mut self, module: &mut ParsedModule, file: FileId) {
+    pub fn instrument_module(&mut self, module: &mut ParsedModule) {
         module.items.iter_mut().for_each(|item| {
             match &mut item.kind {
                 // Instrument top-level functions of a module
@@ -66,15 +63,11 @@ impl DebugInstrumenter {
                     contents: contract_module,
                     ..
                 }) => {
-                    self.instrument_module(contract_module, file);
+                    self.instrument_module(contract_module);
                 }
                 _ => (),
             }
         });
-
-        // this part absolutely must happen after ast traversal above
-        // so that oracle functions don't get wrapped, resulting in infinite recursion:
-        self.insert_state_set_oracle(module, file);
     }
 
     fn insert_var(&mut self, var_name: &str) -> Option<SourceVarId> {
@@ -317,6 +310,51 @@ impl DebugInstrumenter {
         }
     }
 
+    /// Instrument a compound assignment (`x += y`, `arr[i] *= y`, …) by
+    /// rewriting it to the plain assignment it is equivalent to,
+    /// `x = x + y`, and instrumenting that.
+    ///
+    /// The parser used to perform this desugaring itself, so
+    /// [`Self::walk_assign_statement`] saw every compound assignment as an
+    /// [`ast::StatementKind::Assign`]. Once `AssignOp` became its own
+    /// statement kind — desugared later, in the elaborator — compound
+    /// assignments stopped being instrumented at all, which made the debugger
+    /// and the trace recorder report a **stale value** for every variable
+    /// updated with `+=`/`*=`/… rather than reporting nothing (so the
+    /// breakage was silent).
+    ///
+    /// Caveat, inherited from the desugaring the parser used to do: an
+    /// lvalue index sub-expression is evaluated twice, so `arr[f()] += 1`
+    /// calls `f()` twice under `--instrument-debug`. The elaborator's own
+    /// `elaborate_assign_op` avoids this by reusing the elaborated lvalue,
+    /// which is not available this early. Only debug-instrumented builds are
+    /// affected.
+    fn walk_assign_op_statement(
+        &mut self,
+        assign_op_stmt: &ast::AssignOpStatement,
+        location: Location,
+    ) -> ast::Statement {
+        let operator_location = assign_op_stmt.op.location();
+        let expression_location = assign_op_stmt.expression.location;
+
+        let desugared = ast::AssignStatement {
+            lvalue: assign_op_stmt.lvalue.clone(),
+            expression: ast::Expression {
+                kind: ast::ExpressionKind::Infix(Box::new(ast::InfixExpression {
+                    lhs: assign_op_stmt.lvalue.as_expression(),
+                    operator: Located::from(
+                        operator_location,
+                        assign_op_stmt.op.contents.to_binary_op_kind(),
+                    ),
+                    rhs: assign_op_stmt.expression.clone(),
+                })),
+                location: expression_location,
+            },
+        };
+
+        self.walk_assign_statement(&desugared, location)
+    }
+
     fn walk_assign_statement(
         &mut self,
         assign_stmt: &ast::AssignStatement,
@@ -527,6 +565,9 @@ impl DebugInstrumenter {
             ast::StatementKind::Assign(assign_stmt) => {
                 *stmt = self.walk_assign_statement(assign_stmt, stmt.location);
             }
+            ast::StatementKind::AssignOp(assign_op_stmt) => {
+                *stmt = self.walk_assign_op_statement(assign_op_stmt, stmt.location);
+            }
             ast::StatementKind::Expression(expr) => {
                 self.walk_expr(expr);
             }
@@ -538,31 +579,6 @@ impl DebugInstrumenter {
             }
             _ => {} // Constrain, Error
         }
-    }
-
-    fn insert_state_set_oracle(&self, module: &mut ParsedModule, file: FileId) {
-        let member_assigns = (1..=MAX_MEMBER_ASSIGN_DEPTH)
-            .map(|i| format!["__debug_member_assign_{i}"])
-            .collect::<Vec<String>>()
-            .join(",\n");
-        let (program, errors) = parse_program(
-            &format!(
-                r#"
-            use __debug::{{
-                __debug_var_assign,
-                __debug_var_drop,
-                __debug_fn_enter,
-                __debug_fn_exit,
-                __debug_dereference_assign,
-                {member_assigns},
-            }};"#
-            ),
-            file,
-        );
-        if !errors.is_empty() {
-            panic!("errors parsing internal oracle definitions: {errors:?}")
-        }
-        module.items.extend(program.items);
     }
 }
 
@@ -672,14 +688,25 @@ pub fn build_debug_crate_file() -> String {
     .join("\n")
 }
 
+/// Build a fully-qualified path `::__debug::{name}` so that debug function calls
+/// bypass any user-defined modules or functions with conflicting names.
+fn debug_fn_path(name: &str, location: Location) -> Path {
+    Path {
+        segments: vec![
+            PathSegment::from(ident("__debug", location)),
+            PathSegment::from(ident(name, location)),
+        ],
+        kind: PathKind::Absolute,
+        location,
+        kind_location: location,
+    }
+}
+
 fn build_assign_var_stmt(var_id: SourceVarId, expr: ast::Expression) -> ast::Statement {
     let location = expr.location;
     let kind = ast::ExpressionKind::Call(Box::new(ast::CallExpression {
         func: Box::new(ast::Expression {
-            kind: ast::ExpressionKind::Variable(Path::plain(
-                vec![PathSegment::from(ident("__debug_var_assign", location))],
-                location,
-            )),
+            kind: ast::ExpressionKind::Variable(debug_fn_path("__debug_var_assign", location)),
             location,
         }),
         is_macro_call: false,
@@ -691,10 +718,7 @@ fn build_assign_var_stmt(var_id: SourceVarId, expr: ast::Expression) -> ast::Sta
 fn build_drop_var_stmt(var_id: SourceVarId, location: Location) -> ast::Statement {
     let kind = ast::ExpressionKind::Call(Box::new(ast::CallExpression {
         func: Box::new(ast::Expression {
-            kind: ast::ExpressionKind::Variable(Path::plain(
-                vec![PathSegment::from(ident("__debug_var_drop", location))],
-                location,
-            )),
+            kind: ast::ExpressionKind::Variable(debug_fn_path("__debug_var_drop", location)),
             location,
         }),
         is_macro_call: false,
@@ -715,8 +739,8 @@ fn build_assign_member_stmt(
     let location = expr.location;
     let kind = ast::ExpressionKind::Call(Box::new(ast::CallExpression {
         func: Box::new(ast::Expression {
-            kind: ast::ExpressionKind::Variable(Path::plain(
-                vec![PathSegment::from(ident(&format!["__debug_member_assign_{arity}"], location))],
+            kind: ast::ExpressionKind::Variable(debug_fn_path(
+                &format!["__debug_member_assign_{arity}"],
                 location,
             )),
             location,
@@ -735,8 +759,8 @@ fn build_assign_member_stmt(
 fn build_debug_call_stmt(fname: &str, fn_id: DebugFnId, location: Location) -> ast::Statement {
     let kind = ast::ExpressionKind::Call(Box::new(ast::CallExpression {
         func: Box::new(ast::Expression {
-            kind: ast::ExpressionKind::Variable(Path::plain(
-                vec![PathSegment::from(ident(&format!["__debug_fn_{fname}"], location))],
+            kind: ast::ExpressionKind::Variable(debug_fn_path(
+                &format!["__debug_fn_{fname}"],
                 location,
             )),
             location,
@@ -762,13 +786,13 @@ fn pattern_vars(pattern: &ast::Pattern) -> Vec<(ast::Ident, bool)> {
                 stack.push_back((pattern, true));
             }
             ast::Pattern::Tuple(patterns, _) => {
-                stack.extend(patterns.iter().map(|pattern| (pattern, false)));
+                stack.extend(patterns.iter().map(|pattern| (pattern, is_mut)));
             }
             ast::Pattern::Struct(_, fields, _) => {
                 stack.extend(fields.iter().map(|(_, pattern)| (pattern, is_mut)));
             }
             ast::Pattern::Parenthesized(pattern, _) => {
-                stack.push_back((pattern, false));
+                stack.push_back((pattern, is_mut));
             }
             ast::Pattern::Interned(_, _) => (),
         }
@@ -821,13 +845,11 @@ fn id_expr(id: &ast::Ident) -> ast::Expression {
 }
 
 fn uint_expr(x: u128, location: Location) -> ast::Expression {
-    let value = SignedField::positive(x);
-    let kind = ast::ExpressionKind::Literal(ast::Literal::Integer(value, None));
+    let kind = ast::ExpressionKind::Literal(ast::Literal::Integer(x.into(), None));
     ast::Expression { kind, location }
 }
 
 fn sint_expr(x: i128, location: Location) -> ast::Expression {
-    let value = SignedField::from_signed(x);
-    let kind = ast::ExpressionKind::Literal(ast::Literal::Integer(value, None));
+    let kind = ast::ExpressionKind::Literal(ast::Literal::Integer(x.into(), None));
     ast::Expression { kind, location }
 }

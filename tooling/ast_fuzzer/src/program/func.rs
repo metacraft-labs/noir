@@ -1,19 +1,18 @@
+use acir::FieldElement;
 use iter_extended::vecmap;
+use itertools::Itertools;
 use nargo::errors::Location;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt::Debug,
+    rc::Rc,
 };
 use strum::IntoEnumIterator;
 
 use arbitrary::{Arbitrary, Unstructured};
 use noirc_frontend::{
     ast::{IntegerBitSize, UnaryOp},
-    hir_def::{
-        self,
-        expr::{Constructor, HirIdent},
-        stmt::HirPattern,
-    },
+    hir_def::expr::Constructor,
     monomorphization::{
         append_printable_type_info_for_type,
         ast::{
@@ -22,9 +21,8 @@ use noirc_frontend::{
             Parameters, Program, Type, While,
         },
     },
-    node_interner::DefinitionId,
-    shared::{Signedness, Visibility},
-    signed_field::SignedField,
+    shared::{Builtin, Signedness, Visibility},
+    token::FmtStrFragment,
 };
 
 use super::{
@@ -55,20 +53,6 @@ pub(super) struct FunctionDeclaration {
 }
 
 impl FunctionDeclaration {
-    /// Generate a HIR function signature.
-    pub(super) fn signature(&self) -> hir_def::function::FunctionSignature {
-        let param_types = self
-            .params
-            .iter()
-            .map(|(_id, mutable, _name, typ, vis)| hir_param(*mutable, typ, *vis))
-            .collect();
-
-        let return_type =
-            (!types::is_unit(&self.return_type)).then(|| types::to_hir_type(&self.return_type));
-
-        (param_types, return_type)
-    }
-
     /// Check if the return type contain a reference.
     pub(super) fn returns_refs(&self) -> bool {
         types::contains_reference(&self.return_type)
@@ -84,28 +68,6 @@ impl FunctionDeclaration {
         self.returns_refs()
             || self.params.iter().any(|(_, _, _, typ, _)| types::contains_reference(typ))
     }
-}
-
-/// HIR representation of a function parameter.
-pub(crate) fn hir_param(
-    mutable: bool,
-    typ: &Type,
-    vis: Visibility,
-) -> (HirPattern, hir_def::types::Type, Visibility) {
-    // The pattern doesn't seem to be used in `ssa::create_program`,
-    // apart from its location, so it shouldn't matter what we put into it.
-    let mut pat = HirPattern::Identifier(HirIdent {
-        location: Location::dummy(),
-        id: DefinitionId::dummy_id(),
-        impl_kind: hir_def::expr::ImplKind::NotATraitMethod,
-    });
-    if mutable {
-        pat = HirPattern::Mutable(Box::new(pat), Location::dummy());
-    }
-
-    let typ = types::to_hir_type(typ);
-
-    (pat, typ, vis)
 }
 
 /// Help avoid infinite recursion by limiting which function can call which other one.
@@ -224,7 +186,7 @@ pub(super) struct FunctionContext<'a> {
     /// by locally defined variables. Block scopes add and remove layers.
     locals: ScopeStack<LocalId>,
     /// Indicate which local variables are derived from function inputs.
-    dynamics: Stack<im::HashMap<LocalId, bool>>,
+    dynamics: Stack<imbl::HashMap<LocalId, bool>>,
     /// Indicator of being in a loop (and hence able to generate
     /// break and continue statements)
     in_loop: bool,
@@ -253,11 +215,10 @@ impl<'a> FunctionContext<'a> {
         );
 
         // The function parameters are the base layer for local variables.
-        let locals = ScopeStack::from_variables(
-            decl.params
-                .iter()
-                .map(|(id, mutable, name, typ, _vis)| (*id, *mutable, name.clone(), typ.clone())),
-        );
+        let locals =
+            ScopeStack::from_variables(decl.params.iter().map(|(id, mutable, name, typ, _vis)| {
+                (*id, *mutable, name.clone(), typ.as_ref().clone())
+            }));
 
         // Function parameters are by definition considered to be dynamic input.
         let dynamics = Stack::new(locals.current().variable_ids().map(|id| (*id, true)).collect());
@@ -348,6 +309,12 @@ impl<'a> FunctionContext<'a> {
         self.config().max_depth
     }
 
+    /// The maximum depth to generate types at, which is tracked separately from
+    /// the depth of expressions.
+    fn max_type_depth(&self) -> usize {
+        self.config().max_type_depth
+    }
+
     /// Get and increment the next local ID.
     fn next_local_id(&mut self) -> LocalId {
         let id = LocalId(self.next_local_id);
@@ -378,7 +345,7 @@ impl<'a> FunctionContext<'a> {
     ///
     /// A variable can become statically known after re-assignment.
     fn is_dynamic(&self, id: &LocalId) -> bool {
-        self.dynamics.current().get(id).cloned().unwrap_or_default()
+        self.dynamics.current().get(id).copied().unwrap_or_default()
     }
 
     /// Mark a variable as dynamic or not dynamic.
@@ -434,6 +401,7 @@ impl<'a> FunctionContext<'a> {
                 return Ok(Some(VariableId::Local(id)));
             }
         }
+
         // If we're looking for a mutable reference, we have to choose some
         // mutable local variable and take a reference over it.
         // We can't use a global for this, because they are immutable.
@@ -453,6 +421,12 @@ impl<'a> FunctionContext<'a> {
                 })
                 .map(|id| id.map(VariableId::Local));
         }
+
+        // If we are looking for a read-only reference, we can choose anything that has the target type.
+        if let Type::Reference(typ, false) = typ {
+            return self.choose_producer(u, typ);
+        }
+
         self.globals.choose_producer(u, typ).map(|id| id.map(VariableId::Global))
     }
 
@@ -519,7 +493,7 @@ impl<'a> FunctionContext<'a> {
                     }
                 };
             }
-        };
+        }
 
         let mut freq = Freq::new(u, &self.config().expr_freqs)?;
 
@@ -538,16 +512,16 @@ impl<'a> FunctionContext<'a> {
 
         let allow_match = allow_if_then && !self.ctx.config.avoid_match;
 
-        if freq.enabled_when("unary", allow_nested && types::can_unary_return(typ)) {
-            if let Some(expr) = self.gen_unary(u, typ, max_depth)? {
-                return Ok(expr);
-            }
+        if freq.enabled_when("unary", allow_nested && types::can_unary_return(typ))
+            && let Some(expr) = self.gen_unary(u, typ, max_depth)?
+        {
+            return Ok(expr);
         }
 
-        if freq.enabled_when("binary", allow_nested && types::can_binary_return(typ)) {
-            if let Some(expr) = self.gen_binary(u, typ, max_depth)? {
-                return Ok(expr);
-            }
+        if freq.enabled_when("binary", allow_nested && types::can_binary_return(typ))
+            && let Some(expr) = self.gen_binary(u, typ, max_depth)?
+        {
+            return Ok(expr);
         }
 
         // if-then-else returning a value
@@ -579,10 +553,10 @@ impl<'a> FunctionContext<'a> {
         }
 
         // We can always try to just derive a value from the variables we have.
-        if freq.enabled("vars") {
-            if let Some(expr) = self.gen_expr_from_vars(u, typ, max_depth)? {
-                return Ok(expr);
-            }
+        if freq.enabled("vars")
+            && let Some(expr) = self.gen_expr_from_vars(u, typ, max_depth)?
+        {
+            return Ok(expr);
         }
 
         // If nothing else worked out we can always produce a random literal.
@@ -598,6 +572,7 @@ impl<'a> FunctionContext<'a> {
     ) -> arbitrary::Result<Option<TrackedExpression>> {
         if let Some(id) = self.choose_producer(u, typ)? {
             let (src_mutable, src_name, src_type) = self.get_variable(&id).clone();
+            let src_type = Rc::new(src_type);
             let ident_id = self.next_ident_id();
             let src_expr = expr::ident(id, ident_id, src_mutable, src_name, src_type.clone());
             let src_dyn = match id {
@@ -618,18 +593,33 @@ impl<'a> FunctionContext<'a> {
             // If we can't produce the exact we're looking for, maybe we can produce parts of it.
             match typ {
                 Type::Array(len, item_type) => {
-                    let mut arr = ArrayLiteral {
-                        contents: Vec::with_capacity(*len as usize),
-                        typ: typ.clone(),
-                    };
-                    let mut arr_dyn = false;
-                    for _ in 0..*len {
-                        let (item, item_dyn) =
+                    // Randomly choose between Array and Repeated literal
+                    if bool::arbitrary(u)? {
+                        let mut arr = ArrayLiteral {
+                            contents: Vec::with_capacity(*len as usize),
+                            typ: typ.clone(),
+                        };
+                        let mut arr_dyn = false;
+                        for _ in 0..*len {
+                            let (item, item_dyn) =
+                                self.gen_expr(u, item_type, max_depth, Flags::NESTED)?;
+                            arr_dyn |= item_dyn;
+                            arr.contents.push(item);
+                        }
+                        return Ok(Some((Expression::Literal(Literal::Array(arr)), arr_dyn)));
+                    } else {
+                        let (element, elem_dyn) =
                             self.gen_expr(u, item_type, max_depth, Flags::NESTED)?;
-                        arr_dyn |= item_dyn;
-                        arr.contents.push(item);
+                        return Ok(Some((
+                            Expression::Literal(Literal::Repeated {
+                                element: Box::new(element),
+                                length: *len,
+                                is_vector: false,
+                                typ: typ.clone(),
+                            }),
+                            elem_dyn,
+                        )));
                     }
-                    return Ok(Some((Expression::Literal(Literal::Array(arr)), arr_dyn)));
                 }
                 Type::Tuple(items) => {
                     let mut values = Vec::with_capacity(items.len());
@@ -667,39 +657,39 @@ impl<'a> FunctionContext<'a> {
         // If we found our type, we can return it without further ado.
         if src_type == tgt_type {
             // If we want a vector, we can push onto it.
-            if let Type::Vector(item_type) = src_type {
+            if let Type::Vector(item_type) = src_type
+                && bool::arbitrary(u)?
+            {
+                let (item, item_dyn) = self.gen_expr(u, item_type, max_depth, Flags::TOP)?;
+                // We can use push_back, push_front, or insert.
                 if bool::arbitrary(u)? {
-                    let (item, item_dyn) = self.gen_expr(u, item_type, max_depth, Flags::TOP)?;
-                    // We can use push_back, push_front, or insert.
-                    if bool::arbitrary(u)? {
-                        let push_expr = self.call_vector_push(
-                            src_type.clone(),
-                            item_type.as_ref().clone(),
-                            src_expr,
-                            bool::arbitrary(u)?,
-                            item,
-                        );
-                        return Ok(Some((push_expr, src_dyn || item_dyn)));
-                    } else {
-                        // Generate a random index and insert the item at it.
-                        return self.gen_vector_access(
-                            u,
-                            (src_expr, src_dyn || item_dyn),
-                            src_type,
-                            src_mutable,
-                            tgt_type,
-                            max_depth,
-                            |this, ident, idx| {
-                                this.call_vector_insert(
-                                    src_type.clone(),
-                                    item_type.as_ref().clone(),
-                                    Expression::Ident(ident),
-                                    idx,
-                                    item,
-                                )
-                            },
-                        );
-                    }
+                    let push_expr = self.call_vector_push(
+                        src_type.clone(),
+                        item_type.as_ref().clone(),
+                        src_expr,
+                        bool::arbitrary(u)?,
+                        item,
+                    );
+                    return Ok(Some((push_expr, src_dyn || item_dyn)));
+                } else {
+                    // Generate a random index and insert the item at it.
+                    return self.gen_vector_access(
+                        u,
+                        (src_expr, src_dyn || item_dyn),
+                        src_type,
+                        src_mutable,
+                        tgt_type,
+                        max_depth,
+                        |this, ident, idx| {
+                            this.call_vector_insert(
+                                src_type.clone(),
+                                item_type.as_ref().clone(),
+                                Expression::Ident(ident),
+                                idx,
+                                item,
+                            )
+                        },
+                    );
                 }
             }
             // Otherwise just return as-is.
@@ -741,6 +731,30 @@ impl<'a> FunctionContext<'a> {
                 let expr = expr::deref(src_expr, tgt_type.clone());
                 Ok(Some((expr, src_dyn)))
             }
+            // Reborrow a field of a referenced tuple: `&mut (*r).i`.
+            //
+            // The reborrow has to alias the field in place. Copying it into a fresh allocation
+            // instead silently detaches the two, so a write through the reborrow never reaches
+            // the original — which is what noir-claude#1099 was.
+            (Type::Reference(inner, true), Type::Reference(field_type, true))
+                if matches!(inner.as_ref(), Type::Tuple(fields)
+                    if fields.iter().any(|field| field == field_type.as_ref())) =>
+            {
+                let Type::Tuple(fields) = inner.as_ref() else {
+                    unreachable!("checked by the guard above");
+                };
+                let candidates = fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, field)| *field == field_type.as_ref())
+                    .map(|(i, _)| i)
+                    .collect::<Vec<_>>();
+                let field_index = *u.choose(&candidates)?;
+                let deref = expr::deref(src_expr, inner.as_ref().clone());
+                let field = Expression::ExtractTupleField(Box::new(deref), field_index);
+                let expr = expr::ref_mut(field, field_type.as_ref().clone());
+                Ok(Some((expr, src_dyn)))
+            }
             // Mutable reference over the source type.
             (_, Type::Reference(typ, true)) if typ.as_ref() == src_type => {
                 let expr = if src_mutable {
@@ -748,6 +762,49 @@ impl<'a> FunctionContext<'a> {
                 } else {
                     self.indirect_ref_mut((src_expr, src_dyn), typ.as_ref().clone())
                 };
+                Ok(Some((expr, src_dyn)))
+            }
+            // Read-only reference over the source type.
+            (_, Type::Reference(typ, false)) if typ.as_ref() == src_type => {
+                let expr = expr::ref_with_mut(src_expr, typ.as_ref().clone(), false);
+                Ok(Some((expr, src_dyn)))
+            }
+            // Reinterpret a string as its byte array with `str_as_bytes`.
+            //
+            // The conversion returns a value that shares the string's storage, so the ownership
+            // pass has to keep them apart; noir-claude#1201 was exactly a missing clone here.
+            (Type::String(len), Type::Array(tgt_len, item_type))
+                if *len == *tgt_len
+                    && matches!(
+                        item_type.as_ref(),
+                        Type::Integer(Signedness::Unsigned, IntegerBitSize::Eight)
+                    ) =>
+            {
+                let expr = self.call_str_as_bytes(src_expr, *len, tgt_type.clone());
+                Ok(Some((expr, src_dyn)))
+            }
+            // Reinterpret a string as its byte array with `str_as_bytes`.
+            //
+            // The conversion returns a value that shares the string's storage, so the ownership
+            // pass has to keep them apart; noir-claude#1201 was exactly a missing clone here.
+            (Type::String(len), Type::Array(tgt_len, item_type))
+                if *len == *tgt_len
+                    && matches!(
+                        item_type.as_ref(),
+                        Type::Integer(Signedness::Unsigned, IntegerBitSize::Eight)
+                    ) =>
+            {
+                let expr = self.call_str_as_bytes(src_expr, *len, tgt_type.clone());
+                Ok(Some((expr, src_dyn)))
+            }
+            // Convert an array into a vector with `as_vector`. This is how a fixed-size array
+            // becomes dynamically sized in real Noir, and it is what promotes the value into
+            // the runtime memory-block representation that vector intrinsics and the
+            // reference-counting machinery operate on.
+            (Type::Array(_, item_type), Type::Vector(tgt_item))
+                if item_type == tgt_item && !self.in_no_dynamic =>
+            {
+                let expr = self.call_as_vector(src_expr, src_type.clone(), tgt_type.clone());
                 Ok(Some((expr, src_dyn)))
             }
             // Index a non-empty array.
@@ -779,7 +836,7 @@ impl<'a> FunctionContext<'a> {
                 let item_expr = Expression::Index(Index {
                     collection: Box::new(src_expr),
                     index: Box::new(idx_expr),
-                    element_type: *item_type.clone(),
+                    element_type: item_type.as_ref().clone(),
                     location: Location::dummy(),
                 });
                 // Produce the target type from the item.
@@ -852,7 +909,7 @@ impl<'a> FunctionContext<'a> {
                     Expression::Index(Index {
                         collection: Box::new(Expression::Ident(ident)),
                         index: Box::new(idx),
-                        element_type: *item_type.clone(),
+                        element_type: item_type.as_ref().clone(),
                         location: Location::dummy(),
                     })
                 },
@@ -934,14 +991,24 @@ impl<'a> FunctionContext<'a> {
         let len_expr = self.call_array_len(Expression::Ident(ident_1), src_type.clone());
 
         // The rules around dynamic indexing is the same as for arrays.
+        let no_dynamic =
+            self.in_no_dynamic || !self.unconstrained() && types::contains_reference(item_type);
+        let was_in_no_dynamic = std::mem::replace(&mut self.in_no_dynamic, no_dynamic);
+
         let (idx_expr, idx_dyn) = if max_depth == 0 || bool::arbitrary(u)? {
             // Avoid any stack overflow where we look for an index in the vector itself.
-            (self.gen_literal(u, &types::U32)?, false)
-        } else {
-            let no_dynamic =
-                self.in_no_dynamic || !self.unconstrained() && types::contains_reference(item_type);
-            let was_in_no_dynamic = std::mem::replace(&mut self.in_no_dynamic, no_dynamic);
+            let mut idx_expr = self.gen_literal(u, &types::U32)?;
 
+            // A literal index is bounded here rather than by the caller, because a vector's
+            // length is not known at compile time: unlike an array, an out-of-bounds constant
+            // is not rejected during compilation, and reaches ACIR generation as an index which
+            // could not be simplified away.
+            if self.avoid_index_out_of_bounds(u)? {
+                idx_expr = expr::modulo(idx_expr, len_expr);
+            }
+
+            (idx_expr, false)
+        } else {
             // Choose a random index.
             let (mut idx_expr, idx_dyn) =
                 self.gen_expr(u, &types::U32, max_depth.saturating_sub(1), Flags::NESTED)?;
@@ -953,9 +1020,10 @@ impl<'a> FunctionContext<'a> {
                 idx_expr = expr::modulo(idx_expr, len_expr);
             }
 
-            self.in_no_dynamic = was_in_no_dynamic;
             (idx_expr, idx_dyn)
         };
+
+        self.in_no_dynamic = was_in_no_dynamic;
 
         // Access the item by index
         let item_expr = access_item(self, ident_2, idx_expr);
@@ -1006,7 +1074,10 @@ impl<'a> FunctionContext<'a> {
                 self.gen_expr(u, &types::U32, max_depth.saturating_sub(1), Flags::NESTED)?;
 
             // Limit the index to be in the valid range for the array length, with a small chance of index OOB.
-            if self.avoid_index_out_of_bounds(u)? {
+            // Always apply modulo for constant literal indices because constant
+            // out-of-bounds are rejected at compile time
+            let is_literal = matches!(idx, Expression::Literal(_));
+            if is_literal || self.avoid_index_out_of_bounds(u)? {
                 idx = expr::index_modulo(idx, len);
             }
 
@@ -1187,10 +1258,10 @@ impl<'a> FunctionContext<'a> {
         // TODO(#7926): Match
 
         // We don't want constraints to get too frequent, as it could dominate all outcome.
-        if freq.enabled_when("constrain", !self.config().avoid_constrain) {
-            if let Some(e) = self.gen_constrain(u)? {
-                return Ok(e);
-            }
+        if freq.enabled_when("constrain", !self.config().avoid_constrain)
+            && let Some(e) = self.gen_constrain(u)?
+        {
+            return Ok(e);
         }
 
         // Require a positive budget, so that we have some for the block itself and its contents.
@@ -1198,20 +1269,26 @@ impl<'a> FunctionContext<'a> {
             return self.gen_if(u, &Type::Unit, self.max_depth(), Flags::TOP).map(|(e, _)| e);
         }
 
-        if freq.enabled_when("match", self.budget > 1 && !self.ctx.config.avoid_match) {
-            if let Some((e, _)) = self.gen_match(u, &Type::Unit, self.max_depth())? {
-                return Ok(e);
-            }
+        if freq.enabled_when("match", self.budget > 1 && !self.ctx.config.avoid_match)
+            && let Some((e, _)) = self.gen_match(u, &Type::Unit, self.max_depth())?
+        {
+            return Ok(e);
         }
 
         if freq.enabled_when("for", self.budget > 1) {
             return self.gen_for(u);
         }
 
-        if freq.enabled_when("call", self.budget > 0) {
-            if let Some((e, _)) = self.gen_call(u, &Type::Unit, self.max_depth())? {
-                return Ok(e);
-            }
+        if freq.enabled_when("call", self.budget > 0)
+            && let Some((e, _)) = self.gen_call(u, &Type::Unit, self.max_depth())?
+        {
+            return Ok(e);
+        }
+
+        if freq.enabled_when("print", !self.config().avoid_print)
+            && let Some(e) = self.gen_print(u)?
+        {
+            return Ok(e);
         }
 
         if self.unconstrained() {
@@ -1231,19 +1308,12 @@ impl<'a> FunctionContext<'a> {
             if freq.enabled_when("continue", self.in_loop && !self.config().avoid_loop_control) {
                 return Ok(Expression::Continue);
             }
-
-            // For now only try prints in unconstrained code, were we don't need to create a proxy.
-            if freq.enabled_when("print", !self.config().avoid_print) {
-                if let Some(e) = self.gen_print(u)? {
-                    return Ok(e);
-                }
-            }
         }
 
-        if freq.enabled("assign") {
-            if let Some(e) = self.gen_assign(u)? {
-                return Ok(e);
-            }
+        if freq.enabled("assign")
+            && let Some(e) = self.gen_assign(u)?
+        {
+            return Ok(e);
         }
 
         self.gen_let(u)
@@ -1254,20 +1324,21 @@ impl<'a> FunctionContext<'a> {
         // Generate a type or choose an existing one.
         let max_depth = self.max_depth();
         let comptime_friendly = self.config().comptime_friendly;
-        let mut typ = self.ctx.gen_type(u, max_depth, false, false, comptime_friendly, true)?;
+        let mut typ =
+            self.ctx.gen_type(u, self.max_type_depth(), false, false, comptime_friendly, true)?;
 
         // If we picked the target type to be a vector, we can consider popping from it.
-        if let Type::Vector(ref item_type) = typ {
-            if bool::arbitrary(u)? {
-                let fields = if bool::arbitrary(u)? {
-                    // ([T], T) <- pop_back or remove
-                    vec![typ.clone(), item_type.as_ref().clone()]
-                } else {
-                    // (T, [T]) <- pop_front
-                    vec![item_type.as_ref().clone(), typ.clone()]
-                };
-                typ = Type::Tuple(fields);
-            }
+        if let Type::Vector(ref item_type) = typ
+            && bool::arbitrary(u)?
+        {
+            let fields = if bool::arbitrary(u)? {
+                // ([T], T) <- pop_back or remove
+                vec![typ.clone(), item_type.as_ref().clone()]
+            } else {
+                // (T, [T]) <- pop_front
+                vec![item_type.as_ref().clone(), typ.clone()]
+            };
+            typ = Type::Tuple(fields);
         }
 
         let (expr, is_dyn) = self.gen_expr(u, &typ, max_depth, Flags::TOP)?;
@@ -1297,7 +1368,7 @@ impl<'a> FunctionContext<'a> {
 
         self.set_dynamic(id, is_dynamic);
 
-        expr::let_var(id, mutable, name, expr)
+        expr::let_var(id, mutable, name, typ, expr)
     }
 
     /// Add a new local variable and return a `Let` expression along with an `Ident` to refer it by.
@@ -1319,7 +1390,7 @@ impl<'a> FunctionContext<'a> {
             self.next_ident_id(),
             mutable,
             name.clone(),
-            typ,
+            Rc::new(typ),
         );
         (v, i)
     }
@@ -1335,28 +1406,63 @@ impl<'a> FunctionContext<'a> {
             .filter(|(_, (mutable, _, typ))| {
                 // We banned reassigning variables which contain mutable references in ACIR (#8790)
                 *mutable && (self.unconstrained() || !types::contains_reference(typ))
+                // We can deref-assign to `&mut` references even if they are not
+                // themselves mutable, but only when the pointee does not itself
+                // contain a reference. In constrained code the frontend rejects
+                // assigning a reference-containing value (`*r = (&mut x, ..)`),
+                // and the AST fuzzer bypasses that check, so SSA-gen would fail
+                // while flattening tries to merge the reference.
+                || match typ {
+                    Type::Reference(inner, true) => {
+                        self.unconstrained() || !types::contains_reference(inner)
+                    }
+                    _ => false,
+                }
             })
-            .map(|(id, _)| id)
+            .filter(|(id, (_, _, typ))| {
+                // Preserve the non-dynamic state of references.
+                !(types::is_reference(typ) && !self.is_dynamic(id) && self.in_dynamic)
+            })
+            .map(|(id, (mutable, _, _))| (*id, *mutable))
             .collect::<Vec<_>>();
 
         if opts.is_empty() {
             return Ok(None);
         }
 
-        let id = *u.choose_iter(opts)?;
+        let (id, mutable) = u.choose_iter(opts)?;
         let ident = LValue::Ident(self.local_ident(id));
         let typ = self.local_type(id).clone();
-        let lvalue = self.gen_lvalue(u, ident, typ)?;
 
+        // References may have aliases, so we don't want to change their dynamic nature,
+        // because the change would not be reflected on the alias. If the value is already
+        // dynamic, we'll keep it as dynamic, and refrain from change it to non-dynamic as well.
+        let preserve_non_dynamic = types::is_reference(&typ);
+        let no_dynamic = self.in_no_dynamic || preserve_non_dynamic && !self.is_dynamic(&id);
+        let was_in_no_dynamic = std::mem::replace(&mut self.in_no_dynamic, no_dynamic);
+
+        // Generate the part fo the ident we assign to.
+        // In constrained code we cannot rebind a `&mut T` variable directly
+        // (`b = &mut x;`) because the frontend rejects it via
+        // `AssignedToVarContainingReference`. The variable is still in `opts`
+        // because deref-assign (`*b = x;`) is allowed for `&mut`; force
+        // `can_rebind = false` here so `gen_lvalue` only generates the
+        // deref form.
+        let can_rebind = mutable && (self.unconstrained() || !types::contains_reference(&typ));
+        let lvalue = self.gen_lvalue(u, ident, typ, can_rebind)?;
         // Generate the assigned value.
         let (expr, expr_dyn) = self.gen_expr(u, &lvalue.typ, self.max_depth(), Flags::TOP)?;
 
-        if lvalue.is_dyn || expr_dyn || self.in_dynamic {
-            self.set_dynamic(id, true);
-        } else if !lvalue.is_dyn && !expr_dyn && !lvalue.is_compound {
-            // This value is no longer considered dynamic, unless we assigned to a member of an array or tuple,
-            // in which case we don't know if other members have dynamic properties.
-            self.set_dynamic(id, false);
+        self.in_no_dynamic = was_in_no_dynamic;
+
+        if !preserve_non_dynamic {
+            if lvalue.is_dyn || expr_dyn || self.in_dynamic {
+                self.set_dynamic(id, true);
+            } else if !lvalue.is_dyn && !expr_dyn && !lvalue.is_compound {
+                // This value is no longer considered dynamic, unless we assigned to a member of an array or tuple,
+                // in which case we don't know if other members have dynamic properties.
+                self.set_dynamic(id, false);
+            }
         }
 
         let assign =
@@ -1378,6 +1484,7 @@ impl<'a> FunctionContext<'a> {
         u: &mut Unstructured,
         lvalue: LValue,
         typ: Type,
+        can_rebind: bool,
     ) -> arbitrary::Result<LValueWithMeta> {
         /// Accumulate statements for sub-indexes of multi-dimensional arrays.
         /// For example `a[1+2][3+4] = 5;` becomes `let i = 1+2; let j = 3+4; a[i][j] = 5;`
@@ -1419,7 +1526,7 @@ impl<'a> FunctionContext<'a> {
                     location: Location::dummy(),
                 };
 
-                let mut lvalue = self.gen_lvalue(u, index, typ)?;
+                let mut lvalue = self.gen_lvalue(u, index, typ, can_rebind)?;
                 lvalue.is_compound = true;
                 lvalue.is_dyn |= idx_dyn;
                 lvalue.statements = merge_statements(statements, lvalue.statements);
@@ -1429,9 +1536,18 @@ impl<'a> FunctionContext<'a> {
                 let idx = u.choose_index(items.len())?;
                 let typ = items[idx].clone();
                 let member = LValue::MemberAccess { object: Box::new(lvalue), field_index: idx };
-                let mut lvalue = self.gen_lvalue(u, member, typ)?;
+                let mut lvalue = self.gen_lvalue(u, member, typ, can_rebind)?;
                 lvalue.is_compound = true;
                 lvalue
+            }
+            Type::Reference(typ, true) if !can_rebind || bool::arbitrary(u)? => {
+                // If the reference itself is not mutable, we cannot rebind it, but we can deref-assign to it.
+                // eg. `let mut r = &mut 1;` can be re-bound: `r = &mut 2;`, or assigned a value: `*r = 3;`,
+                // but `let r = &mut 1;` can only be assigned to as `*r = 2;`.
+                let typ = typ.as_ref().clone();
+                let deref =
+                    LValue::Dereference { reference: Box::new(lvalue), element_type: typ.clone() };
+                self.gen_lvalue(u, deref, typ, can_rebind)?
             }
             typ => {
                 LValueWithMeta { lvalue, typ, is_dyn: false, is_compound: false, statements: None }
@@ -1443,33 +1559,49 @@ impl<'a> FunctionContext<'a> {
 
     /// Generate a `println` statement, if there is some printable local variable.
     ///
-    /// For now this only works in unconstrained code. For constrained code we will
-    /// need to generate a proxy function, which we can do as a follow-up pass,
-    /// as it has to be done once per function signature.
+    /// This works as-is in unconstrained functions. In constrained functions
+    /// we need to generate a proxy function, which happens in a follow-up pass,
+    /// once per function signature.
     fn gen_print(&mut self, u: &mut Unstructured) -> arbitrary::Result<Option<Expression>> {
         let opts = self
             .locals
             .current()
             .variables()
-            .filter_map(|(id, (_, _, typ))| types::is_printable(typ).then_some((id, typ)))
+            .filter_map(|(id, (_, _, typ))| types::is_printable(typ).then_some((*id, typ.clone())))
             // TODO(#10499): comptime function representations are at the moment just "(function)"
             // (disable printing functions if comptime_friendly is on)
             .filter(|(_, typ)| !types::is_function(typ) || !self.config().comptime_friendly)
-            .collect::<Vec<_>>();
+            .collect::<Vec<(LocalId, Type)>>();
 
         if opts.is_empty() {
             return Ok(None);
         }
 
+        // Half the time, print through a format string rather than printing a value as-is.
+        // A `f"..."` literal carries its interpolated values in a separate tuple alongside the
+        // fragment list, and that pairing has to survive monomorphization and the comptime
+        // interpreter; it is the only literal form no generated program was producing.
+        let fmt_opts =
+            opts.iter().filter(|(_, typ)| !types::is_function(typ)).cloned().collect::<Vec<_>>();
+        // Only in unconstrained functions: a constrained `println` is routed through a proxy
+        // function generated once per signature in a later pass, which does not know how to key
+        // the per-interpolation metadata a format string carries.
+        if self.unconstrained()
+            && u.ratio(1, 2)?
+            && let Some(call) = self.gen_print_fmt_str(u, &fmt_opts)?
+        {
+            return Ok(Some(call));
+        }
+
         // Print one of the variables as-is.
-        let (id, typ) = u.choose_iter(opts)?;
-        let id = *id;
+        let (id, typ) = u.choose_iter(opts.iter())?;
+        let (id, typ) = (*id, typ.clone());
 
         // The print oracle takes 2 parameters: the newline marker and the value,
         // but it takes 2 more arguments: the type descriptor and the format string marker,
         // which are inserted automatically by the monomorphizer.
         let param_types = vec![Type::Bool, typ.clone()];
-        let hir_type = types::to_hir_type(typ);
+        let hir_type = types::to_hir_type(&typ);
         let ident = self.local_ident(id);
 
         // Functions need to be passed as a tuple.
@@ -1491,10 +1623,15 @@ impl<'a> FunctionContext<'a> {
 
         let print_oracle_ident = Ident {
             location: None,
-            definition: Definition::Oracle("print".to_string()),
+            definition: Definition::Oracle { name: "print".to_string(), pure: false },
             mutable: false,
             name: "print_oracle".to_string(),
-            typ: Type::Function(param_types, Box::new(Type::Unit), Box::new(Type::Unit), true),
+            typ: Rc::new(Type::Function(
+                param_types,
+                Rc::new(Type::Unit),
+                Rc::new(Type::Unit),
+                true,
+            )),
             id: self.next_ident_id(),
         };
 
@@ -1506,6 +1643,69 @@ impl<'a> FunctionContext<'a> {
         });
 
         Ok(Some(call))
+    }
+
+    /// Generate a `println` of a format string interpolating one or two printable locals.
+    ///
+    /// Function-typed locals are excluded by the caller: they would print as "(function)" and
+    /// the tuple element type could not be described by the printable-type metadata.
+    fn gen_print_fmt_str(
+        &mut self,
+        u: &mut Unstructured,
+        opts: &[(LocalId, Type)],
+    ) -> arbitrary::Result<Option<Expression>> {
+        if opts.is_empty() {
+            return Ok(None);
+        }
+
+        // Exactly one interpolation: the monomorphized `print` call takes the value, one piece
+        // of type metadata and the format-string marker, and the printer asserts that shape.
+        // A second interpolation would add another metadata argument and break it.
+        let count = 1;
+        let (id, typ) = u.choose(opts)?.clone();
+        let ident = self.local_ident(id);
+        let fragments = vec![
+            FmtStrFragment::String("v".to_string()),
+            FmtStrFragment::Interpolation(ident.name.clone(), Location::dummy()),
+        ];
+        let values = vec![Expression::Ident(ident)];
+        let value_types = vec![typ];
+
+        // `Literal::FmtStr`'s second field is the number of interpolated variables, which is
+        // also what `Expression::return_type` uses as the `FmtString` size.
+        let count = count as u32;
+        let values_type = Type::Tuple(value_types);
+        let fmt_type = Type::FmtString(count, Rc::new(values_type));
+        let fmt_literal = Expression::Literal(Literal::FmtStr(
+            fragments,
+            u64::from(count),
+            Box::new(Expression::Tuple(values)),
+        ));
+
+        let param_types = vec![Type::Bool, fmt_type.clone()];
+        let mut args = vec![expr::lit_bool(true), fmt_literal];
+        append_printable_type_info_for_type(types::to_hir_type(&fmt_type), &mut args);
+
+        let print_oracle_ident = Ident {
+            location: None,
+            definition: Definition::Oracle { name: "print".to_string(), pure: false },
+            mutable: false,
+            name: "print_oracle".to_string(),
+            typ: Rc::new(Type::Function(
+                param_types,
+                Rc::new(Type::Unit),
+                Rc::new(Type::Unit),
+                true,
+            )),
+            id: self.next_ident_id(),
+        };
+
+        Ok(Some(Expression::Call(Call {
+            func: Box::new(Expression::Ident(print_oracle_ident)),
+            arguments: args,
+            return_type: Type::Unit,
+            location: Location::dummy(),
+        })))
     }
 
     /// Generate a `constrain` statement, if there is some local variable we can do it on.
@@ -1527,6 +1727,68 @@ impl<'a> FunctionContext<'a> {
         Ok(Some(cons))
     }
 
+    /// Generate a block which is statically doomed by a literal failing assertion.
+    fn gen_doomed_block(
+        &mut self,
+        u: &mut Unstructured,
+        typ: &Type,
+    ) -> arbitrary::Result<TrackedExpression> {
+        self.decrease_budget(1);
+
+        let msg = self.gen_literal(u, &CONSTRAIN_MSG_TYPE)?;
+        let assertion = Expression::Constrain(
+            Box::new(expr::lit_bool(false)),
+            Location::dummy(),
+            Some(Box::new((msg, types::to_hir_type(&CONSTRAIN_MSG_TYPE)))),
+        );
+
+        let block = if types::is_unit(typ) {
+            Expression::Block(vec![assertion])
+        } else {
+            Expression::Block(vec![
+                Expression::Semi(Box::new(assertion)),
+                self.gen_literal(u, typ)?,
+            ])
+        };
+
+        Ok((block, false))
+    }
+
+    fn gen_if_arm(
+        &mut self,
+        u: &mut Unstructured,
+        typ: &Type,
+        max_depth: usize,
+        flags: Flags,
+        doomed: bool,
+    ) -> arbitrary::Result<TrackedExpression> {
+        if doomed {
+            self.gen_doomed_block(u, typ)
+        } else if flags.allow_blocks {
+            self.gen_block(u, typ)
+        } else {
+            self.gen_expr(u, typ, max_depth, flags)
+        }
+    }
+
+    fn should_gen_doomed_branch(
+        &self,
+        u: &mut Unstructured,
+        typ: &Type,
+        flags: Flags,
+    ) -> arbitrary::Result<bool> {
+        if self.unconstrained()
+            || self.config().avoid_constrain
+            || !flags.allow_blocks
+            || types::contains_reference(typ)
+        {
+            return Ok(false);
+        }
+
+        let mut freq = Freq::new(u, &self.config().doomed_branch_freqs)?;
+        Ok(freq.enabled("doomed"))
+    }
+
     /// Generate an if-then-else statement or expression.
     fn gen_if(
         &mut self,
@@ -1546,23 +1808,22 @@ impl<'a> FunctionContext<'a> {
         let in_dynamic = self.in_dynamic || cond_dyn;
         let was_in_dynamic = std::mem::replace(&mut self.in_dynamic, in_dynamic);
 
-        let (cons, cons_dyn) = {
-            if flags.allow_blocks {
-                self.gen_block(u, typ)?
-            } else {
-                self.gen_expr(u, typ, max_depth, flags)?
-            }
-        };
+        let gen_doomed_branch = self.should_gen_doomed_branch(u, typ, flags)?;
+        let doomed_consequence = gen_doomed_branch && bool::arbitrary(u)?;
 
-        let alt = if types::is_unit(typ) && bool::arbitrary(u)? {
+        let (cons, cons_dyn) = self.gen_if_arm(u, typ, max_depth, flags, doomed_consequence)?;
+
+        let alt = if types::is_unit(typ) && !gen_doomed_branch && bool::arbitrary(u)? {
             None
         } else {
             self.decrease_budget(1);
-            let expr = if flags.allow_blocks {
-                self.gen_block(u, typ)?
-            } else {
-                self.gen_expr(u, typ, max_depth, flags)?
-            };
+            let expr = self.gen_if_arm(
+                u,
+                typ,
+                max_depth,
+                flags,
+                gen_doomed_branch && !doomed_consequence,
+            )?;
             Some(expr)
         };
 
@@ -1640,6 +1901,7 @@ impl<'a> FunctionContext<'a> {
             start_range: Box::new(start_range),
             end_range: Box::new(end_range),
             block: Box::new(block),
+            inclusive: bool::arbitrary(u)?,
             start_range_location: Location::dummy(),
             end_range_location: Location::dummy(),
         });
@@ -1750,12 +2012,32 @@ impl<'a> FunctionContext<'a> {
         self.decrease_budget(1);
 
         // Start building the loop harness, initialize index to 0
-        let let_idx = expr::let_var(idx_local_id, true, idx_name, expr::u32_literal(0));
+        let let_idx = expr::let_var(idx_local_id, true, idx_name, types::U32, expr::u32_literal(0));
+
+        // Half the time, give the loop a user induction variable and a user break guard, so the
+        // exit condition is not always the synthetic `idx == max` shape.
+        self.enter_scope();
+        let induction = if u.ratio(1, 2)? { Some(self.gen_user_induction(u)?) } else { None };
 
         // Get the randomized loop body
         let was_in_loop = std::mem::replace(&mut self.in_loop, true);
         let (mut loop_body, _) = self.gen_block(u, &Type::Unit)?;
         self.in_loop = was_in_loop;
+
+        if let Some((_, update, guard)) = &induction {
+            // Prepend in reverse order to get `if guard { break }; step; <body>` — a
+            // user-written break-on-condition loop rather than the synthetic `idx == max` one.
+            expr::prepend(&mut loop_body, update.clone());
+            expr::prepend(
+                &mut loop_body,
+                expr::if_else(
+                    guard.clone(),
+                    Expression::Break,
+                    Expression::Block(vec![]),
+                    Type::Unit,
+                ),
+            );
+        }
 
         // Increment the index in the beginning of the body.
         expr::prepend(
@@ -1775,7 +2057,88 @@ impl<'a> FunctionContext<'a> {
             Type::Unit,
         );
 
-        Ok(Expression::Block(vec![let_idx, Expression::Loop(Box::new(loop_body))]))
+        let mut stmts = vec![let_idx];
+        if let Some((decl, _, _)) = induction {
+            stmts.push(decl);
+        }
+        stmts.push(Expression::Loop(Box::new(loop_body)));
+        self.exit_scope();
+
+        Ok(Expression::Block(stmts))
+    }
+
+    /// Declare a *user* induction variable for a `while`/`loop`: a mutable integer local the
+    /// body updates by an arbitrary (possibly negative) step, guarded by an arbitrary
+    /// comparison against an arbitrary bound.
+    ///
+    /// The synthetic `idx` counter that bounds every generated loop always starts at `0`, always
+    /// steps by `+1` and is always compared with `==`, which is the one shape loop analyses get
+    /// right. Loop-bound inference, induction-variable simplification and empty-loop detection
+    /// are instead wrong on decreasing induction, guards that oppose the update direction,
+    /// equality guards that are false on entry, and steps that skip the guard's sentinel — so
+    /// those are exactly what this generates. The synthetic counter still bounds the iteration
+    /// count, so a guard that never fires cannot hang the loop.
+    ///
+    /// Returns the statement declaring the variable, the update statement to place in the body,
+    /// and the guard expression. The variable is registered in the current scope, so the caller
+    /// must have entered one.
+    fn gen_user_induction(
+        &mut self,
+        u: &mut Unstructured,
+    ) -> arbitrary::Result<(Expression, Expression, Expression)> {
+        let signed = bool::arbitrary(u)?;
+        let typ = if signed {
+            Type::Integer(Signedness::Signed, IntegerBitSize::ThirtyTwo)
+        } else {
+            types::U32
+        };
+
+        let local_id = self.next_local_id();
+        let ident_id = self.next_ident_id();
+        let name = format!("ind_{}", make_name(local_id.0 as usize, false));
+        let ident = expr::ident_inner(
+            VariableId::Local(local_id),
+            ident_id,
+            true,
+            name.clone(),
+            Rc::new(typ.clone()),
+        );
+        let ident_expr = Expression::Ident(ident.clone());
+
+        // Keep the values small so a checked update is unlikely to overflow before the
+        // synthetic counter stops the loop, and allow negative starts for signed types.
+        let start = u.int_in_range(if signed { -8 } else { 0 }..=8)?;
+        let step = u.int_in_range(1..=3)?;
+        let bound = u.int_in_range(if signed { -8 } else { 0 }..=8)?;
+
+        let decl = expr::let_var(
+            local_id,
+            true,
+            name.clone(),
+            typ.clone(),
+            expr::int_literal(start, typ.clone()),
+        );
+        self.locals.add(local_id, true, name, typ.clone());
+
+        // Half the time the update opposes the guard's direction, which is what makes bound
+        // inference and checked-to-unchecked rewrites interesting.
+        let op = if bool::arbitrary(u)? { BinaryOp::Add } else { BinaryOp::Subtract };
+        let update = expr::assign_ident(
+            ident,
+            expr::binary(ident_expr.clone(), op, expr::int_literal(step, typ.clone())),
+        );
+
+        let cmp = u.choose(&[
+            BinaryOp::Less,
+            BinaryOp::LessEqual,
+            BinaryOp::Greater,
+            BinaryOp::GreaterEqual,
+            BinaryOp::Equal,
+            BinaryOp::NotEqual,
+        ])?;
+        let guard = expr::binary(ident_expr, *cmp, expr::int_literal(bound, typ));
+
+        Ok((decl, update, guard))
     }
 
     /// Generate a `while` loop.
@@ -1795,12 +2158,24 @@ impl<'a> FunctionContext<'a> {
             mutable: true,
             name: idx_name,
             expression: Box::new(expr::u32_literal(0)),
+            typ: types::U32,
         })];
+
+        // Half the time, drive the loop with a user induction variable rather than an arbitrary
+        // boolean condition, so the loop analyses see a guard tied to a variable the body steps.
+        self.enter_scope();
+        let induction = if u.ratio(1, 2)? { Some(self.gen_user_induction(u)?) } else { None };
 
         // Get the randomized loop body
         let was_in_loop = std::mem::replace(&mut self.in_loop, true);
         let (mut loop_body, _) = self.gen_block(u, &Type::Unit)?;
         self.in_loop = was_in_loop;
+
+        // Step the user induction variable at the top of the body. Appending it instead would
+        // have to survive a body whose last statement is `break`.
+        if let Some((_, update, _)) = &induction {
+            expr::prepend(&mut loop_body, update.clone());
+        }
 
         // Increment the index in the beginning of the body.
         expr::prepend(
@@ -1821,7 +2196,14 @@ impl<'a> FunctionContext<'a> {
         )]);
 
         // Generate the `while` condition with depth 1
-        let (condition, _) = self.gen_expr(u, &Type::Bool, 1, Flags::CONDITION)?;
+        let condition = match &induction {
+            Some((_, _, guard)) => guard.clone(),
+            None => self.gen_expr(u, &Type::Bool, 1, Flags::CONDITION)?.0,
+        };
+        if let Some((decl, _, _)) = induction {
+            stmts.push(decl);
+        }
+        self.exit_scope();
 
         stmts.push(Expression::While(While {
             condition: Box::new(condition),
@@ -1989,11 +2371,7 @@ impl<'a> FunctionContext<'a> {
     }
 
     /// Generate a random field that can be used in the match constructor of a numeric type.
-    fn gen_num_field(
-        &mut self,
-        u: &mut Unstructured,
-        typ: &Type,
-    ) -> arbitrary::Result<SignedField> {
+    fn gen_num_field(&self, u: &mut Unstructured, typ: &Type) -> arbitrary::Result<FieldElement> {
         let literal = self.gen_literal(u, typ)?;
         let Expression::Literal(Literal::Integer(field, _, _)) = literal else {
             unreachable!("expected Literal::Integer; got {literal:?}");
@@ -2003,7 +2381,7 @@ impl<'a> FunctionContext<'a> {
 
     /// Generate a match constructor for a numeric type.
     fn gen_num_match_constructor(
-        &mut self,
+        &self,
         u: &mut Unstructured,
         typ: &Type,
     ) -> arbitrary::Result<Constructor> {
@@ -2057,7 +2435,11 @@ impl<'a> FunctionContext<'a> {
                 let matches = func.return_type == *return_type.as_ref()
                     && func.unconstrained == *unconstrained
                     && func.params.len() == param_types.len()
-                    && func.params.iter().zip(param_types).all(|((_, _, _, a, _), b)| a == b);
+                    && func
+                        .params
+                        .iter()
+                        .zip_eq(param_types)
+                        .all(|((_, _, _, a, _), b)| a.as_ref() == b);
 
                 matches.then_some(*func_id)
             })
@@ -2102,19 +2484,19 @@ impl<'a> FunctionContext<'a> {
     /// Identifier for a global function.
     fn func_ident(&mut self, callee_id: FuncId) -> Ident {
         let callee = self.ctx.function_decl(callee_id).clone();
-        let param_types = callee.params.iter().map(|p| p.3.clone()).collect::<Vec<_>>();
+        let param_types = callee.params.iter().map(|p| p.3.as_ref().clone()).collect::<Vec<_>>();
 
         Ident {
             location: None,
             definition: Definition::Function(callee_id),
             mutable: false,
             name: callee.name.clone(),
-            typ: Type::Function(
+            typ: Rc::new(Type::Function(
                 param_types,
-                Box::new(callee.return_type.clone()),
-                Box::new(Type::Unit),
+                Rc::new(callee.return_type.clone()),
+                Rc::new(Type::Unit),
                 callee.unconstrained,
-            ),
+            )),
             id: self.next_ident_id(),
         }
     }
@@ -2123,7 +2505,7 @@ impl<'a> FunctionContext<'a> {
     fn local_ident(&mut self, id: LocalId) -> Ident {
         let (mutable, name, typ) = self.locals.current().get_variable(&id).clone();
         let ident_id = self.next_ident_id();
-        expr::ident_inner(VariableId::Local(id), ident_id, mutable, name, typ.clone())
+        expr::ident_inner(VariableId::Local(id), ident_id, mutable, name, Rc::new(typ))
     }
 
     /// Type of a local variable.
@@ -2140,7 +2522,7 @@ impl<'a> FunctionContext<'a> {
         let idx_name = format!("idx_{}", make_name(idx_local_id.0 as usize, false));
         let idx_variable_id = VariableId::Local(idx_local_id);
         let idx_ident =
-            expr::ident_inner(idx_variable_id, idx_id, true, idx_name.clone(), idx_type);
+            expr::ident_inner(idx_variable_id, idx_id, true, idx_name.clone(), Rc::new(idx_type));
         (idx_local_id, idx_name, idx_ident)
     }
 
@@ -2150,7 +2532,8 @@ impl<'a> FunctionContext<'a> {
             CallableId::Global(id) => {
                 let decl = self.ctx.function_decl(id);
                 let return_type = decl.return_type.clone();
-                let param_types = decl.params.iter().map(|p| p.3.clone()).collect::<Vec<_>>();
+                let param_types =
+                    decl.params.iter().map(|p| p.3.as_ref().clone()).collect::<Vec<_>>();
                 (param_types, return_type, decl.unconstrained)
             }
             CallableId::Local(id) => {
@@ -2168,7 +2551,7 @@ impl<'a> FunctionContext<'a> {
     /// This is used as a workaround when we need a mutable reference over an immutable value.
     fn indirect_ref_mut(&mut self, (expr, is_dyn): TrackedExpression, typ: Type) -> Expression {
         let (let_expr, let_ident) =
-            self.let_var_and_ident(true, typ.clone(), expr.clone(), false, is_dyn, local_name);
+            self.let_var_and_ident(true, typ.clone(), expr, false, is_dyn, local_name);
         let ref_expr = expr::ref_mut(Expression::Ident(let_ident), typ);
         Expression::Block(vec![let_expr, ref_expr])
     }
@@ -2184,7 +2567,8 @@ impl<'a> FunctionContext<'a> {
     ) -> (LocalId, String, Expression) {
         let (_, name, typ) = self.globals.get_variable(&id).clone();
         let ident_id = self.next_ident_id();
-        let ident = expr::ident(VariableId::Global(id), ident_id, false, name, typ.clone());
+        let ident =
+            expr::ident(VariableId::Global(id), ident_id, false, name, Rc::new(typ.clone()));
         let let_expr = self.let_var(mutable, typ, ident, add_to_scope, false, local_name);
         let Expression::Let(Let { id, name, .. }) = &let_expr else {
             unreachable!("expected Let; got {let_expr:?}");
@@ -2205,7 +2589,7 @@ impl<'a> FunctionContext<'a> {
         let is_dynamic = self.is_dynamic(&id);
         let let_expr = self.let_var(
             mutable,
-            ident.typ.clone(),
+            ident.typ.as_ref().clone(),
             Expression::Ident(ident),
             add_to_scope,
             is_dynamic,
@@ -2222,10 +2606,15 @@ impl<'a> FunctionContext<'a> {
     fn call_array_len(&mut self, array_or_vector: Expression, typ: Type) -> Expression {
         let func_ident = Ident {
             location: None,
-            definition: Definition::Builtin("array_len".to_string()),
+            definition: Definition::Builtin(Builtin::ArrayLen),
             mutable: false,
             name: "len".to_string(),
-            typ: Type::Function(vec![typ], Box::new(types::U32), Box::new(Type::Unit), false),
+            typ: Rc::new(Type::Function(
+                vec![typ],
+                Rc::new(types::U32),
+                Rc::new(Type::Unit),
+                false,
+            )),
             id: self.next_ident_id(),
         };
         Expression::Call(Call {
@@ -2236,25 +2625,80 @@ impl<'a> FunctionContext<'a> {
         })
     }
 
+    /// Construct a `Call` to the `str_as_bytes` builtin.
+    fn call_str_as_bytes(&mut self, value: Expression, len: u32, bytes_type: Type) -> Expression {
+        let func_ident = Ident {
+            location: None,
+            definition: Definition::Builtin(Builtin::StrAsBytes),
+            mutable: false,
+            name: "as_bytes".to_string(),
+            typ: Rc::new(Type::Function(
+                vec![Type::String(len)],
+                Rc::new(bytes_type.clone()),
+                Rc::new(Type::Unit),
+                false,
+            )),
+            id: self.next_ident_id(),
+        };
+        Expression::Call(Call {
+            func: Box::new(Expression::Ident(func_ident)),
+            arguments: vec![value],
+            return_type: bytes_type,
+            location: Location::dummy(),
+        })
+    }
+
+    /// Construct a `Call` to the `as_vector` builtin, converting an array into a vector.
+    fn call_as_vector(
+        &mut self,
+        array: Expression,
+        array_type: Type,
+        vector_type: Type,
+    ) -> Expression {
+        let func_ident = Ident {
+            location: None,
+            definition: Definition::Builtin(Builtin::AsVector),
+            mutable: false,
+            name: "as_vector".to_string(),
+            typ: Rc::new(Type::Function(
+                vec![array_type],
+                Rc::new(vector_type.clone()),
+                Rc::new(Type::Unit),
+                false,
+            )),
+            id: self.next_ident_id(),
+        };
+        Expression::Call(Call {
+            func: Box::new(Expression::Ident(func_ident)),
+            arguments: vec![array],
+            return_type: vector_type,
+            location: Location::dummy(),
+        })
+    }
+
     /// Construct a `Call` to one of the `vector_*` builtin functions.
     fn call_vector_builtin(
         &mut self,
-        name: &str,
+        builtin: Builtin,
         return_type: Type,
         arg_types: Vec<Type>,
         args: Vec<Expression>,
     ) -> Expression {
+        let name = builtin
+            .name()
+            .strip_prefix("vector_")
+            .expect("call_vector_builtin expects a vector_* builtin");
         let func_ident = Ident {
             location: None,
-            definition: Definition::Builtin(format!("vector_{name}")),
+            definition: Definition::Builtin(builtin),
             mutable: false,
             name: name.to_string(),
-            typ: Type::Function(
+            typ: Rc::new(Type::Function(
                 arg_types,
-                Box::new(return_type.clone()),
-                Box::new(Type::Unit),
+                Rc::new(return_type.clone()),
+                Rc::new(Type::Unit),
                 false,
-            ),
+            )),
             id: self.next_ident_id(),
         };
         Expression::Call(Call {
@@ -2275,7 +2719,7 @@ impl<'a> FunctionContext<'a> {
         item: Expression,
     ) -> Expression {
         self.call_vector_builtin(
-            if is_front { "push_front" } else { "push_back" },
+            if is_front { Builtin::VectorPushFront } else { Builtin::VectorPushBack },
             vector_type.clone(),
             vec![vector_type, item_type],
             vec![vector, item],
@@ -2296,7 +2740,7 @@ impl<'a> FunctionContext<'a> {
             vec![vector_type.clone(), item_type]
         };
         self.call_vector_builtin(
-            if is_front { "pop_front" } else { "pop_back" },
+            if is_front { Builtin::VectorPopFront } else { Builtin::VectorPopBack },
             Type::Tuple(return_fields),
             vec![vector_type],
             vec![vector],
@@ -2312,7 +2756,7 @@ impl<'a> FunctionContext<'a> {
         idx: Expression,
     ) -> Expression {
         self.call_vector_builtin(
-            "remove",
+            Builtin::VectorRemove,
             Type::Tuple(vec![vector_type.clone(), item_type]),
             vec![vector_type, types::U32],
             vec![vector, idx],
@@ -2329,7 +2773,7 @@ impl<'a> FunctionContext<'a> {
         item: Expression,
     ) -> Expression {
         self.call_vector_builtin(
-            "insert",
+            Builtin::VectorInsert,
             Type::Tuple(vec![vector_type.clone()]),
             vec![vector_type, types::U32, item_type],
             vec![vector, idx, item],
@@ -2339,7 +2783,7 @@ impl<'a> FunctionContext<'a> {
     /// Random decision whether to allow "Index out of bounds" errors to happen
     /// on a specific array or vector access operation.
     ///
-    /// If [Config::avoid_index_out_of_bounds] is turned on, then this is always `true`.
+    /// If [`Config::avoid_index_out_of_bounds`] is turned on, then this is always `true`.
     ///
     /// It also returns `true` when `in_no_dynamic` mode is on, because an overflowing
     /// index might not be simplified out of the SSA in ACIR, and end up being considered
@@ -2356,9 +2800,9 @@ impl<'a> FunctionContext<'a> {
 #[cfg(test)]
 mod tests {
     use arbitrary::Unstructured;
-    use noirc_frontend::monomorphization::ast::FuncId;
+    use noirc_frontend::monomorphization::ast::{FuncId, Type};
 
-    use crate::program::{Context, FunctionContext};
+    use crate::program::{Context, FunctionContext, freq::Freqs, types};
 
     #[test]
     fn test_loop() {
@@ -2371,17 +2815,27 @@ mod tests {
         function_ctx.budget = 2;
         let loop_code = format!("{}", function_ctx.gen_loop(&mut u).unwrap()).replace(" ", "");
 
+        // `ind_b` is the user induction variable: the loop is driven by a variable the body
+        // steps and a guard the generator chose, while `idx_a` remains the harness counter that
+        // bounds the iteration count no matter what the guard does.
         assert!(
             loop_code.starts_with(
                 &r#"{
     let mut idx_a$l0 = 0;
+    let mut ind_b$l1 = 0;
     loop {
         if (idx_a$l0 == 10) {
             break
         } else {
-            idx_a$l0 = (idx_a$l0 + 1);"#
+            idx_a$l0 = (idx_a$l0 + 1);
+            if (ind_b$l1 < 0) {
+                break
+            } else {
+            };
+            ind_b$l1 = (ind_b$l1 - 1);"#
                     .replace(" ", "")
-            )
+            ),
+            "{loop_code}"
         );
     }
 
@@ -2396,17 +2850,55 @@ mod tests {
         function_ctx.budget = 2;
         let while_code = format!("{}", function_ctx.gen_while(&mut u).unwrap()).replace(" ", "");
 
+        // The `while` guard is the user induction variable's comparison, and `ind_b` is stepped
+        // inside the body; `idx_a` is the harness counter that still bounds the iterations.
         assert!(
             while_code.starts_with(
                 &r#"{
     let mut idx_a$l0 = 0;
-    while (!false) {
+    let mut ind_b$l1 = 0;
+    while (ind_b$l1 < 0) {
         if (idx_a$l0 == 10) {
             break
         } else {
-            idx_a$l0 = (idx_a$l0 + 1)"#
+            idx_a$l0 = (idx_a$l0 + 1);
+            ind_b$l1 = (ind_b$l1 - 1)"#
                     .replace(" ", "")
-            )
+            ),
+            "{while_code}"
         );
+    }
+
+    #[test]
+    fn test_doomed_block_returns_requested_type() {
+        let mut u = Unstructured::new(&[0u8; 16]);
+        let mut ctx = Context::default();
+        ctx.gen_main_decl(&mut u);
+        let mut function_ctx = FunctionContext::new(&mut ctx, FuncId(0));
+
+        let (block, is_dyn) = function_ctx.gen_doomed_block(&mut u, &types::U32).unwrap();
+        let block_code = format!("{block}");
+
+        assert!(!is_dyn);
+        assert_eq!(block.return_type().unwrap().as_ref(), &types::U32);
+        assert!(block_code.contains("assert(false"));
+    }
+
+    #[test]
+    fn test_gen_if_can_generate_doomed_branch() {
+        let mut u = Unstructured::new(&[0u8; 128]);
+        let mut ctx = Context::default();
+        ctx.config.doomed_branch_freqs = Freqs::new(&[("doomed", 1), ("regular", 0)]);
+        ctx.config.max_block_size = 1;
+        ctx.config.max_depth = 0;
+        ctx.gen_main_decl(&mut u);
+        let mut function_ctx = FunctionContext::new(&mut ctx, FuncId(0));
+        function_ctx.budget = 4;
+
+        let (if_expr, _) = function_ctx.gen_if(&mut u, &Type::Unit, 0, super::Flags::TOP).unwrap();
+        let if_code = format!("{if_expr}");
+
+        assert!(if_code.contains("} else {"));
+        assert!(if_code.contains("assert(false"));
     }
 }

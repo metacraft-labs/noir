@@ -5,7 +5,7 @@
 //!   be colorized as a function reference (only if such function actually exists).
 //! - code blocks inside doc comments. If these are Noir or Rust code blocks, a Lexer
 //!   will be used to colorize keywords and such.
-use std::{collections::HashMap, future};
+use std::collections::HashMap;
 
 use async_lsp::{
     ResponseError,
@@ -14,6 +14,7 @@ use async_lsp::{
         SemanticTokensResult, TextDocumentPositionParams,
     },
 };
+use fm::FileId;
 use nargo_doc::links::{LinkFinder, LinkTarget};
 use noirc_errors::Span;
 use noirc_frontend::{
@@ -22,7 +23,7 @@ use noirc_frontend::{
         Visitor,
     },
     elaborator::PrimitiveType,
-    hir::def_map::ModuleDefId,
+    hir::def_map::{LocalModuleId, ModuleDefId, ModuleId},
     lexer::Lexer,
     node_interner::ReferenceId,
     parser::ParsedSubModule,
@@ -40,28 +41,28 @@ use crate::{
 pub(crate) fn on_semantic_tokens_full_request(
     state: &mut LspState,
     params: SemanticTokensParams,
-) -> impl Future<Output = Result<Option<SemanticTokensResult>, ResponseError>> + use<> {
+) -> Result<Option<SemanticTokensResult>, ResponseError> {
     let text_document_position_params = TextDocumentPositionParams {
-        text_document: params.text_document.clone(),
+        text_document: params.text_document,
         position: Position { line: 0, character: 0 },
     };
 
-    let result = process_request(state, text_document_position_params, |args| {
+    process_request(state, text_document_position_params, |args| {
         let file_id = args.location.file;
         let file = args.files.get_file(file_id).unwrap();
         let source = file.source();
         let (parsed_module, _errors) = noirc_frontend::parse_program(source, file_id);
 
-        let mut collector = SemanticTokenCollector::new(source, &args);
+        let mut collector = SemanticTokenCollector::new(source, file_id, &args);
         let tokens = collector.collect(&parsed_module);
         Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data: tokens }))
-    });
-    future::ready(result)
+    })
 }
 
 struct SemanticTokenCollector<'args> {
     source: &'args str,
     args: &'args ProcessRequestCallbackArgs<'args>,
+    file_id: FileId,
     link_finder: LinkFinder,
     tokens: Vec<SemanticToken>,
     previous_line: u32,
@@ -77,13 +78,18 @@ enum CodeBlock {
 }
 
 impl<'args> SemanticTokenCollector<'args> {
-    fn new(source: &'args str, args: &'args ProcessRequestCallbackArgs<'args>) -> Self {
+    fn new(
+        source: &'args str,
+        file_id: FileId,
+        args: &'args ProcessRequestCallbackArgs<'args>,
+    ) -> Self {
         let link_finder = LinkFinder::default();
         let tokens = Vec::new();
         let token_types = semantic_token_types_map();
         SemanticTokenCollector {
             source,
             args,
+            file_id,
             link_finder,
             tokens,
             previous_line: 0,
@@ -93,11 +99,28 @@ impl<'args> SemanticTokenCollector<'args> {
     }
 
     fn collect(&mut self, parsed_module: &noirc_frontend::ParsedModule) -> Vec<SemanticToken> {
+        // Find the module the current file belongs to
+        let krate = self.args.crate_id;
+        let def_map = &self.args.def_maps[&krate];
+        let local_id = if let Some((module_index, _)) = def_map
+            .modules()
+            .iter()
+            .find(|(_, module_data)| module_data.location.file == self.file_id)
+        {
+            LocalModuleId::new(module_index)
+        } else {
+            def_map.root()
+        };
+        let module_id = ModuleId { krate, local_id };
+
+        // Process doc comments on the module itself
+        self.process_reference_id(ReferenceId::Module(module_id));
+
         parsed_module.accept(self);
         std::mem::take(&mut self.tokens)
     }
 
-    /// Checks doc comments on the given ReferenceId. Semantic tokens are produced for any links found,
+    /// Checks doc comments on the given `ReferenceId`. Semantic tokens are produced for any links found,
     /// so that they can be colorized in the editor.
     fn process_reference_id(&mut self, id: ReferenceId) {
         let Some(doc_comments) = self.args.interner.doc_comments(id) else {
@@ -111,6 +134,13 @@ impl<'args> SemanticTokenCollector<'args> {
 
         self.link_finder.reset();
         for located_comment in doc_comments {
+            let location = located_comment.location();
+            if location.file != self.file_id {
+                // A module's comments might happen inline in the same file or in a different file.
+                // We should not process comments that are not in the current file.
+                continue;
+            }
+
             let contents = located_comment.contents.trim();
             let mut fence = false;
 
@@ -158,7 +188,11 @@ impl<'args> SemanticTokenCollector<'args> {
                 self.args.crate_graph,
             );
             for link in links {
-                let Some(token_type) = self.link_target_token_type(&link.target) else {
+                let Some(target) = link.target else {
+                    continue;
+                };
+
+                let Some(token_type) = self.link_target_token_type(target) else {
                     continue;
                 };
                 let token_type = self.token_types[&token_type] as u32;
@@ -352,10 +386,10 @@ impl<'args> SemanticTokenCollector<'args> {
             | Token::Pound
             | Token::Colon
             | Token::DoubleColon
+            | Token::Backslash
             | Token::Bang
             | Token::DollarSign
             | Token::At
-            | Token::DeprecatedVectorStart
             | Token::EOF
             | Token::Whitespace(_)
             | Token::UnquoteMarker(_)
@@ -372,12 +406,12 @@ impl<'args> SemanticTokenCollector<'args> {
         self.push_token(sematic_token);
     }
 
-    fn link_target_token_type(&self, target: &LinkTarget) -> Option<SemanticTokenType> {
+    fn link_target_token_type(&self, target: LinkTarget) -> Option<SemanticTokenType> {
         let token_type = match target {
             LinkTarget::TopLevelItem(module_def_id) => match module_def_id {
                 ModuleDefId::ModuleId(_) => SemanticTokenType::NAMESPACE,
                 ModuleDefId::FunctionId(func_id) => {
-                    let func_meta = self.args.interner.function_meta(func_id);
+                    let func_meta = self.args.interner.function_meta(&func_id);
                     if func_meta.self_type.is_some() {
                         SemanticTokenType::METHOD
                     } else {
@@ -420,7 +454,7 @@ impl Visitor for SemanticTokenCollector<'_> {
         let name_location = module.name.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.process_reference_id(reference);
-        };
+        }
 
         true
     }
@@ -429,7 +463,7 @@ impl Visitor for SemanticTokenCollector<'_> {
         let name_location = function.name_ident().location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.process_reference_id(reference);
-        };
+        }
 
         false
     }
@@ -438,13 +472,13 @@ impl Visitor for SemanticTokenCollector<'_> {
         let name_location = noir_struct.name.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.process_reference_id(reference);
-        };
+        }
 
-        for field in noir_struct.fields.iter() {
+        for field in &noir_struct.fields {
             let field_name_location = field.item.name.location();
             if let Some(reference) = self.args.interner.reference_at_location(field_name_location) {
                 self.process_reference_id(reference);
-            };
+            }
         }
 
         false
@@ -454,14 +488,14 @@ impl Visitor for SemanticTokenCollector<'_> {
         let name_location = noir_enum.name.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.process_reference_id(reference);
-        };
+        }
 
-        for variant in noir_enum.variants.iter() {
+        for variant in &noir_enum.variants {
             let variant_name_location = variant.item.name.location();
             if let Some(reference) = self.args.interner.reference_at_location(variant_name_location)
             {
                 self.process_reference_id(reference);
-            };
+            }
         }
 
         false
@@ -471,16 +505,16 @@ impl Visitor for SemanticTokenCollector<'_> {
         let name_location = noir_trait.name.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.process_reference_id(reference);
-        };
+        }
 
-        for item in noir_trait.items.iter() {
+        for item in &noir_trait.items {
             if let TraitItem::Function { name, .. } = &item.item {
                 let func_name_location = name.location();
                 if let Some(reference) =
                     self.args.interner.reference_at_location(func_name_location)
                 {
                     self.process_reference_id(reference);
-                };
+                }
             }
         }
 
@@ -491,7 +525,7 @@ impl Visitor for SemanticTokenCollector<'_> {
         let name_location = let_statement.pattern.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.process_reference_id(reference);
-        };
+        }
         false
     }
 
@@ -499,7 +533,7 @@ impl Visitor for SemanticTokenCollector<'_> {
         let name_location = type_alias.name.location();
         if let Some(reference) = self.args.interner.reference_at_location(name_location) {
             self.process_reference_id(reference);
-        };
+        }
         false
     }
 }
@@ -507,31 +541,16 @@ impl Visitor for SemanticTokenCollector<'_> {
 #[cfg(test)]
 mod tests {
     use async_lsp::lsp_types::{
-        DidOpenTextDocumentParams, PartialResultParams, SemanticToken, SemanticTokensParams,
-        SemanticTokensResult, TextDocumentIdentifier, TextDocumentItem, WorkDoneProgressParams,
+        PartialResultParams, SemanticToken, SemanticTokensParams, SemanticTokensResult,
+        TextDocumentIdentifier, WorkDoneProgressParams,
     };
     use insta::assert_snapshot;
-    use tokio::test;
 
-    use crate::{
-        notifications::on_did_open_text_document, requests::on_semantic_tokens_full_request,
-        test_utils,
-    };
+    use crate::{requests::on_semantic_tokens_full_request, test_utils};
 
-    async fn get_semantic_tokens(src: &str) -> Vec<SemanticToken> {
-        let (mut state, noir_text_document) = test_utils::init_lsp_server("document_symbol").await;
-
-        let _ = on_did_open_text_document(
-            &mut state,
-            DidOpenTextDocumentParams {
-                text_document: TextDocumentItem {
-                    uri: noir_text_document.clone(),
-                    language_id: "noir".to_string(),
-                    version: 0,
-                    text: src.to_string(),
-                },
-            },
-        );
+    fn get_semantic_tokens(src: &str) -> Vec<SemanticToken> {
+        let (mut state, noir_text_document) =
+            test_utils::init_lsp_server_with_inline_source("document_symbol", "src/main.nr", src);
 
         let response = on_semantic_tokens_full_request(
             &mut state,
@@ -541,7 +560,6 @@ mod tests {
                 partial_result_params: PartialResultParams { partial_result_token: None },
             },
         )
-        .await
         .expect("Could not execute on_semantic_tokens_full_request");
 
         let SemanticTokensResult::Tokens(tokens) = response.unwrap() else {
@@ -551,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    async fn test_doc_comments() {
+    fn test_doc_comments() {
         // This is mainly a regression test. You can check the snapshot to match
         // highlighted tokens with their positions in the source code.
         let src = "
@@ -579,7 +597,7 @@ mod tests {
         }
         ";
 
-        let tokens = get_semantic_tokens(src).await;
+        let tokens = get_semantic_tokens(src);
         let tokens = format!("{tokens:#?}");
         assert_snapshot!(tokens, @r"
         [

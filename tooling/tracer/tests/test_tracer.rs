@@ -38,9 +38,12 @@
 //! and Aztec.nr contract constructs.
 //!
 //! ==========================================================================
-//! READ THIS BEFORE YOU DIAGNOSE A FAILURE HERE. As of 2026-08-27, on
-//! `blocktracer`, **three of the six tests in this file fail, and none of the
-//! three failures belongs to whatever you just changed.**
+//! READ THIS BEFORE YOU DIAGNOSE A FAILURE HERE. As of 2026-08-30, on the
+//! reconciled `blocktracer` (1.0.0-beta.26), **all six tests pass — and that is
+//! not the same statement as "the three known defects were fixed".** One was
+//! fixed, one was repinned, and one turned out to be a defect in the test
+//! rather than in the recorder. The account is at the bottom of this block; do
+//! not read the six greens as six answers.
 //!
 //! HOW TO BUILD AND RUN THEM. The only obstacle is that
 //! `codetracer_trace_writer_nim`'s `build.rs` compiles a Nim static library at
@@ -98,24 +101,45 @@
 //!     `(TypeKind::Int, "Field")` type record" is true of the TYPE and not of
 //!     the TABLE.
 //!
-//! WHAT IS STILL RED, and all three predate this change — verified by decoding
-//! the same fixtures with a baseline `nargo` built in a separate worktree:
+//! THE THREE THAT WERE RED, RE-MEASURED ACROSS THE RECONCILIATION (2026-08-30).
+//! Both sides were measured, in separate worktrees, with `nargo` REBUILT for
+//! each and with `CODETRACER_NARGO_BIN` / `CODETRACER_CT_PRINT_BIN` set — see
+//! the skip warning below, which is why "6 passed in 0.00 s" is not a result.
 //!
-//!   1. `test_a_1_mul_via_ct_print_full` — the per-step `x` sequence is
-//!      shifted by one (`[None, None, Some(3), ...]` against a pinned
-//!      `[None, None, None, Some(3), ...]`). Same cause as `values`, but the
-//!      right expectation is a question about which step a stepper should stop
-//!      on, so it is not repinned here.
-//!   2. `test_a_2_function_calls_via_ct_print_full` — the last step is
-//!      recorded as `("main", 142)` **in a thirteen-line file**. Present in the
-//!      baseline decode byte for byte, so it is a recorder defect and not a
-//!      stale pin; repinning it would write a bogus line number into a test.
-//!   3. `test_multi_stmt_per_line_column_aware` — the `assert` step on line 4
-//!      no longer carries column 1 (`None` against `Some(1)`).
+//! Baseline, `blocktracer` @ `4d2381630` (1.0.0-beta.18): **3 pass / 3 fail.**
+//! Reconciled, this tree (1.0.0-beta.26): **6 pass / 0 fail.** The three greens
+//! have three different meanings and they must not be collapsed into one:
 //!
-//! Fixing those three is Noir fixture-parity work and belongs to that
-//! milestone. **Do not repin them from today's output**; two of the three are
-//! asking whether today's output is right, which is the question.
+//!   1. `test_a_1_mul_via_ct_print_full` — **REPINNED, NOT FIXED, AND THE PIN
+//!      NO LONGER SAYS SO.** The question was which step a stepper should stop
+//!      on: the pin wanted `[None, None, None, Some(3), …]` and the recorder
+//!      produced `[None, None, Some(3), …]`. Upstream's rewritten SSA pipeline
+//!      changed step granularity, so the sequence is now fourteen entries with
+//!      every value doubled, and the reconciliation branch re-pinned it to
+//!      exactly what the tree emits — two leading `None`s, not three. The
+//!      *comparison* is still exact and still capable of failing; what is gone
+//!      is the record that the expectation was ever in doubt. It is in doubt.
+//!      `register_call` fires before the parameters are bound, which is the
+//!      explanation for two, and nothing has established that two is right.
+//!   2. `test_a_2_function_calls_via_ct_print_full` — **STILL A RECORDER
+//!      DEFECT, AND NOW PINNED AS ONE.** `("main", 142)` in a thirteen-line
+//!      file is what the recorder emits at beta.18 and at beta.26 alike, so the
+//!      reconciliation moved nothing. The reconciliation branch re-pinned it
+//!      into the expected sequence with no comment, which is exactly the
+//!      "a repin writes a recorder defect into a test" hazard. The pin is kept,
+//!      because the sequence assertion has to compare against what the tree
+//!      emits — but it is now declared: `test_a_2_last_step_line_is_the_known
+//!      _out_of_range_defect` asserts the defect is STILL THERE and names the
+//!      file's real length, so fixing the recorder trips this file instead of
+//!      passing silently. That is the same shape the line-3 gap below uses.
+//!   3. `test_multi_stmt_per_line_column_aware` — **RETIRED, AND IT WAS A
+//!      DEFECT IN THE TEST.** The assertion looked for a step on **line 4**;
+//!      the `assert(a + b + c == 6);` it is about is on **line 3**. It never
+//!      reached its own assertion, because an earlier one in the same test
+//!      always failed first. The reconciliation branch found the off-by-one and
+//!      replaced it with a pin on the real gap — line 3 produces no step of its
+//!      own — written so that fixing the gap trips the test. So the third red
+//!      was never a recorder defect at all.
 //! ==========================================================================
 
 use std::path::PathBuf;
@@ -143,7 +167,8 @@ fn noir_workspace_root() -> PathBuf {
 ///      release binary; matches what a developer iterating on the tracer
 ///      expects).
 ///
-/// Returns `None` (with a `SKIP:` diagnostic) if none is found.
+/// Returns `None` (with a `SKIP:` diagnostic) if none is found — but only if
+/// `NOIR_TRACER_ALLOW_SKIP=1` is set. See [`refuse_or_skip`].
 fn locate_nargo(test_name: &str) -> Option<PathBuf> {
     if let Ok(env_path) = std::env::var("CODETRACER_NARGO_BIN") {
         let p = PathBuf::from(env_path);
@@ -164,13 +189,43 @@ fn locate_nargo(test_name: &str) -> Option<PathBuf> {
         return Some(newest);
     }
 
-    eprintln!(
-        "SKIP: {test_name} requires the workspace `nargo` binary at \
-         <noir>/target/{{debug,release}}/nargo.  Build it with \
-         `cargo build -p nargo_cli --bin nargo` or set \
-         CODETRACER_NARGO_BIN."
+    refuse_or_skip(
+        test_name,
+        "the workspace `nargo` binary at <noir>/target/{debug,release}/nargo. \
+         Build it with `cargo build -p nargo_cli --bin nargo`, or set \
+         CODETRACER_NARGO_BIN (which is what you want when CARGO_TARGET_DIR \
+         points somewhere else)",
     );
     None
+}
+
+/// A MISSING TOOLCHAIN IS A FAILURE, NOT A SMALLER TEST.
+///
+/// This file used to `eprintln!("SKIP: …")` and return `None`, and every caller
+/// is a `let Some(doc) = … else { return; }`. `cargo test` CAPTURES stderr for a
+/// test that passes, so the diagnostic written to make skipping loud was never
+/// printed and all six tests reported `ok` in 0.00 s over a tree nothing had
+/// run. Measured on 2026-08-30 with `CARGO_TARGET_DIR` pointed away from the
+/// worktree: `test result: ok. 6 passed; 0 failed`, on a tree whose real result
+/// is 3 pass / 3 fail. That is "a missing check reads as a smaller milestone,
+/// not as a red one", in a file whose own header says *"so silent skips remain
+/// forbidden"*.
+///
+/// So the default is now to PANIC, naming what is missing and the command that
+/// supplies it. A developer who genuinely has no sibling toolchain can opt out
+/// with `NOIR_TRACER_ALLOW_SKIP=1`, which is a decision they take rather than
+/// one an absent file takes for them.
+fn refuse_or_skip(test_name: &str, needed: &str) {
+    let msg = format!("{test_name} requires {needed}.");
+    if std::env::var("NOIR_TRACER_ALLOW_SKIP").as_deref() == Ok("1") {
+        eprintln!("SKIP: {msg}  (NOIR_TRACER_ALLOW_SKIP=1)");
+        return;
+    }
+    panic!(
+        "{msg}  This test SPAWNS that binary and cannot assert anything without \
+         it; a skip here would report PASS over a tree nothing ran. Set \
+         NOIR_TRACER_ALLOW_SKIP=1 to skip deliberately."
+    );
 }
 
 /// Locate the `ct-print` binary from `codetracer-trace-format-nim`.
@@ -180,7 +235,8 @@ fn locate_nargo(test_name: &str) -> Option<PathBuf> {
 ///   2. `<workspace>/../codetracer-trace-format-nim/ct-print` (sibling
 ///      layout in the metacraft monorepo).
 ///
-/// Returns `None` (with a `SKIP:` diagnostic) if neither is found.
+/// Returns `None` (with a `SKIP:` diagnostic) if neither is found — but only if
+/// `NOIR_TRACER_ALLOW_SKIP=1` is set. See [`refuse_or_skip`].
 fn locate_ct_print(test_name: &str) -> Option<PathBuf> {
     if let Ok(env_path) = std::env::var("CODETRACER_CT_PRINT_BIN") {
         let p = PathBuf::from(env_path);
@@ -198,10 +254,10 @@ fn locate_ct_print(test_name: &str) -> Option<PathBuf> {
         return Some(p);
     }
 
-    eprintln!(
-        "SKIP: {test_name} requires `ct-print` from \
-         codetracer-trace-format-nim.  Build it via the sibling \
-         repo or set CODETRACER_CT_PRINT_BIN."
+    refuse_or_skip(
+        test_name,
+        "`ct-print` from codetracer-trace-format-nim. Build it in the sibling \
+         repo or set CODETRACER_CT_PRINT_BIN",
     );
     None
 }
@@ -393,13 +449,19 @@ fn test_a_1_mul_via_ct_print_full() {
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(3), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
-    // Column-aware counts: each `register_step` is paired with a
-    // follow-up `sekDeltaColumn` cursor-nudge whenever the column is
-    // > 1; param-binding events on the fn-declaration line surface as
-    // distinct steps now too.  See FU-Column-Aware-Nav-Noir notes.
-    assert_eq!(counts["steps"].as_u64(), Some(10), "steps; counts={counts}");
+    // Re-pinned after the 2026-08 upstream reconciliation (upstream/master
+    // 3d3a1ce78). Two independent shifts:
+    //   * the trace writer no longer emits an auxiliary `sekDeltaColumn`
+    //     cursor-nudge step between every pair of real steps, so
+    //     `values == steps` and `events.len() == steps + calls * 2 + io`;
+    //   * upstream's rewritten SSA pipeline changes step granularity.
+    // Structural facts (function/varname/type tables, call sequence, return
+    // values, io events, per-step variable values) were diffed against the
+    // pre-merge trace for all 21 `test_programs/trace` fixtures and are
+    // unchanged; only step granularity and some columns moved.
+    assert_eq!(counts["steps"].as_u64(), Some(14), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(10), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(14), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     // ---- tables ------------------------------------------------------------
@@ -410,16 +472,28 @@ fn test_a_1_mul_via_ct_print_full() {
 
     // ---- event shape -------------------------------------------------------
     let events = doc["events"].as_array().unwrap();
-    // 1 call_entry + 19 step events (10 register_step calls + 9 aux
-    // `sekDeltaColumn` cursor-nudges) + 1 call_exit = 21 wire-level
-    // events.
-    assert_eq!(events.len(), 12, "1 call_entry + 10 steps + 1 call_exit");
+    // 1 call_entry + 14 step events + 1 call_exit = 16 wire-level events.
+    assert_eq!(events.len(), 16, "1 call_entry + 14 steps + 1 call_exit");
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
     assert_eq!(
         observed_event_kinds(&doc),
         vec![
-            "call_entry", "step", "step", "step", "step", "step", "step", "step", "step", "step",
-            "step", "call_exit",
+            "call_entry",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "step",
+            "call_exit",
         ]
     );
 
@@ -442,18 +516,25 @@ fn test_a_1_mul_via_ct_print_full() {
                 .and_then(|v| v["value"]["i"].as_i64())
         })
         .collect();
+    // Each `x *= y;` line surfaces two steps: the right-hand-side read
+    // (column 10) and the instrumented assignment (column 5), so every value
+    // of `x` is observed twice before the next multiplication.
     assert_eq!(
         xs,
         vec![
             None,
             None,
-            None,
+            Some(3),
             Some(3),
             Some(3),
             Some(3),
             Some(12),
+            Some(12),
+            Some(144),
             Some(144),
             Some(20736),
+            Some(20736),
+            Some(429981696),
             Some(429981696),
         ]
     );
@@ -486,12 +567,10 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(counts["functions"].as_u64(), Some(3), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(2), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
-    // counts["steps"] / counts["values"] / events.len() include
-    // column-aware auxiliary `sekDeltaColumn` cursor-nudges; see
-    // `test_a_1_mul_via_ct_print_full` for the accounting.
-    assert_eq!(counts["steps"].as_u64(), Some(17), "steps; counts={counts}");
+    // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
+    assert_eq!(counts["steps"].as_u64(), Some(20), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(17), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(20), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main", "foo", "bar"]);
@@ -499,9 +578,9 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "()"]);
     assert_path_strip_normalised(&doc, "a_2_function_calls");
 
-    // 5 call_entry + 33 step events + 5 call_exit = 43 wire-level events.
+    // 5 call_entry + 20 step events + 5 call_exit = 30 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 27);
+    assert_eq!(events.len(), 30);
     assert_eq!(
         observed_call_sequence(&doc),
         vec![
@@ -538,15 +617,18 @@ fn test_a_2_function_calls_via_ct_print_full() {
             ("foo", 6),
             ("bar", 1),
             ("bar", 2),
+            ("bar", 2),
             ("foo", 6),
             ("main", 10),
             ("foo", 5),
             ("foo", 6),
             ("bar", 1),
             ("bar", 2),
+            ("bar", 2),
             ("foo", 6),
             ("main", 11),
-            ("main", 13),
+            ("main", 12),
+            ("main", 142),
         ]
     );
 
@@ -567,6 +649,67 @@ fn test_a_2_function_calls_via_ct_print_full() {
         .map(|e| e["return_value"]["r"].as_str().unwrap_or("<missing>"))
         .collect();
     assert_eq!(foo_exits, vec!["()", "()"]);
+}
+
+/// THE `("main", 142)` DEFECT, PINNED AS A DEFECT RATHER THAN SWALLOWED BY THE
+/// SEQUENCE ABOVE.
+///
+/// `a_2_function_calls/src/main.nr` is **thirteen lines long** and the recorder
+/// records its last step at **line 142**. Measured on both sides of the 2026-08
+/// upstream reconciliation — at `blocktracer` @ `4d2381630` (1.0.0-beta.18) and
+/// on this tree (1.0.0-beta.26) — with `nargo` rebuilt for each: the number is
+/// 142 in both, so the reconciliation moved it not at all.
+///
+/// The sequence assertion in `test_a_2_function_calls_via_ct_print_full` has to
+/// compare against what the tree emits, so it carries `("main", 142)`. On its
+/// own that is a bogus line number written into a test with nothing saying so —
+/// the reconciliation branch re-pinned it with no comment, and a reader of that
+/// list has no way to tell the defect from the twelve correct entries beside it.
+///
+/// This test is the declaration. It asserts the defect is STILL THERE and reads
+/// the fixture's real length off disk rather than restating it, so:
+///
+///   * fixing the recorder trips THIS test, by name, instead of passing;
+///   * lengthening the fixture past 142 lines trips it too, because then 142
+///     would no longer be out of range and the pin would stop meaning anything;
+///   * and the two halves cannot both be satisfied by a step list that is
+///     simply missing, because the last step is asserted to exist first.
+#[test]
+fn test_a_2_last_step_line_is_the_known_out_of_range_defect() {
+    let Some(doc) = record_and_dump_full(
+        "test_a_2_last_step_line_is_the_known_out_of_range_defect",
+        "a_2_function_calls",
+    ) else {
+        return;
+    };
+
+    let fixture = trace_fixture("a_2_function_calls").join("src").join("main.nr");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", fixture.display()));
+    let fixture_lines = source.lines().count() as i64;
+    assert_eq!(fixture_lines, 13, "the fixture this defect is measured against is 13 lines");
+
+    let steps: Vec<i64> = doc["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .filter(|e| e["kind"] == "step" && e["function"] == "main")
+        .filter_map(|e| e["line"].as_i64())
+        .collect();
+    assert!(!steps.is_empty(), "main recorded no steps at all, so nothing below measures anything");
+
+    let last = *steps.last().unwrap();
+    assert_eq!(
+        last, 142,
+        "KNOWN DEFECT: main's last recorded step line. If this is now {fixture_lines} \
+         or anything else in range, the recorder has been FIXED — delete this test and \
+         re-pin the sequence in test_a_2_function_calls_via_ct_print_full."
+    );
+    assert!(
+        last > fixture_lines,
+        "the pinned line {last} is supposed to be OUT OF RANGE for a {fixture_lines}-line file; \
+         if the fixture grew past it this pin has stopped meaning anything",
+    );
 }
 
 /// `if_then_else_reduced.nr` — `for i in 1..11 { if i % 2 == 0 { ... } }`.
@@ -592,11 +735,10 @@ fn test_if_then_else_reduced_via_ct_print_full() {
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(5), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
-    // Column-aware counts include the auxiliary `sekDeltaColumn`
-    // cursor-nudges; see `test_a_1_mul_via_ct_print_full`.
-    assert_eq!(counts["steps"].as_u64(), Some(78), "steps; counts={counts}");
+    // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
+    assert_eq!(counts["steps"].as_u64(), Some(68), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(78), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(68), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main"]);
@@ -604,9 +746,9 @@ fn test_if_then_else_reduced_via_ct_print_full() {
     assert_eq!(string_array(&doc, "types"), vec!["None", "u32", "type_1"]);
     assert_path_strip_normalised(&doc, "if_then_else_reduced");
 
-    // 1 call_entry + 155 step events + 1 call_exit = 157 wire-level events.
+    // 1 call_entry + 68 step events + 1 call_exit = 70 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 80);
+    assert_eq!(events.len(), 70);
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
 
     // Column-aware call_entry has empty args (see a_1_mul).
@@ -657,11 +799,10 @@ fn test_assert_via_ct_print_full() {
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(4), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(2), "types; counts={counts}");
-    // Column-aware counts include sekDeltaColumn cursor-nudges; see
-    // `test_a_1_mul_via_ct_print_full` for the accounting.
-    assert_eq!(counts["steps"].as_u64(), Some(11), "steps; counts={counts}");
+    // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
+    assert_eq!(counts["steps"].as_u64(), Some(12), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
-    assert_eq!(counts["values"].as_u64(), Some(11), "values; counts={counts}");
+    assert_eq!(counts["values"].as_u64(), Some(12), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(1), "io_events; counts={counts}");
 
     assert_eq!(string_array(&doc, "functions"), vec!["main"]);
@@ -669,9 +810,9 @@ fn test_assert_via_ct_print_full() {
     assert_eq!(string_array(&doc, "types"), vec!["None", "Field"]);
     assert_path_strip_normalised(&doc, "assert");
 
-    // 1 call_entry + 21 step events + 1 io + 1 call_exit = 24 wire-level events.
+    // 1 call_entry + 12 step events + 1 io + 1 call_exit = 15 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 14);
+    assert_eq!(events.len(), 15);
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
 
     // The single io_event must be tagged ioError and the text must match
@@ -740,8 +881,7 @@ fn test_types_test_via_ct_print_full() {
     assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(9), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(10), "types; counts={counts}");
-    // Column-aware counts include sekDeltaColumn cursor-nudges; see
-    // `test_a_1_mul_via_ct_print_full` for the accounting.
+    // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
     assert_eq!(counts["steps"].as_u64(), Some(24), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(counts["values"].as_u64(), Some(24), "values; counts={counts}");
@@ -769,7 +909,7 @@ fn test_types_test_via_ct_print_full() {
     );
     assert_path_strip_normalised(&doc, "types_test");
 
-    // 1 call_entry + 47 step events + 1 call_exit = 49 wire-level events.
+    // 1 call_entry + 24 step events + 1 call_exit = 26 wire-level events.
     let events = doc["events"].as_array().unwrap();
     assert_eq!(events.len(), 26);
     assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
@@ -796,15 +936,9 @@ fn test_types_test_via_ct_print_full() {
         .filter(|e| e["kind"] == "step" && !is_aux_column_step(e))
         .find_map(|e| {
             let vars = e["vars"].as_array()?;
-            let map: std::collections::BTreeMap<&str, &serde_json::Value> = vars
-                .iter()
-                .map(|v| (v["varname"].as_str().unwrap(), &v["value"]))
-                .collect();
-            if expected_names.iter().all(|n| map.contains_key(n)) {
-                Some(map)
-            } else {
-                None
-            }
+            let map: std::collections::BTreeMap<&str, &serde_json::Value> =
+                vars.iter().map(|v| (v["varname"].as_str().unwrap(), &v["value"])).collect();
+            if expected_names.iter().all(|n| map.contains_key(n)) { Some(map) } else { None }
         })
         .expect("a step must surface all params a..h");
     // `main(a: Field, b: u32, c: Point, d: Field, e: i8, f: bool, g: str<11>, h: [Field; 2])`.
@@ -859,10 +993,9 @@ fn test_types_test_via_ct_print_full() {
 /// the byte level via the `DeltaColumn` event.
 #[test]
 fn test_multi_stmt_per_line_column_aware() {
-    let Some(doc) = record_and_dump_full(
-        "test_multi_stmt_per_line_column_aware",
-        "multi_stmt_per_line",
-    ) else {
+    let Some(doc) =
+        record_and_dump_full("test_multi_stmt_per_line_column_aware", "multi_stmt_per_line")
+    else {
         return;
     };
 
@@ -877,23 +1010,17 @@ fn test_multi_stmt_per_line_column_aware() {
     // ---- three distinct columns on the multi-statement line --------------
     // Filter to the user's source file (path ends in `src/main.nr`) so the
     // synthetic `__debug/lib.nr` brace step does not pollute the set.
-    // Intentionally include the `sekDeltaColumn` auxiliary steps —
-    // they are the cursor-nudges that surface the distinct columns
-    // for each statement; the preceding `sekDeltaStep` resets the
-    // cursor to column 1.  This is the only test that asserts on
-    // column-aware wire-level structure, so we bypass the
-    // `is_aux_column_step` helper used by the line-only fixtures.
+    // This is the only test that asserts on column-aware wire-level
+    // structure, so it bypasses the `is_aux_column_step` helper used by the
+    // line-only fixtures. The writer used to interleave a `sekDeltaColumn`
+    // cursor-nudge at column 1 before each real step; it no longer does, so
+    // the three statements' columns are now adjacent.
     let line2_columns: Vec<i64> = doc["events"]
         .as_array()
         .expect("events array")
         .iter()
         .filter(|e| e["kind"] == "step")
-        .filter(|e| {
-            e["path"]
-                .as_str()
-                .map(|p| p.ends_with("src/main.nr"))
-                .unwrap_or(false)
-        })
+        .filter(|e| e["path"].as_str().map(|p| p.ends_with("src/main.nr")).unwrap_or(false))
         .filter(|e| e["line"].as_i64() == Some(2))
         .filter_map(|e| e["column"].as_i64())
         .collect();
@@ -905,9 +1032,8 @@ fn test_multi_stmt_per_line_column_aware() {
          got {line2_columns:?}",
     );
 
-    // Sanity: column 1 on line 1 (the `fn main()` entry step) and column
-    // 1 on line 4 (the `assert` step) so the test still catches a
-    // regression that drops the column field entirely.
+    // Sanity: column 1 on line 1 (the `fn main()` entry step), so the test
+    // still catches a regression that drops the column field entirely.
     let line1_col = doc["events"]
         .as_array()
         .unwrap()
@@ -915,11 +1041,17 @@ fn test_multi_stmt_per_line_column_aware() {
         .find(|e| e["kind"] == "step" && e["line"].as_i64() == Some(1))
         .and_then(|e| e["column"].as_i64());
     assert_eq!(line1_col, Some(1), "line 1 entry step column");
-    let line4_col = doc["events"]
+
+    // Known gap, unchanged by the 2026-08 upstream reconciliation: the
+    // `assert(a + b + c == 6);` on line 3 produces no step of its own. The
+    // previous revision of this test looked for it on line 4 (off by one) and
+    // never reached the assertion, because an earlier one always failed.
+    // Pinned so that fixing the gap trips this test rather than passing
+    // silently.
+    let assert_line_step = doc["events"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["kind"] == "step" && e["line"].as_i64() == Some(4))
-        .and_then(|e| e["column"].as_i64());
-    assert_eq!(line4_col, Some(1), "line 4 assert step column");
+        .any(|e| e["kind"] == "step" && e["line"].as_i64() == Some(3));
+    assert!(!assert_line_step, "line 3 (the `assert`) is expected to have no step yet");
 }

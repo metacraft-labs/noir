@@ -7,7 +7,7 @@ pub trait Foo {
 
     let Baz: u32;
 
-    fn foo(x: [Bar; Baz]) -> u32 {
+    fn foo(x: [Self::Bar; Self::Baz]) -> u32 {
         x.len()
     }
 }
@@ -16,10 +16,6 @@ impl Foo for () {
     let Baz: u32 = 0;
 
     type Bar = Self;
-
-    fn foo(x: [Self; 0]) -> u32 {
-        x.len()
-    }
 }
 
 fn main() {

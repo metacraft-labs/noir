@@ -1,5 +1,3 @@
-use dep::std::collections::vec::Vec;
-
 use crate::dungeon::Square;
 use crate::dungeon::is_safe_path;
 

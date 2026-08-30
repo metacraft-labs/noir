@@ -21,8 +21,12 @@ const show = (id, content) => {
 document.getElementById('submit').addEventListener('click', async () => {
   try {
     // docs:start:init
+    show('logs', 'Creating Noir...');
     const noir = new Noir(circuit);
+    show('logs', 'Creating Barretenberg... ⏳');
     const barretenbergAPI = await Barretenberg.new();
+    show('logs', 'Created Barretenberg... ✅');
+    show('logs', 'Creating UltraHonkBackend...');
     const backend = new UltraHonkBackend(circuit.bytecode, barretenbergAPI);
     // docs:end:init
     // docs:start:execute
@@ -44,6 +48,6 @@ document.getElementById('submit').addEventListener('click', async () => {
     show('logs', `Proof is ${isValid ? 'valid' : 'invalid'}... ✅`);
     // docs:end:verify
   } catch {
-    show('logs', 'Oh 💔');
+    show('logs', 'Something went wrong');
   }
 });

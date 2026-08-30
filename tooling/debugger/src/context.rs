@@ -10,14 +10,14 @@ use acvm::pwg::{
 };
 use acvm::{AcirField, BlackBoxFunctionSolver, FieldElement};
 
-use codespan_reporting::files::{Error, Files, SimpleFile};
-use fm::{FileId, PathString};
+use codespan_reporting::files::{Files, SimpleFile};
+use fm::FileId;
 use nargo::NargoError;
 use nargo::errors::{ExecutionError, Location, ResolvedOpcodeLocation, execution_error_from};
 use noirc_artifacts::debug::{DebugArtifact, DebugFile, DebugInfo, StackFrame};
 
 use noirc_artifacts::program::CompiledProgram;
-use noirc_errors::call_stack::CallStackId;
+use noirc_errors::call_stack::{CallStack, CallStackId};
 use noirc_printable_type::{PrintableType, PrintableValue};
 use thiserror::Error;
 
@@ -68,8 +68,8 @@ pub struct AddressMap {
     brillig_addresses: Vec<BrilligAddressSpace>,
 }
 
-/// Associates a BrilligFunctionId with the address space.
-/// A BrilligFunctionId is found by checking whether an address is between
+/// Associates a `BrilligFunctionId` with the address space.
+/// A `BrilligFunctionId` is found by checking whether an address is between
 /// the `start_address` and `end_address`
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 struct BrilligAddressSpace {
@@ -120,7 +120,7 @@ impl AddressMap {
     }
 
     /// Returns the absolute address of the opcode at the given location.
-    /// Absolute here means accounting for nested Brillig opcodes in BrilligCall
+    /// Absolute here means accounting for nested Brillig opcodes in `BrilligCall`
     /// opcodes.
     pub fn debug_location_to_address(&self, location: &DebugLocation) -> usize {
         let circuit_addresses = &self.addresses[location.circuit_id as usize];
@@ -285,10 +285,7 @@ pub struct DebugProject {
 #[derive(Debug, Clone)]
 
 pub struct RunParams {
-    /// Use pedantic ACVM solving
-    pub pedantic_solving: bool,
-
-    /// Option for configuring the source_code_printer
+    /// Option for configuring the `source_code_printer`
     /// This option only applies for the Repl interface
     pub raw_source_printing: Option<bool>,
 
@@ -452,11 +449,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
     }
 
     pub(super) fn is_source_location_in_debug_module(&self, location: &Location) -> bool {
-        self.debug_artifact
-            .file_map
-            .get(&location.file)
-            .map(is_debug_file_in_debug_crate)
-            .unwrap_or(false)
+        self.debug_artifact.file_map.get(&location.file).is_some_and(is_debug_file_in_debug_crate)
     }
 
     /// Find an opcode location matching a source code location
@@ -519,8 +512,8 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
 
     /// Returns the `FileId` of the file associated with the innermost function on the call stack.
     fn get_current_file(&self) -> Option<FileId> {
-        self.get_current_source_location()
-            .and_then(|locations| locations.last().map(|location| location.file))
+        let locations = self.get_current_source_location()?;
+        locations.last().map(|location| location.file)
     }
 
     /// Returns the (possible) stack of source locations corresponding to the
@@ -553,7 +546,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
                         .location_tree
                         .get_call_stack(call_stack_id)
                 } else {
-                    vec![]
+                    CallStack::empty()
                 }
             })
             .into_iter()
@@ -561,31 +554,15 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
             .collect()
     }
 
-    pub fn get_filepath_for_location(&self, location: Location) -> Result<PathString, Error> {
-        self.debug_artifact.name(location.file)
-    }
-
-    pub fn get_line_for_location(&self, location: Location) -> Result<usize, Error> {
-        self.debug_artifact.location_line_index(location)
-    }
-
-    /// Returns the 1-indexed column number where `location` starts.
+    /// Borrow the underlying [`DebugArtifact`].
     ///
-    /// Used by the codetracer-noir recorder to emit column-aware Step
-    /// events (`register_step_with_column`) so the replay surfaces the
-    /// real cursor position for multiple statements that share a line.
-    /// `DebugArtifact::location_column_number` walks the file's
-    /// line-index table, so callers should expect an `Err` for
-    /// synthetic (no-source) locations.
-    pub fn get_column_for_location(&self, location: Location) -> Result<usize, Error> {
-        self.debug_artifact.location_column_number(location)
-    }
-
-    /// Borrow the underlying `DebugArtifact` so the recorder can walk
-    /// `file_map` to register every Noir source path's per-line byte
-    /// lengths up front (CTFS `paths.dat` Layout A).  Without that
-    /// table the writer cannot encode columns at all, even though
-    /// column-aware mode is enabled.
+    /// Everything a caller might want per-location — the file name, the line
+    /// index, the 1-indexed column — is already on `DebugArtifact` itself
+    /// (`name`, `location_line_index`, `location_column_number`), so this is
+    /// the only accessor needed; the recorder also walks `file_map` through it
+    /// to register every Noir source path's per-line byte lengths up front
+    /// (CTFS `paths.dat` Layout A), without which the writer cannot encode
+    /// columns at all.
     pub fn debug_artifact(&self) -> &DebugArtifact {
         self.debug_artifact
     }
@@ -717,7 +694,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
         let caller_acvm = std::mem::replace(&mut self.acvm, callee_acvm);
         self.acvm_stack
             .push(ExecutionFrame { circuit_id: self.current_circuit_id, acvm: caller_acvm });
-        self.current_circuit_id = call_info.id.0;
+        self.current_circuit_id = call_info.id.as_u32();
 
         // Explicitly handling the new ACVM status here handles two edge cases:
         // 1. there is a breakpoint set at the beginning of a circuit
@@ -920,7 +897,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
     ) {
         if let Some(solver) = self.brillig_solver.as_mut() {
             solver.write_memory_at(
-                ptr,
+                ptr.try_into().expect("Pointer is too large"),
                 MemoryValue::new_checked(value, bit_size)
                     .expect("Invalid value for the given bit size"),
             );
@@ -1044,7 +1021,7 @@ fn is_debug_file_in_debug_crate(debug_file: &DebugFile) -> bool {
     debug_file.path.starts_with("__debug/")
 }
 
-/// Builds a map from FileId to an ordered vector of tuples with line
+/// Builds a map from `FileId` to an ordered vector of tuples with line
 /// numbers and opcode locations corresponding to those line numbers
 fn build_source_to_opcode_debug_mappings(
     debug_artifact: &DebugArtifact,
@@ -1086,7 +1063,7 @@ fn build_source_to_opcode_debug_mappings(
                 .map(|(key, val)| {
                     (
                         // TODO: this is a temporary placeholder until the debugger is updated to handle the new brillig debug locations.
-                        OpcodeLocation::Brillig { acir_index: 0, brillig_index: key.0 },
+                        OpcodeLocation::Brillig { acir_index: 0, brillig_index: key.index() },
                         *val,
                     )
                 })
@@ -1117,7 +1094,7 @@ fn add_opcode_locations_map(
 ) {
     for (opcode_location, source_locations) in opcode_to_locations {
         let source_locations = debug_info.location_tree.get_call_stack(*source_locations);
-        source_locations.iter().for_each(|source_location| {
+        source_locations.into_iter().for_each(|source_location| {
             let span = source_location.span;
             let file_id = source_location.file;
             let Some(file) = simple_files.get(&file_id) else {
@@ -1157,7 +1134,7 @@ mod tests {
 
     #[test]
     fn test_resolve_foreign_calls_stepping_into_brillig() {
-        let solver = StubbedBlackBoxSolver::default();
+        let solver = StubbedBlackBoxSolver;
         let fe_1 = FieldElement::one();
         let w_x = Witness(1);
 
@@ -1200,7 +1177,7 @@ mod tests {
         private parameters: []
         public parameters: []
         return values: []
-        BRILLIG CALL func: 0, inputs: [{w_x}], outputs: []
+        BRILLIG CALL func: 0, predicate: 1, inputs: [{w_x}], outputs: []
         "
         );
         let circuit = Circuit::from_str(&src).unwrap();
@@ -1245,7 +1222,7 @@ mod tests {
             Some(DebugLocation {
                 circuit_id: 0,
                 opcode_location: OpcodeLocation::Brillig { acir_index: 0, brillig_index: 1 },
-                brillig_function_id: Some(BrilligFunctionId(0)),
+                brillig_function_id: Some(BrilligFunctionId::new(0)),
             })
         );
 
@@ -1257,7 +1234,7 @@ mod tests {
             Some(DebugLocation {
                 circuit_id: 0,
                 opcode_location: OpcodeLocation::Brillig { acir_index: 0, brillig_index: 2 },
-                brillig_function_id: Some(BrilligFunctionId(0)),
+                brillig_function_id: Some(BrilligFunctionId::new(0)),
             })
         );
 
@@ -1270,7 +1247,7 @@ mod tests {
             Some(DebugLocation {
                 circuit_id: 0,
                 opcode_location: OpcodeLocation::Brillig { acir_index: 0, brillig_index: 3 },
-                brillig_function_id: Some(BrilligFunctionId(0)),
+                brillig_function_id: Some(BrilligFunctionId::new(0)),
             })
         );
 
@@ -1282,7 +1259,7 @@ mod tests {
             Some(DebugLocation {
                 circuit_id: 0,
                 opcode_location: OpcodeLocation::Brillig { acir_index: 0, brillig_index: 3 },
-                brillig_function_id: Some(BrilligFunctionId(0)),
+                brillig_function_id: Some(BrilligFunctionId::new(0)),
             })
         );
 
@@ -1294,7 +1271,7 @@ mod tests {
             Some(DebugLocation {
                 circuit_id: 0,
                 opcode_location: OpcodeLocation::Brillig { acir_index: 0, brillig_index: 4 },
-                brillig_function_id: Some(BrilligFunctionId(0)),
+                brillig_function_id: Some(BrilligFunctionId::new(0)),
             })
         );
 
@@ -1306,7 +1283,7 @@ mod tests {
 
     #[test]
     fn test_break_brillig_block_while_stepping_acir_opcodes() {
-        let solver = StubbedBlackBoxSolver::default();
+        let solver = StubbedBlackBoxSolver;
         let fe_1 = FieldElement::one();
         let w_x = Witness(1);
         let w_y = Witness(2);
@@ -1355,7 +1332,7 @@ mod tests {
         private parameters: []
         public parameters: []
         return values: []
-        BRILLIG CALL func: 0, inputs: [{w_x}, {w_y}], outputs: [{w_z}]
+        BRILLIG CALL func: 0, predicate: 1, inputs: [{w_x}, {w_y}], outputs: [{w_z}]
         ASSERT {w_z} = {w_x} + {w_y}
         "
         );
@@ -1389,7 +1366,7 @@ mod tests {
         let breakpoint_location = DebugLocation {
             circuit_id: 0,
             opcode_location: OpcodeLocation::Brillig { acir_index: 0, brillig_index: 1 },
-            brillig_function_id: Some(BrilligFunctionId(0)),
+            brillig_function_id: Some(BrilligFunctionId::new(0)),
         };
         assert!(context.add_breakpoint(breakpoint_location));
 
@@ -1418,7 +1395,7 @@ mod tests {
 
     #[test]
     fn test_address_debug_location_mapping() {
-        let solver = StubbedBlackBoxSolver::default();
+        let solver = StubbedBlackBoxSolver;
         let brillig_one = BrilligBytecode {
             function_name: "one".to_string(),
             bytecode: vec![BrilligOpcode::Return, BrilligOpcode::Return],
@@ -1433,8 +1410,8 @@ mod tests {
         public parameters: []
         return values: []
         INIT b0 = []
-        BRILLIG CALL func: 0, inputs: [], outputs: []
-        CALL func: 1, inputs: [], outputs: []
+        BRILLIG CALL func: 0, predicate: 1, inputs: [], outputs: []
+        CALL func: 1, predicate: 1, inputs: [], outputs: []
         ASSERT 0 = 0
         ";
         let circuit_one = Circuit::from_str(src_one).unwrap();
@@ -1443,7 +1420,7 @@ mod tests {
         private parameters: []
         public parameters: []
         return values: []
-        BRILLIG CALL func: 1, inputs: [], outputs: []
+        BRILLIG CALL func: 1, predicate: 1, inputs: [], outputs: []
         ASSERT 0 = 0
         ";
         let circuit_two = Circuit::from_str(src_two).unwrap();
@@ -1485,7 +1462,7 @@ mod tests {
                 Some(DebugLocation {
                     circuit_id: 0,
                     opcode_location: OpcodeLocation::Brillig { acir_index: 1, brillig_index: 1 },
-                    brillig_function_id: Some(BrilligFunctionId(0)),
+                    brillig_function_id: Some(BrilligFunctionId::new(0)),
                 }),
                 Some(DebugLocation {
                     circuit_id: 0,
@@ -1505,12 +1482,12 @@ mod tests {
                 Some(DebugLocation {
                     circuit_id: 1,
                     opcode_location: OpcodeLocation::Brillig { acir_index: 0, brillig_index: 1 },
-                    brillig_function_id: Some(BrilligFunctionId(1)),
+                    brillig_function_id: Some(BrilligFunctionId::new(1)),
                 }),
                 Some(DebugLocation {
                     circuit_id: 1,
                     opcode_location: OpcodeLocation::Brillig { acir_index: 0, brillig_index: 2 },
-                    brillig_function_id: Some(BrilligFunctionId(1)),
+                    brillig_function_id: Some(BrilligFunctionId::new(1)),
                 }),
                 Some(DebugLocation {
                     circuit_id: 1,
@@ -1536,7 +1513,7 @@ mod tests {
             context.debug_location_to_address(&DebugLocation {
                 circuit_id: 0,
                 opcode_location: OpcodeLocation::Brillig { acir_index: 1, brillig_index: 0 },
-                brillig_function_id: Some(BrilligFunctionId(0)),
+                brillig_function_id: Some(BrilligFunctionId::new(0)),
             })
         );
         assert_eq!(
@@ -1544,7 +1521,7 @@ mod tests {
             context.debug_location_to_address(&DebugLocation {
                 circuit_id: 1,
                 opcode_location: OpcodeLocation::Brillig { acir_index: 0, brillig_index: 0 },
-                brillig_function_id: Some(BrilligFunctionId(1)),
+                brillig_function_id: Some(BrilligFunctionId::new(1)),
             })
         );
     }

@@ -1,49 +1,63 @@
 #![forbid(unsafe_code)]
 #![warn(unused_crate_dependencies, unused_extern_crates)]
 
+#[cfg(test)]
+use insta as _;
+
 use std::hash::BuildHasher;
 
-use abi_gen::{abi_type_from_hir_type, value_from_hir_expression};
-use acvm::acir::circuit::ExpressionWidth;
+use abi_gen::{abi_type_from_hir_type, value_to_abi_value};
+use acvm::AcirField;
+use acvm::acir::circuit::{ErrorSelector, Program, display_program};
 use clap::Args;
 use fm::{FileId, FileManager};
 use iter_extended::vecmap;
-use noirc_abi::{AbiParameter, AbiType, AbiValue};
+use noirc_abi::{AbiErrorType, AbiNamedValue, AbiParameter, AbiType};
 use noirc_artifacts::contract::{CompiledContract, CompiledContractOutputs, ContractFunction};
-use noirc_artifacts::debug::{DebugFile, DebugInfo};
+use noirc_artifacts::debug::{DebugFile, DebugInfo, FunctionLocation};
 use noirc_artifacts::program::CompiledProgram;
 use noirc_artifacts::ssa::{InternalBug, InternalWarning, SsaReport};
-use noirc_errors::{CustomDiagnostic, DiagnosticKind};
-use noirc_evaluator::brillig::BrilligOptions;
+use noirc_errors::CustomDiagnostic;
+use noirc_evaluator::brillig::brillig_ir::{
+    LayoutConfig, MAX_SCRATCH_SPACE, MAX_STACK_FRAME_SIZE, MIN_SCRATCH_SPACE, MIN_STACK_FRAME_SIZE,
+    NUM_STACK_FRAMES,
+};
+use noirc_evaluator::brillig::{BrilligOptions, CopySiteRegistry};
 use noirc_evaluator::create_program;
 use noirc_evaluator::errors::RuntimeError;
-use noirc_evaluator::ssa::opt::{CONSTANT_FOLDING_MAX_ITER, INLINING_MAX_INSTRUCTIONS};
+use noirc_evaluator::ssa::checks;
+use noirc_evaluator::ssa::opt::{
+    CONSTANT_FOLDING_MAX_ITER, DEFAULT_MAX_SPECIALIZATIONS_PER_FN,
+    DEFAULT_SPECIALIZATION_THRESHOLD, FORCE_UNROLL_THRESHOLD, INLINING_MAX_INSTRUCTIONS,
+    MAX_UNROLL_ITERATIONS,
+};
 use noirc_evaluator::ssa::{
     OptimizationLevel, SsaEvaluatorOptions, SsaLogging, SsaProgramArtifact,
     create_program_with_minimal_passes,
 };
-use noirc_frontend::debug::build_debug_crate_file;
 use noirc_frontend::elaborator::{FrontendOptions, UnstableFeature};
-use noirc_frontend::hir::Context;
+use noirc_frontend::error_reporting::function_locations_in_parsed_module;
 use noirc_frontend::hir::def_map::{CrateDefMap, ModuleDefId, ModuleId};
+use noirc_frontend::hir::{Context, ParsedFiles};
 use noirc_frontend::monomorphization::{
     errors::MonomorphizationError, monomorphize, monomorphize_debug,
 };
-use noirc_frontend::node_interner::{FuncId, GlobalId, TypeId};
+use noirc_frontend::node_interner::{FuncId, GlobalId, GlobalValue, TypeId};
 use noirc_frontend::token::SecondaryAttributeKind;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::info;
 
 mod abi_gen;
-mod stdlib;
+mod crate_graph;
+mod file_manager;
 
 pub use abi_gen::gen_abi;
+pub use crate_graph::{add_dep, link_to_debug_crate, prepare_crate, prepare_dependency};
+pub use file_manager::{
+    file_manager_with_stdlib, stdlib_disk_path, stdlib_nargo_toml_source, stdlib_paths_with_source,
+};
 pub use noirc_frontend::graph::{CrateId, CrateName};
-pub use stdlib::{stdlib_nargo_toml_source, stdlib_paths_with_source};
-
-const STD_CRATE_NAME: &str = "std";
-const DEBUG_CRATE_NAME: &str = "__debug";
 
 pub const GIT_COMMIT: &str = env!("GIT_COMMIT");
 pub const GIT_DIRTY: &str = env!("GIT_DIRTY");
@@ -53,6 +67,32 @@ pub const NOIRC_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Note: You can't directly use the value of a constant produced with env! inside a concat! macro.
 pub const NOIR_ARTIFACT_VERSION_STRING: &str =
     concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_COMMIT"));
+
+fn parse_num_stack_frames(s: &str) -> Result<usize, String> {
+    let n: usize = s.parse().map_err(|e| format!("'{s}' is not a valid unsigned integer: {e}"))?;
+    if n == 0 {
+        return Err("--num-stack-frames must be at least 1".to_string());
+    }
+    Ok(n)
+}
+
+fn parse_max_stack_frame_size(s: &str) -> Result<usize, String> {
+    let n: usize = s.parse().map_err(|e| format!("'{s}' is not a valid unsigned integer: {e}"))?;
+    if n < MIN_STACK_FRAME_SIZE {
+        return Err(format!(
+            "--max-stack-frame-size must be at least {MIN_STACK_FRAME_SIZE} (got {n})"
+        ));
+    }
+    Ok(n)
+}
+
+fn parse_max_scratch_space(s: &str) -> Result<usize, String> {
+    let n: usize = s.parse().map_err(|e| format!("'{s}' is not a valid unsigned integer: {e}"))?;
+    if n < MIN_SCRATCH_SPACE {
+        return Err(format!("--max-scratch-space must be at least {MIN_SCRATCH_SPACE} (got {n})"));
+    }
+    Ok(n)
+}
 
 #[derive(Args, Clone, Debug)]
 pub struct CompileOptions {
@@ -68,6 +108,10 @@ pub struct CompileOptions {
     /// This setting takes precedence over `show_ssa` if it's not empty.
     #[arg(long, hide = true)]
     pub show_ssa_pass: Vec<String>,
+
+    /// Do not print an SSA pass if it didn't produce changes.
+    #[arg(long, hide = true)]
+    pub hide_unchanged_ssa: bool,
 
     /// Emit source file locations when emitting debug information for the SSA IR to stdout.
     /// By default, source file locations won't be shown.
@@ -87,6 +131,11 @@ pub struct CompileOptions {
     /// under `[compiled-package].ssa.json`.
     #[arg(long, hide = true)]
     pub emit_ssa: bool,
+
+    /// Run the SSA validator after every optimization pass, to catch a pass that produces
+    /// malformed SSA. Intended for debugging and minimizing fuzzing failures.
+    #[arg(long, hide = true)]
+    pub validate_between_passes: bool,
 
     /// Only perform the minimum number of SSA passes.
     ///
@@ -132,7 +181,7 @@ pub struct CompileOptions {
     pub force_brillig: bool,
 
     /// Enable printing results of comptime evaluation: provide a path suffix
-    /// for the module to debug, e.g. "package_name/src/main.nr"
+    /// for the module to debug, e.g. "`package_name/src/main.nr`"
     #[arg(long)]
     pub debug_comptime_in_file: Option<String>,
 
@@ -152,19 +201,18 @@ pub struct CompileOptions {
     #[arg(long)]
     pub skip_brillig_constraints_check: bool,
 
+    /// Maximum size of arrays in Brillig call outputs to try to constrain on a per-item basis.
+    #[arg(long, hide = true, default_value_t = checks::DEFAULT_MAX_ARRAY_OUTPUT_LENGTH)]
+    pub brillig_constraints_check_max_array_output_length: u32,
+
+    /// Maximum distance to travel looking for an intersect in the ancestors
+    /// of constrained values with the inputs/outputs of Brillig calls.
+    #[arg(long, hide = true, default_value_t = checks::DEFAULT_MAX_ANCESTOR_DISTANCE)]
+    pub brillig_constraints_check_max_ancestor_distance: u32,
+
     /// Flag to turn on extra Brillig bytecode to be generated to guard against invalid states in testing.
     #[arg(long, hide = true)]
     pub enable_brillig_debug_assertions: bool,
-
-    /// Count the number of arrays that are copied in an unconstrained context for performance debugging
-    #[arg(long)]
-    pub count_array_copies: bool,
-
-    /// Flag to turn on the lookback feature of the Brillig call constraints
-    /// check, allowing tracking argument values before the call happens preventing
-    /// certain rare false positives (leads to a slowdown on large rollout functions)
-    #[arg(long)]
-    pub enable_brillig_constraints_check_lookback: bool,
 
     /// Setting to decide on an inlining strategy for Brillig functions.
     /// A more aggressive inliner should generate larger programs but more optimized
@@ -174,27 +222,57 @@ pub struct CompileOptions {
 
     /// Maximum number of iterations to do in constant folding, as long as new values are being hoisted.
     /// A value of 0 effectively disables constant folding.
-    #[arg(long, hide = true, allow_hyphen_values = true, default_value_t = CONSTANT_FOLDING_MAX_ITER)]
+    #[arg(long, hide = true, default_value_t = CONSTANT_FOLDING_MAX_ITER)]
     pub constant_folding_max_iter: usize,
 
     /// Setting to decide the maximum weight threshold at which we designate a function
     /// as "small" and thus to always be inlined.
-    #[arg(long, hide = true, allow_hyphen_values = true, default_value_t = INLINING_MAX_INSTRUCTIONS)]
+    #[arg(long, hide = true, default_value_t = INLINING_MAX_INSTRUCTIONS)]
     pub small_function_max_instructions: usize,
 
     /// Setting the maximum acceptable increase in Brillig bytecode size due to
-    /// unrolling small loops. When left empty, any change is accepted as long
-    /// as it required fewer SSA instructions.
+    /// unrolling small loops.
+    /// When left empty, any change is accepted as long
+    /// as it required fewer SSA instructions. A value of 100 allows up to 2× growth.
     /// A higher value results in fewer jumps but a larger program.
     /// A lower value keeps the original program if it was smaller, even if it has more jumps.
     #[arg(long, hide = true, allow_hyphen_values = true)]
     pub max_bytecode_increase_percent: Option<i32>,
 
-    /// Use pedantic ACVM solving, i.e. double-check some black-box function
-    /// assumptions when solving.
-    /// This is disabled by default.
-    #[arg(long, default_value = "false")]
-    pub pedantic_solving: bool,
+    /// Maximum iterations for Brillig loop unrolling. Loops exceeding this
+    /// will not be unrolled even if they pass the instruction threshold.
+    #[arg(long, hide = true, default_value_t = MAX_UNROLL_ITERATIONS)]
+    pub max_unroll_iterations: usize,
+
+    /// Override the threshold for force-unrolling small loops.
+    ///
+    /// Loops with constant bounds and no breaks whose unrolled
+    /// instruction count is at or below this threshold will always be unrolled.
+    ///
+    /// Set to 0 to disable force-unrolling.
+    #[arg(long, hide = true, default_value_t = FORCE_UNROLL_THRESHOLD)]
+    pub force_unroll_threshold: usize,
+
+    /// Minimum percentage cost reduction required to keep a specialized
+    /// Brillig function clone. Set to 0 to disable specialization.
+    #[arg(long, hide = true, default_value_t = DEFAULT_SPECIALIZATION_THRESHOLD)]
+    pub specialization_threshold: usize,
+
+    /// Maximum number of specialized clones per original Brillig function.
+    #[arg(long, hide = true, default_value_t = DEFAULT_MAX_SPECIALIZATIONS_PER_FN)]
+    pub max_specializations_per_fn: usize,
+
+    /// Maximum size of a single Brillig stack frame.
+    #[arg(long, hide = true, default_value_t = MAX_STACK_FRAME_SIZE, value_parser = parse_max_stack_frame_size)]
+    pub max_stack_frame_size: usize,
+
+    /// Number of Brillig stack frames / call depth limit.
+    #[arg(long, hide = true, default_value_t = NUM_STACK_FRAMES, value_parser = parse_num_stack_frames)]
+    pub num_stack_frames: usize,
+
+    /// Maximum Brillig scratch space size.
+    #[arg(long, hide = true, default_value_t = MAX_SCRATCH_SPACE, value_parser = parse_max_scratch_space)]
+    pub max_scratch_space: usize,
 
     /// Skip reading files/folders from the root directory and instead accept the
     /// contents of `main.nr` through STDIN.
@@ -229,10 +307,12 @@ impl Default for CompileOptions {
             force_compile: false,
             show_ssa: false,
             show_ssa_pass: Vec::new(),
+            hide_unchanged_ssa: false,
             with_ssa_locations: false,
             show_contract_fn: None,
             skip_ssa_pass: Vec::new(),
             emit_ssa: false,
+            validate_between_passes: false,
             minimal_ssa: false,
             show_brillig: false,
             show_brillig_opcode_advisories: false,
@@ -247,14 +327,21 @@ impl Default for CompileOptions {
             show_artifact_paths: false,
             skip_underconstrained_check: false,
             skip_brillig_constraints_check: false,
+            brillig_constraints_check_max_array_output_length:
+                checks::DEFAULT_MAX_ARRAY_OUTPUT_LENGTH,
+            brillig_constraints_check_max_ancestor_distance: checks::DEFAULT_MAX_ANCESTOR_DISTANCE,
             enable_brillig_debug_assertions: false,
-            count_array_copies: false,
-            enable_brillig_constraints_check_lookback: false,
             inliner_aggressiveness: i64::MAX,
             constant_folding_max_iter: CONSTANT_FOLDING_MAX_ITER,
             small_function_max_instructions: INLINING_MAX_INSTRUCTIONS,
             max_bytecode_increase_percent: None,
-            pedantic_solving: false,
+            max_unroll_iterations: MAX_UNROLL_ITERATIONS,
+            force_unroll_threshold: FORCE_UNROLL_THRESHOLD,
+            specialization_threshold: DEFAULT_SPECIALIZATION_THRESHOLD,
+            max_specializations_per_fn: DEFAULT_MAX_SPECIALIZATIONS_PER_FN,
+            max_stack_frame_size: MAX_STACK_FRAME_SIZE,
+            num_stack_frames: NUM_STACK_FRAMES,
+            max_scratch_space: MAX_SCRATCH_SPACE,
             debug_compile_stdin: false,
             unstable_features: Vec::new(),
             no_unstable_features: false,
@@ -264,7 +351,7 @@ impl Default for CompileOptions {
 }
 
 impl CompileOptions {
-    pub fn as_ssa_options(&self, package_build_path: PathBuf, compiling_for_debug: bool) -> SsaEvaluatorOptions {
+    pub fn as_ssa_options(&self, package_build_path: PathBuf) -> SsaEvaluatorOptions {
         SsaEvaluatorOptions {
             ssa_logging: if !self.show_ssa_pass.is_empty() {
                 SsaLogging::Contains(self.show_ssa_pass.clone())
@@ -276,23 +363,39 @@ impl CompileOptions {
             brillig_options: BrilligOptions {
                 enable_debug_trace: self.show_brillig,
                 enable_debug_assertions: self.enable_brillig_debug_assertions,
-                enable_array_copy_counter: self.count_array_copies,
                 show_opcode_advisories: self.show_brillig_opcode_advisories,
-                layout: Default::default(),
+                layout: LayoutConfig::new(
+                    self.max_stack_frame_size,
+                    self.num_stack_frames,
+                    self.max_scratch_space,
+                ),
+                copy_site_registry: None,
             },
             print_codegen_timings: self.benchmark_codegen,
             emit_ssa: if self.emit_ssa { Some(package_build_path) } else { None },
-            skip_underconstrained_check: !self.silence_warnings && self.skip_underconstrained_check,
-            enable_brillig_constraints_check_lookback: self
-                .enable_brillig_constraints_check_lookback,
-            skip_brillig_constraints_check: !self.silence_warnings
-                && self.skip_brillig_constraints_check,
+            skip_underconstrained_check: self.skip_underconstrained_check,
+            skip_brillig_constraints_check: self.skip_brillig_constraints_check,
+            brillig_constraints_check_max_array_output_length: self
+                .brillig_constraints_check_max_array_output_length,
+            brillig_constraints_check_max_ancestor_distance: self
+                .brillig_constraints_check_max_ancestor_distance,
             inliner_aggressiveness: self.inliner_aggressiveness,
             constant_folding_max_iter: self.constant_folding_max_iter,
             small_function_max_instruction: self.small_function_max_instructions,
             max_bytecode_increase_percent: self.max_bytecode_increase_percent,
+            max_unroll_iterations: self.max_unroll_iterations,
+            force_unroll_threshold: self.force_unroll_threshold,
+            specialization_threshold: self.specialization_threshold,
+            max_specializations_per_fn: self.max_specializations_per_fn,
             skip_passes: self.skip_ssa_pass.clone(),
-            optimization_level: if compiling_for_debug {
+            ssa_logging_hide_unchanged: self.hide_unchanged_ssa,
+            validate_between_passes: self.validate_between_passes,
+            // Debug instrumentation (`nargo debug`, `nargo trace`) needs the SSA
+            // pipeline to preserve the source-line mapping, so it runs the reduced
+            // `OptimizationLevel::Debug` pass list. Every caller of this function
+            // previously threaded `self.instrument_debug` in by hand; deriving it
+            // here keeps the upstream signature and cannot get out of step.
+            optimization_level: if self.instrument_debug {
                 OptimizationLevel::Debug
             } else {
                 OptimizationLevel::All
@@ -305,7 +408,6 @@ impl CompileOptions {
     pub(crate) fn frontend_options(&self) -> FrontendOptions {
         FrontendOptions {
             debug_comptime_in_file: self.debug_comptime_in_file.as_deref(),
-            pedantic_solving: self.pedantic_solving,
             enabled_unstable_features: &self.unstable_features,
             disable_required_unstable_features: self.no_unstable_features,
         }
@@ -349,102 +451,10 @@ pub type ErrorsAndWarnings = Vec<CustomDiagnostic>;
 /// Helper type for connecting a compilation artifact to the errors or warnings which were produced during compilation.
 pub type CompilationResult<T> = Result<(T, Warnings), ErrorsAndWarnings>;
 
-/// Helper method to return a file manager instance with the stdlib already added
+/// Run the def collection, elaboration and type checking passes.
 ///
-/// TODO: This should become the canonical way to create a file manager and
-/// TODO if we use a File manager trait, we can move file manager into this crate
-/// TODO as a module
-pub fn file_manager_with_stdlib(root: &Path) -> FileManager {
-    let mut file_manager = FileManager::new(root);
-
-    add_stdlib_source_to_file_manager(&mut file_manager);
-    add_debug_source_to_file_manager(&mut file_manager);
-
-    file_manager
-}
-
-/// Adds the source code for the stdlib into the file manager
-fn add_stdlib_source_to_file_manager(file_manager: &mut FileManager) {
-    // Add the stdlib contents to the file manager, since every package automatically has a dependency
-    // on the stdlib. For other dependencies, we read the package.Dependencies file to add their file
-    // contents to the file manager. However since the dependency on the stdlib is implicit, we need
-    // to manually add it here.
-    let stdlib_paths_with_source = stdlib_paths_with_source();
-    for (path, source) in stdlib_paths_with_source {
-        file_manager.add_file_with_source_canonical_path(Path::new(&path), source);
-    }
-}
-
-/// Adds the source code of the debug crate needed to support instrumentation to
-/// track variables values
-fn add_debug_source_to_file_manager(file_manager: &mut FileManager) {
-    // Adds the synthetic debug module for instrumentation into the file manager
-    let path_to_debug_lib_file = Path::new(DEBUG_CRATE_NAME).join("lib.nr");
-    file_manager
-        .add_file_with_source_canonical_path(&path_to_debug_lib_file, build_debug_crate_file());
-}
-
-/// Adds the file from the file system at `Path` to the crate graph as a root file
+/// On success, this returns () alongside any warnings found during checking.
 ///
-/// Note: If the stdlib dependency has not been added yet, it's added. Otherwise
-/// this method assumes the root crate is the stdlib (useful for running tests
-/// in the stdlib, getting LSP stuff for the stdlib, etc.).
-pub fn prepare_crate(context: &mut Context, file_name: &Path) -> CrateId {
-    let path_to_std_lib_file = Path::new(STD_CRATE_NAME).join("lib.nr");
-    let std_file_id = context.file_manager.name_to_id(path_to_std_lib_file);
-    let std_crate_id = std_file_id.map(|std_file_id| context.crate_graph.add_stdlib(std_file_id));
-
-    let root_file_id = context.file_manager.name_to_id(file_name.to_path_buf()).unwrap_or_else(|| panic!("files are expected to be added to the FileManager before reaching the compiler file_path: {file_name:?}"));
-
-    if let Some(std_crate_id) = std_crate_id {
-        let root_crate_id = context.crate_graph.add_crate_root(root_file_id);
-
-        add_dep(context, root_crate_id, std_crate_id, STD_CRATE_NAME.parse().unwrap());
-
-        root_crate_id
-    } else {
-        context.crate_graph.add_crate_root_and_stdlib(root_file_id)
-    }
-}
-
-pub fn link_to_debug_crate(context: &mut Context, root_crate_id: CrateId) {
-    let path_to_debug_lib_file = Path::new(DEBUG_CRATE_NAME).join("lib.nr");
-    let debug_crate_id = prepare_dependency(context, &path_to_debug_lib_file);
-    add_dep(context, root_crate_id, debug_crate_id, DEBUG_CRATE_NAME.parse().unwrap());
-}
-
-// Adds the file from the file system at `Path` to the crate graph
-pub fn prepare_dependency(context: &mut Context, file_name: &Path) -> CrateId {
-    let root_file_id = context
-        .file_manager
-        .name_to_id(file_name.to_path_buf())
-        .unwrap_or_else(|| panic!("files are expected to be added to the FileManager before reaching the compiler file_path: {file_name:?}"));
-
-    let crate_id = context.crate_graph.add_crate(root_file_id);
-
-    // Every dependency has access to stdlib
-    let std_crate_id = context.stdlib_crate_id();
-    add_dep(context, crate_id, *std_crate_id, STD_CRATE_NAME.parse().unwrap());
-
-    crate_id
-}
-
-/// Adds a edge in the crate graph for two crates
-pub fn add_dep(
-    context: &mut Context,
-    this_crate: CrateId,
-    depends_on: CrateId,
-    crate_name: CrateName,
-) {
-    context
-        .crate_graph
-        .add_dep(this_crate, crate_name, depends_on)
-        .expect("cyclic dependency triggered");
-}
-
-/// Run the lexing, parsing, name resolution, and type checking passes.
-///
-/// This returns a (possibly empty) vector of any warnings found on success.
 /// On error, this returns a non-empty vector of warnings and error messages, with at least one error.
 #[tracing::instrument(level = "trace", skip_all)]
 pub fn check_crate(
@@ -455,9 +465,6 @@ pub fn check_crate(
     if options.disable_comptime_printing {
         context.disable_comptime_printing();
     }
-    if options.pedantic_solving {
-        context.enable_pedantic_solving();
-    }
 
     let diagnostics = CrateDefMap::collect_defs(crate_id, context, options.frontend_options());
     let crate_files = context.crate_files(&crate_id);
@@ -466,7 +473,7 @@ pub fn check_crate(
         .map(CustomDiagnostic::from)
         .filter(|diagnostic| {
             // We filter out any warnings if they're going to be ignored later on to free up memory.
-            !options.silence_warnings || diagnostic.kind != DiagnosticKind::Warning
+            !options.silence_warnings || !diagnostic.is_warning()
         })
         .filter(|error| {
             // Only keep warnings from the crate we are checking
@@ -495,7 +502,8 @@ pub fn compute_function_abi(
 /// On success this returns the compiled program alongside any warnings that were found.
 /// On error this returns the non-empty list of warnings and errors.
 ///
-/// See [compile_no_check] for further information about the use of `cached_program`.
+/// See [`compile_no_check`] for further information about the use of `cached_program`.
+#[tracing::instrument(level = "trace", skip_all)]
 pub fn compile_main(
     context: &mut Context,
     crate_id: CrateId,
@@ -519,28 +527,29 @@ pub fn compile_main(
 
     let compilation_warnings =
         vecmap(compiled_program.warnings.clone(), ssa_report_to_custom_diagnostic);
+
     if options.deny_warnings && !compilation_warnings.is_empty() {
         return Err(compilation_warnings);
     }
-    if !options.silence_warnings {
-        warnings.extend(compilation_warnings);
-    }
+
+    warnings.extend(drop_silenced_warnings(compilation_warnings, options));
 
     if options.print_acir {
         noirc_errors::println_to_stdout!("Compiled ACIR for main:");
-        noirc_errors::println_to_stdout!("{}", compiled_program.program);
+        noirc_errors::println_to_stdout!("{}", display_compiled_program(&compiled_program));
     }
 
     Ok((compiled_program, warnings))
 }
 
 /// Run the frontend to check the crate for errors then compile all contracts if there were none
+#[tracing::instrument(level = "trace", skip_all)]
 pub fn compile_contract(
     context: &mut Context,
     crate_id: CrateId,
     options: &CompileOptions,
 ) -> CompilationResult<CompiledContract> {
-    let (_, warnings) = check_crate(context, crate_id, options)?;
+    let (_, mut warnings) = check_crate(context, crate_id, options)?;
 
     let def_map = context.def_map(&crate_id).expect("The local crate should be analyzed already");
     let mut contracts = def_map.get_all_contracts();
@@ -565,25 +574,28 @@ pub fn compile_contract(
     let module_id = ModuleId { krate: crate_id, local_id: module_id };
     let contract = read_contract(context, module_id, name);
 
-    let mut errors = warnings;
-
     let compiled_contract = match compile_contract_inner(context, contract, options) {
         Ok(contract) => contract,
         Err(mut more_errors) => {
+            let mut errors = warnings;
             errors.append(&mut more_errors);
             return Err(errors);
         }
     };
 
-    if has_errors(&errors, options.deny_warnings) {
-        Err(errors)
+    let compilation_warnings =
+        vecmap(compiled_contract.warnings.clone(), ssa_report_to_custom_diagnostic);
+    warnings.extend(drop_silenced_warnings(compilation_warnings, options));
+
+    if options.deny_warnings && !warnings.is_empty() {
+        Err(warnings)
     } else {
         if options.print_acir {
             for contract_function in &compiled_contract.functions {
-                if let Some(ref name) = options.show_contract_fn {
-                    if name != &contract_function.name {
-                        continue;
-                    }
+                if let Some(ref name) = options.show_contract_fn
+                    && name != &contract_function.name
+                {
+                    continue;
                 }
                 println!(
                     "Compiled ACIR for {}::{} (non-transformed):",
@@ -592,8 +604,7 @@ pub fn compile_contract(
                 println!("{}", contract_function.bytecode);
             }
         }
-        // errors here is either empty or contains only warnings
-        Ok((compiled_contract, errors))
+        Ok((compiled_contract, warnings))
     }
 }
 
@@ -620,7 +631,7 @@ fn read_contract(context: &Context, module_id: ModuleId, name: String) -> Contra
                 if let Some(tagged) = outputs.globals.get_mut(tag) {
                     tagged.push(global_info.id);
                 } else {
-                    outputs.globals.insert(tag.to_string(), vec![global_info.id]);
+                    outputs.globals.insert(tag.clone(), vec![global_info.id]);
                 }
             }
         });
@@ -633,7 +644,7 @@ fn read_contract(context: &Context, module_id: ModuleId, name: String) -> Contra
                     if let Some(tagged) = outputs.structs.get_mut(tag) {
                         tagged.push(struct_id);
                     } else {
-                        outputs.structs.insert(tag.to_string(), vec![struct_id]);
+                        outputs.structs.insert(tag.clone(), vec![struct_id]);
                     }
                 }
             });
@@ -682,7 +693,7 @@ fn compile_contract_inner(
             if !show {
                 options.show_ssa_pass.clear();
             }
-        };
+        }
 
         let function = match compile_no_check(context, &options, function_id, None, true) {
             Ok(function) => function,
@@ -693,6 +704,7 @@ fn compile_contract_inner(
         };
         warnings.extend(function.warnings);
         let modifiers = context.def_interner.function_modifiers(&function_id);
+        let is_unconstrained = context.def_interner.function_meta(&function_id).is_unconstrained();
 
         let custom_attributes = modifiers
             .attributes
@@ -714,15 +726,15 @@ fn compile_contract_inner(
             abi: function.abi,
             bytecode: function.program,
             debug: function.debug,
-            is_unconstrained: modifiers.is_unconstrained,
-            expression_width: DEFAULT_EXPRESSION_WIDTH,
+            is_unconstrained,
         });
     }
 
     if errors.is_empty() {
         let debug_infos: Vec<_> =
             functions.iter().flat_map(|function| function.debug.clone()).collect();
-        let file_map = filter_relevant_files(&debug_infos, &context.file_manager);
+        let file_map =
+            filter_relevant_files(&debug_infos, &context.file_manager, &context.parsed_files);
 
         let out_structs = contract
             .outputs
@@ -743,7 +755,7 @@ fn compile_contract_inner(
                         AbiType::Struct { path, fields }
                     })
                     .collect();
-                (tag.to_string(), structs)
+                (tag, structs)
             })
             .collect();
 
@@ -752,17 +764,23 @@ fn compile_contract_inner(
             .globals
             .iter()
             .map(|(tag, globals)| {
-                let globals: Vec<AbiValue> = globals
+                let globals: Vec<AbiNamedValue> = globals
                     .iter()
                     .map(|global_id| {
-                        let let_statement =
-                            context.def_interner.get_global_let_statement(*global_id).unwrap();
-                        let hir_expression =
-                            context.def_interner.expression(&let_statement.expression);
-                        value_from_hir_expression(context, hir_expression)
+                        let GlobalValue::Resolved(value) =
+                            &context.def_interner.get_global(*global_id).value
+                        else {
+                            unreachable!(
+                                "Global with #[abi(tag)] must be resolved at comptime before ABI emission"
+                            );
+                        };
+                        let global_info = context.def_interner.get_global(*global_id);
+                        let name = global_info.ident.to_string();
+                        let value = value_to_abi_value(value);
+                        AbiNamedValue { name, value }
                     })
                     .collect();
-                (tag.to_string(), globals)
+                (tag.clone(), globals)
             })
             .collect();
 
@@ -782,6 +800,7 @@ fn compile_contract_inner(
 pub fn filter_relevant_files(
     debug_symbols: &[DebugInfo],
     file_manager: &FileManager,
+    parsed_files: &ParsedFiles,
 ) -> BTreeMap<FileId, DebugFile> {
     let mut files_with_debug_symbols: BTreeSet<FileId> = debug_symbols
         .iter()
@@ -818,33 +837,40 @@ pub fn filter_relevant_files(
     for file_id in files_with_debug_symbols {
         let file_path = file_manager.path(file_id).expect("file should exist");
         let file_source = file_manager.fetch_file(file_id).expect("file should exist");
+        let (parsed_module, _errors) = parsed_files.get(&file_id).expect("file should exist");
+        let include_comptime_items = false;
+        let mut function_locations =
+            function_locations_in_parsed_module(parsed_module, file_id, include_comptime_items);
+        let function_locations = function_locations
+            .all_in_file(file_id)
+            .map(|(name, span)| FunctionLocation { name: name.to_string(), start: span.start() })
+            .collect::<BTreeSet<_>>();
 
         file_map.insert(
             file_id,
-            DebugFile { source: file_source.to_string(), path: file_path.to_path_buf() },
+            DebugFile {
+                source: file_source.to_string(),
+                path: file_path.to_path_buf(),
+                function_locations,
+            },
         );
     }
     file_map
 }
 
-/// Default expression width used for Noir compilation.
-/// The ACVM native type `ExpressionWidth` has its own default which should always be unbounded,
-/// while we can sometimes expect the compilation target width to change.
-/// Thus, we set it separately here rather than trying to alter the default derivation of the type.
-pub const DEFAULT_EXPRESSION_WIDTH: ExpressionWidth = ExpressionWidth::Bounded { width: 4 };
-
 /// Compile the current crate using `main_function` as the entrypoint.
 ///
 /// This function assumes [`check_crate`] is called beforehand.
 ///
-/// If the program is not returned from cache, it is backend-agnostic and must go through a transformation
-/// pass before usage in proof generation; if it's returned from cache these transformations might have
-/// already been applied.
+/// Whether returned from cache or freshly compiled, the program has already been fully optimized and
+/// transformed for the proving backend (the width-bounding CSAT pass and intermediate-variable
+/// elimination, using the assembled program's Brillig side-effect information) as part of
+/// SSA-to-ACIR generation, so it is ready for proof generation with no further optimization pass.
 ///
-/// The transformations are _not_ covered by the check that decides whether we can use the cached artifact.
-/// That comparison is based on on [CompiledProgram::hash] which is a persisted version of the hash of the input
-/// [`ast::Program`][noirc_frontend::monomorphization::ast::Program], whereas the output [`circuit::Program`][acvm::acir::circuit::Program]
-/// contains the final optimized ACIR opcodes, including the transformation done after this compilation.
+/// Note that the optimized ACIR is _not_ covered by the check that decides whether we can use the cached
+/// artifact. That comparison is based on [`CompiledProgram::hash`] which is a persisted version of the hash
+/// of the input [`ast::Program`][noirc_frontend::monomorphization::ast::Program], whereas the output
+/// [`circuit::Program`][acvm::acir::circuit::Program] contains the final optimized ACIR opcodes.
 #[tracing::instrument(level = "trace", skip_all, fields(function_name = context.function_name(&main_function)))]
 #[allow(clippy::result_large_err)]
 pub fn compile_no_check(
@@ -854,18 +880,24 @@ pub fn compile_no_check(
     cached_program: Option<CompiledProgram>,
     force_compile: bool,
 ) -> Result<CompiledProgram, CompileError> {
-    let compiling_for_debug = options.instrument_debug;
     let force_unconstrained = options.force_brillig || options.minimal_ssa;
 
-    let program = if compiling_for_debug {
+    let program = if options.instrument_debug {
         monomorphize_debug(
             main_function,
             &mut context.def_interner,
+            context.file_manager.as_file_map(),
             &context.debug_instrumenter,
+            context.debug_crate_id,
             force_unconstrained,
         )?
     } else {
-        monomorphize(main_function, &mut context.def_interner, force_unconstrained)?
+        monomorphize(
+            main_function,
+            &mut context.def_interner,
+            context.file_manager.as_file_map(),
+            force_unconstrained,
+        )?
     };
 
     if options.show_monomorphized {
@@ -878,7 +910,7 @@ pub fn compile_no_check(
         || options.print_acir
         || options.show_brillig
         || options.force_brillig
-        || options.count_array_copies
+        || context.count_array_copies
         || options.show_ssa
         || !options.show_ssa_pass.is_empty()
         || options.emit_ssa
@@ -887,15 +919,23 @@ pub fn compile_no_check(
     // Hash the AST program, which is going to be used to fingerprint the compilation artifact.
     let hash = rustc_hash::FxBuildHasher.hash_one(&program);
 
-    if let Some(cached_program) = cached_program {
-        if !force_compile && cached_program.hash == hash {
-            info!("Program matches existing artifact, returning early");
-            return Ok(cached_program);
-        }
+    if let Some(cached_program) = cached_program
+        && !force_compile
+        && cached_program.hash == hash
+    {
+        info!("Program matches existing artifact, returning early");
+        return Ok(cached_program);
     }
 
     let return_visibility = program.return_visibility();
-    let ssa_evaluator_options = options.as_ssa_options(context.package_build_path.clone(), options.instrument_debug);
+    let mut ssa_evaluator_options = options.as_ssa_options(context.package_build_path.clone());
+
+    // The copy-site registry is what turns on the `--count-array-copies` instrumentation. It is
+    // enabled per-compilation via the context rather than through the shared `CompileOptions`.
+    if context.count_array_copies {
+        ssa_evaluator_options.brillig_options.copy_site_registry =
+            Some(CopySiteRegistry::default());
+    }
 
     let SsaProgramArtifact { program, debug, warnings, error_types, .. } = if options.minimal_ssa {
         create_program_with_minimal_passes(program, &ssa_evaluator_options, &context.file_manager)?
@@ -903,12 +943,17 @@ pub fn compile_no_check(
         create_program(
             program,
             &ssa_evaluator_options,
-            if options.with_ssa_locations { Some(&context.file_manager) } else { None },
+            // The registry resolves copy sites to source locations, which needs the file manager.
+            if options.with_ssa_locations || context.count_array_copies {
+                Some(&context.file_manager)
+            } else {
+                None
+            },
         )?
     };
 
     let abi = gen_abi(context, &main_function, return_visibility, error_types);
-    let file_map = filter_relevant_files(&debug, &context.file_manager);
+    let file_map = filter_relevant_files(&debug, &context.file_manager, &context.parsed_files);
 
     Ok(CompiledProgram {
         hash,
@@ -918,7 +963,6 @@ pub fn compile_no_check(
         file_map,
         noir_version: NOIR_ARTIFACT_VERSION_STRING.to_string(),
         warnings,
-        expression_width: DEFAULT_EXPRESSION_WIDTH,
     })
 }
 
@@ -940,12 +984,24 @@ struct ContractOutputs {
 }
 
 /// A 'contract' in Noir source code with a given name, functions and events.
-/// This is not an AST node, it is just a convenient form to return for CrateDefMap::get_all_contracts.
+/// This is not an AST node, it is just a convenient form to return for `CrateDefMap::get_all_contracts`.
 struct Contract {
-    /// To keep `name` semi-unique, it is prefixed with the names of parent modules via CrateDefMap::get_module_path
+    /// To keep `name` semi-unique, it is prefixed with the names of parent modules via `CrateDefMap::get_module_path`
     name: String,
     functions: Vec<ContractFunctionMeta>,
     outputs: ContractOutputs,
+}
+
+/// Removes warning diagnostics when `silence_warnings` is set, while always retaining bugs
+/// so that a `silence_warnings` flag cannot hide them.
+fn drop_silenced_warnings(
+    diagnostics: Vec<CustomDiagnostic>,
+    options: &CompileOptions,
+) -> Vec<CustomDiagnostic> {
+    diagnostics
+        .into_iter()
+        .filter(|diagnostic| !options.silence_warnings || !diagnostic.is_warning())
+        .collect()
 }
 
 fn ssa_report_to_custom_diagnostic(error: SsaReport) -> CustomDiagnostic {
@@ -953,14 +1009,15 @@ fn ssa_report_to_custom_diagnostic(error: SsaReport) -> CustomDiagnostic {
         SsaReport::Warning(warning) => {
             let message = warning.to_string();
             let (secondary_message, call_stack) = match warning {
-                    InternalWarning::ReturnConstant { call_stack } => {
+                    InternalWarning::ConstantReturn { call_stack } => {
                         ("This variable contains a value which is constrained to be a constant. Consider removing this value as additional return values increase proving/verification time".to_string(), call_stack)
                     },
                 };
-            let call_stack = vecmap(call_stack, |location| location);
-            let location = call_stack.last().expect("Expected RuntimeError to have a location");
-            let diagnostic =
-                CustomDiagnostic::simple_warning(message, secondary_message, *location);
+            let location = call_stack.last_or_dummy();
+            if location.is_dummy() {
+                tracing::warn!("expected SsaReport::Warning to have a location");
+            }
+            let diagnostic = CustomDiagnostic::simple_warning(message, secondary_message, location);
             diagnostic.with_call_stack(call_stack)
         }
         SsaReport::Bug(bug) => {
@@ -979,10 +1036,42 @@ fn ssa_report_to_custom_diagnostic(error: SsaReport) -> CustomDiagnostic {
                         ("As a result, the compiled circuit is ensured to fail. Other assertions may also fail during execution".to_string(), call_stack)
                     }
                 };
-            let call_stack = vecmap(call_stack, |location| location);
-            let location = call_stack.last().expect("Expected RuntimeError to have a location");
-            let diagnostic = CustomDiagnostic::simple_bug(message, secondary_message, *location);
+            let location = call_stack.last_or_dummy();
+            if location.is_dummy() {
+                tracing::warn!("expected SsaReport::Bug to have a location");
+            }
+            let diagnostic = CustomDiagnostic::simple_bug(message, secondary_message, location);
             diagnostic.with_call_stack(call_stack)
         }
+    }
+}
+
+pub fn display_compiled_program(program: &CompiledProgram) -> String {
+    ProgramDisplay { program: &program.program, error_types: &program.abi.error_types }.to_string()
+}
+
+/// Formats an ACIR [Program] together with its ABI error types so that any static
+/// assertion payloads embedded in the program are rendered as a `// message` comment
+/// next to the relevant ACIR/Brillig opcode. This is the same display used by
+/// `nargo compile --print-acir`.
+struct ProgramDisplay<'a, F: AcirField> {
+    program: &'a Program<F>,
+    error_types: &'a BTreeMap<ErrorSelector, AbiErrorType>,
+}
+
+impl<F: AcirField> std::fmt::Display for ProgramDisplay<'_, F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let error_types = self
+            .error_types
+            .iter()
+            .filter_map(|(selector, abi_error_type)| {
+                if let AbiErrorType::String { string } = abi_error_type {
+                    Some((*selector, string.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<HashMap<_, _>>();
+        display_program(self.program, Some(&error_types), f)
     }
 }
