@@ -3690,6 +3690,8 @@ dependencies = [
  "noirc_frontend",
  "rust-embed",
  "serde",
+ "serde_json",
+ "toml 0.8.23",
  "tracing-subscriber",
  "tracing-web",
  "wasm-bindgen",

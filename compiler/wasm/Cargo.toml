@@ -24,6 +24,14 @@ noirc_errors.workspace = true
 noirc_artifacts.workspace = true
 wasm-bindgen.workspace = true
 serde.workspace = true
+# `src/vfs.rs` reads `Nargo.toml` inside the module rather than in JavaScript, so the
+# manifest parser has to be here. `toml::Spanned` is what lets a refusal name the LINE the
+# offending dependency sits on rather than only the file.
+toml.workspace = true
+# The bare C ABI in `src/compile_vfs.rs` carries its request and its answer as JSON,
+# because a `(ptr, len)` pair per argument is a C ABI that changes every time a knob is
+# added.
+serde_json.workspace = true
 js-sys.workspace = true
 console_error_panic_hook.workspace = true
 gloo-utils.workspace = true
