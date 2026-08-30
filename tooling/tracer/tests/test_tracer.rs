@@ -667,49 +667,76 @@ fn test_a_2_function_calls_via_ct_print_full() {
 /// list has no way to tell the defect from the twelve correct entries beside it.
 ///
 /// This test is the declaration. It asserts the defect is STILL THERE and reads
-/// the fixture's real length off disk rather than restating it, so:
+/// each fixture's real length off disk rather than restating it, so:
 ///
 ///   * fixing the recorder trips THIS test, by name, instead of passing;
-///   * lengthening the fixture past 142 lines trips it too, because then 142
-///     would no longer be out of range and the pin would stop meaning anything;
+///   * lengthening a fixture past its pinned line trips it too, because then the
+///     line would no longer be out of range and the pin would stop meaning anything;
 ///   * and the two halves cannot both be satisfied by a step list that is
 ///     simply missing, because the last step is asserted to exist first.
+///
+/// AND IT COVERS THREE FIXTURES, NOT ONE, BECAUSE THE DEFECT IS THE TREE'S AND NOT
+/// `a_2`'s. Measured on this tree, `main`'s last recorded step line against the
+/// fixture's real length: `a_2_function_calls` 142 in 13 lines, `a_1_mul` 264 in 9,
+/// `multi_stmt_per_line` 96 in 4. Declaring one of the three read as one fixture's
+/// problem, and the other two carry the same out-of-range line inside pins that
+/// never assert it — `a_1_mul`'s fourteen-entry sequence covers line 264 silently.
+///
+/// THE OUT-OF-RANGE COMPARISON USED TO BE A TAUTOLOGY. It sat beside
+/// `assert_eq!(fixture_lines, 13)`, so with the line pinned at 142 and the length
+/// pinned at 13, `142 > 13` could not fail — and the property the header credits it
+/// with ("lengthening the fixture trips it") was actually delivered by the LENGTH
+/// pin, which trips at 14 lines rather than at 143. The length is read and not
+/// pinned now, so the comparison is the one the header describes.
 #[test]
 fn test_a_2_last_step_line_is_the_known_out_of_range_defect() {
-    let Some(doc) = record_and_dump_full(
-        "test_a_2_last_step_line_is_the_known_out_of_range_defect",
-        "a_2_function_calls",
-    ) else {
-        return;
-    };
+    // (fixture, the line `main`'s last step is recorded at on this tree)
+    const DECLARED: [(&str, i64); 3] =
+        [("a_2_function_calls", 142), ("a_1_mul", 264), ("multi_stmt_per_line", 96)];
 
-    let fixture = trace_fixture("a_2_function_calls").join("src").join("main.nr");
-    let source = std::fs::read_to_string(&fixture)
-        .unwrap_or_else(|e| panic!("reading {}: {e}", fixture.display()));
-    let fixture_lines = source.lines().count() as i64;
-    assert_eq!(fixture_lines, 13, "the fixture this defect is measured against is 13 lines");
+    for (name, pinned) in DECLARED {
+        let Some(doc) = record_and_dump_full(
+            "test_a_2_last_step_line_is_the_known_out_of_range_defect",
+            name,
+        ) else {
+            return;
+        };
 
-    let steps: Vec<i64> = doc["events"]
-        .as_array()
-        .expect("events array")
-        .iter()
-        .filter(|e| e["kind"] == "step" && e["function"] == "main")
-        .filter_map(|e| e["line"].as_i64())
-        .collect();
-    assert!(!steps.is_empty(), "main recorded no steps at all, so nothing below measures anything");
+        let fixture = trace_fixture(name).join("src").join("main.nr");
+        let source = std::fs::read_to_string(&fixture)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", fixture.display()));
+        let fixture_lines = source.lines().count() as i64;
+        assert!(
+            fixture_lines > 0,
+            "{name}: the fixture read as empty, so the comparison below would measure nothing",
+        );
 
-    let last = *steps.last().unwrap();
-    assert_eq!(
-        last, 142,
-        "KNOWN DEFECT: main's last recorded step line. If this is now {fixture_lines} \
-         or anything else in range, the recorder has been FIXED — delete this test and \
-         re-pin the sequence in test_a_2_function_calls_via_ct_print_full."
-    );
-    assert!(
-        last > fixture_lines,
-        "the pinned line {last} is supposed to be OUT OF RANGE for a {fixture_lines}-line file; \
-         if the fixture grew past it this pin has stopped meaning anything",
-    );
+        let steps: Vec<i64> = doc["events"]
+            .as_array()
+            .expect("events array")
+            .iter()
+            .filter(|e| e["kind"] == "step" && e["function"] == "main")
+            .filter_map(|e| e["line"].as_i64())
+            .collect();
+        assert!(
+            !steps.is_empty(),
+            "{name}: main recorded no steps at all, so nothing below measures anything",
+        );
+
+        let last = *steps.last().unwrap();
+        assert_eq!(
+            last, pinned,
+            "KNOWN DEFECT: {name}'s main recorded its last step at line {last}, not the \
+             pinned {pinned}. If it is now in range, the recorder has been FIXED — delete \
+             this fixture's row and re-pin the sequence in that fixture's own test."
+        );
+        assert!(
+            last > fixture_lines,
+            "{name}: the pinned line {last} is supposed to be OUT OF RANGE for a \
+             {fixture_lines}-line file; if the fixture grew past it this pin has stopped \
+             meaning anything",
+        );
+    }
 }
 
 /// `if_then_else_reduced.nr` — `for i in 1..11 { if i % 2 == 0 { ... } }`.
@@ -987,7 +1014,11 @@ fn test_types_test_via_ct_print_full() {
 /// Steps the tracer must produce on `src/main.nr`:
 /// `(line=1, column=1)`, then three line-2 statements at
 /// `(line=2, column=9)`, `(line=2, column=27)`, `(line=2, column=45)`,
-/// then the `assert` on `(line=4, column=1)`.  This pins both that
+/// and then NO step for the `assert` at all — which is on line 3, not line 4.
+/// (This sentence said "then the `assert` on `(line=4, column=1)`". The fixture is
+/// four lines and the `assert(a + b + c == 6);` is on the THIRD; the body was
+/// corrected to pin the real gap — line 3 produces no step — and this comment was
+/// left stating the off-by-one it was corrected for.)  This pins both that
 /// column-aware mode is latched (`metadata.flags.has_column_aware_steps`
 /// is true) and that the recorder distinguishes same-line statements at
 /// the byte level via the `DeltaColumn` event.
