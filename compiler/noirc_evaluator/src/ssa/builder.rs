@@ -340,15 +340,28 @@ impl<'local> SsaBuilder<'local> {
     }
 }
 
-// Helper to time SSA passes
+// Helper to time SSA passes.
+//
+// The clock is read only when the duration is printed. Reading it unconditionally and then
+// discarding the answer costs a `clock_gettime` per pass natively, and rather more than that
+// on `wasm32-unknown-unknown`, where `chrono` has no clock of its own and calls
+// `js_sys::Date::new_0()` — a JavaScript boundary crossing per SSA pass, on every compile,
+// for a number that is not used. A `wasm32-unknown-unknown` build of the compiler driven by
+// a host that supplies no imports traps on the first of them, inside `run_passes`, before
+// any instruction has been generated.
+//
+// Behaviour is unchanged in both directions: with `print_timings` the same two reads bracket
+// the same call and the same line is printed; without it, the only difference is the reads
+// that were thrown away.
 pub(super) fn time<T>(name: &str, print_timings: bool, f: impl FnOnce() -> T) -> T {
+    if !print_timings {
+        return f();
+    }
+
     let start_time = chrono::Utc::now().time();
     let result = f();
-
-    if print_timings {
-        let end_time = chrono::Utc::now().time();
-        println_to_stdout!("{name}: {} ms", (end_time - start_time).num_milliseconds());
-    }
+    let end_time = chrono::Utc::now().time();
+    println_to_stdout!("{name}: {} ms", (end_time - start_time).num_milliseconds());
 
     result
 }
