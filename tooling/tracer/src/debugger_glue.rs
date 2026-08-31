@@ -100,12 +100,75 @@ fn convert_debugger_location<B: BlackBoxFunctionSolver<FieldElement>>(
             return SourceLocation::create_unknown();
         }
     };
-    // `location_column_number` returns a 1-indexed column derived from
-    // `Location::span.start()`.  Synthetic locations (no source file
-    // backing) return an error; treat that as "no column" rather than
-    // an unknown sentinel so the rest of the location is still usable
-    // for the line-only Step fallback.
-    let column_number =
-        debug_artifact.location_column_number(location).ok().map(|column| column as isize);
+    // The 1-indexed column, derived from `Location::span.start()`.  Synthetic
+    // locations (no source file backing) yield `None` rather than an unknown
+    // sentinel, so the rest of the location is still usable for the line-only
+    // Step fallback.
+    //
+    // ======================================================================
+    // WHY THIS IS DERIVED HERE INSTEAD OF TAKEN FROM
+    // `DebugArtifact::location_column_number`, AND IT IS TWO DEFECTS AND NOT ONE.
+    // Both were measured on 2026-08-31 against nargo 1.0.0-beta.26.
+    //
+    // The writer's column coordinate is defined by
+    // `tracer_glue::compute_line_lengths`: **per-line UTF-8 BYTE counts, with
+    // the line terminator NOT counted**.  `paths.dat` Layout A encodes a step
+    // as the global byte position `sum(len(1..line-1)) + (column - 1)`, and the
+    // reader inverts that with the same table.  So a column is in contract iff
+    // `1 <= column <= line_length_in_bytes`.
+    //
+    //   1. **THE OFF-BY-ONE AT END OF LINE — this is the `("main", 142)` defect.**
+    //      `codespan`'s `column_index` clamps the byte index to `line_range.end`,
+    //      and a codespan line range INCLUDES its terminator, so a span that
+    //      starts on the newline reports `column = line_length + 1`.  Every
+    //      traced program hits this exactly once: the debugger's final location
+    //      is the empty span at the newline after `main`'s closing brace.
+    //      Measured on `multi_stmt_per_line`: `span=(99..99)`, line 4, and
+    //      codespan says column 2 for a one-character line.  The writer then
+    //      encodes `sum(all line lengths) + 0`, which is one past the last
+    //      addressable byte, the reader cannot map it back to a line, and it
+    //      surfaces the RAW GLOBAL CURSOR as the line number.  That is where
+    //      `a_2_function_calls` got line **142** in a 13-line file, `a_1_mul`
+    //      line **264** in 9, and `multi_stmt_per_line` line **96** in 4 — and
+    //      it is why all three equal `file_size - line_count`, which is the sum
+    //      of the line lengths, rather than anything about the program.
+    //      Proved to be a byte cursor rather than a line by padding line 2 of
+    //      `multi_stmt_per_line` with ten spaces WITHOUT changing its line
+    //      count: the number moved 96 -> 106.
+    //
+    //   2. **THE UNIT.** `codespan`'s column counts CHARACTERS (it counts char
+    //      boundaries in the line range); `compute_line_lengths` counts BYTES.
+    //      They agree for ASCII, which is every fixture in `test_programs/trace`,
+    //      and they disagree for any source with a multi-byte character before
+    //      the step — silently, and in the direction that produces a plausible
+    //      wrong position rather than an obvious one.  Deriving the column from
+    //      the byte offsets here makes the recorder speak the writer's unit.
+    //
+    // Clamping is the right repair rather than dropping the step: the position
+    // it clamps to is `main`'s closing brace, which is a real line a stepper
+    // should stop on, and which `is_closing_brace_location` deliberately keeps
+    // for the outermost frame.  `test_last_main_step_is_in_range_in_every_fixture`
+    // pins the result over seven fixtures and would go red if either defect
+    // returned: measured by removing the clamp on 2026-08-31, that test and
+    // `test_a_2_function_calls_via_ct_print_full` are the only two of twelve
+    // that fail.
+    // ======================================================================
+    let column_number = debug_artifact
+        .line_range(location.file, (line_number - 1) as usize)
+        .ok()
+        .zip(debug_artifact.source(location.file).ok())
+        .map(|(line_range, source)| {
+            // The line's length in bytes, terminator excluded — the same
+            // quantity `compute_line_lengths` puts in `paths.dat`.
+            let line_bytes = source
+                .get(line_range.start..line_range.end)
+                .map(|line| line.trim_end_matches('\n').trim_end_matches('\r').len())
+                .unwrap_or(0);
+            let offset_in_line = (location.span.start() as usize).saturating_sub(line_range.start);
+            // `max(1)` because a zero-length line still has column 1, and
+            // `min(line_bytes)` because a column past the last byte is the
+            // out-of-contract cursor described above.
+            (offset_in_line + 1).min(line_bytes.max(1)) as isize
+        });
     SourceLocation { filepath, line_number, column_number }
 }

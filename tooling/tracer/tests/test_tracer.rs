@@ -107,45 +107,67 @@
 //!     `(TypeKind::Int, "Field")` type record" is true of the TYPE and not of
 //!     the TABLE.
 //!
-//! THE THREE THAT WERE RED, RE-MEASURED ACROSS THE RECONCILIATION (2026-08-30).
-//! Both sides were measured, in separate worktrees, with `nargo` REBUILT for
-//! each and with `CODETRACER_NARGO_BIN` / `CODETRACER_CT_PRINT_BIN` set — see
-//! the skip warning below, which is why "6 passed in 0.00 s" is not a result.
+//! THE THREE THAT WERE RED, RE-MEASURED ACROSS THE RECONCILIATION (2026-08-30),
+//! AND THEN **ALL THREE SETTLED ON 2026-08-31**. Both sides were measured, in
+//! separate worktrees, with `nargo` REBUILT for each and with
+//! `CODETRACER_NARGO_BIN` / `CODETRACER_CT_PRINT_BIN` set — see the skip warning
+//! below, which is why "6 passed in 0.00 s" is not a result.
 //!
 //! Baseline, `blocktracer` @ `4d2381630` (1.0.0-beta.18): **3 pass / 3 fail.**
-//! Reconciled, this tree (1.0.0-beta.26): **6 pass / 0 fail.** The three greens
-//! have three different meanings and they must not be collapsed into one:
+//! Reconciled (1.0.0-beta.26): **6 pass / 0 fail** — but that green was one fix,
+//! one repin and one test defect, and the 2026-08-31 pass turned the repin into
+//! a fix and the remaining two into explanations with controls. What each is
+//! NOW, because "green" was never the interesting statement:
 //!
-//!   1. `test_a_1_mul_via_ct_print_full` — **REPINNED, NOT FIXED, AND THE PIN
-//!      NO LONGER SAYS SO.** The question was which step a stepper should stop
-//!      on: the pin wanted `[None, None, None, Some(3), …]` and the recorder
-//!      produced `[None, None, Some(3), …]`. Upstream's rewritten SSA pipeline
-//!      changed step granularity, so the sequence is now fourteen entries with
-//!      every value doubled, and the reconciliation branch re-pinned it to
-//!      exactly what the tree emits — two leading `None`s, not three. The
-//!      *comparison* is still exact and still capable of failing; what is gone
-//!      is the record that the expectation was ever in doubt. It is in doubt.
-//!      `register_call` fires before the parameters are bound, which is the
-//!      explanation for two, and nothing has established that two is right.
-//!   2. `test_a_2_function_calls_via_ct_print_full` — **STILL A RECORDER
-//!      DEFECT, AND NOW PINNED AS ONE.** `("main", 142)` in a thirteen-line
-//!      file is what the recorder emits at beta.18 and at beta.26 alike, so the
-//!      reconciliation moved nothing. The reconciliation branch re-pinned it
-//!      into the expected sequence with no comment, which is exactly the
-//!      "a repin writes a recorder defect into a test" hazard. The pin is kept,
-//!      because the sequence assertion has to compare against what the tree
-//!      emits — but it is now declared: `test_a_2_last_step_line_is_the_known
-//!      _out_of_range_defect` asserts the defect is STILL THERE and names the
-//!      file's real length, so fixing the recorder trips this file instead of
-//!      passing silently. That is the same shape the line-3 gap below uses.
-//!   3. `test_multi_stmt_per_line_column_aware` — **RETIRED, AND IT WAS A
-//!      DEFECT IN THE TEST.** The assertion looked for a step on **line 4**;
-//!      the `assert(a + b + c == 6);` it is about is on **line 3**. It never
-//!      reached its own assertion, because an earlier one in the same test
-//!      always failed first. The reconciliation branch found the off-by-one and
-//!      replaced it with a pin on the real gap — line 3 produces no step of its
-//!      own — written so that fixing the gap trips the test. So the third red
-//!      was never a recorder defect at all.
+//!   1. `test_a_1_mul_via_ct_print_full` — **THE DOUBT IS DISCHARGED, BY
+//!      MEASUREMENT.** The question was whether the leading run of unbound `x`
+//!      values should be two or three; the reconciliation re-pinned it to two
+//!      and deleted the record that anything had been in doubt, leaving a
+//!      correct number standing on nothing. It is two, and the cause is now
+//!      asserted rather than asserted-around: `a_1_mul`'s first four steps are
+//!      `(1,1)`, `(3,13)`, `(3,21)`, `(3,29)` — the entry step, then one step
+//!      per parameter at that parameter's own column in the signature, with a
+//!      parameter bound only after its own step is recorded. See
+//!      `test_a_1_mul_parameter_binding_explains_the_leading_unbound_steps`,
+//!      which derives every column from the fixture's signature line.
+//!
+//!   2. `test_a_2_function_calls_via_ct_print_full` — **FIXED, AND THE
+//!      DECLARATION IS WHAT MADE FIXING IT VISIBLE.** `("main", 142)` in a
+//!      thirteen-line file was pinned as a declared defect with a test asserting
+//!      the defect was STILL THERE. Repairing the recorder on 2026-08-31 tripped
+//!      that test by name — `left: 13, right: 142` — instead of passing
+//!      silently, which is the entire point of declaring a defect rather than
+//!      swallowing it. The cause was ONE off-by-one at end of line, not
+//!      anything about `main`: a `codespan` line range includes its terminator,
+//!      so the final location — the empty span at the newline after the closing
+//!      brace — reported `column = line_length + 1`, the writer turned that into
+//!      a byte position one past the last addressable byte, and the reader
+//!      surfaced the raw cursor as a line. All three affected numbers equal
+//!      `file_size - line_count`. Proved to be a byte cursor by padding a
+//!      fixture without changing its line count (96 -> 106). The repair and a
+//!      second defect found beside it (the column UNIT: `codespan` counts
+//!      characters, the writer counts bytes) are in
+//!      `debugger_glue::convert_debugger_location`; the regression test is
+//!      `test_last_main_step_is_in_range_in_every_fixture`, over seven fixtures.
+//!
+//!   3. `test_multi_stmt_per_line_column_aware` — **WAS A DEFECT IN THE TEST,
+//!      AND ITS REPLACEMENT WAS A MISATTRIBUTION.** The original assertion
+//!      looked for a step on line 4 when the `assert(a + b + c == 6);` it is
+//!      about is on line 3, and never reached its own assertion. The
+//!      reconciliation replaced it with a pin on "line 3 produces no step",
+//!      written so that "fixing the gap trips the test" — describing a fix
+//!      nobody could make, because there is no gap: all three operands are
+//!      compile-time constants, the SSA pipeline folds the constraint away, and
+//!      a recorder cannot record a step for code that is not in the program.
+//!      Established by control rather than by argument in
+//!      `test_multi_stmt_line_3_assert_is_constant_folded_not_dropped`: the same
+//!      program with one runtime operand produces TWO steps on line 3.
+//!
+//! *Two of the three "recorder defects" this suite has carried turned out not to
+//! be recorder defects, and the one that was is fixed. The pattern worth keeping
+//! is the mechanism, not the score: a defect that is DECLARED by a test which
+//! asserts it is still there cannot be fixed quietly, and an absence that is
+//! paired with a control cannot be a drop wearing a fold's label.*
 //! ==========================================================================
 
 use std::path::PathBuf;
@@ -175,12 +197,90 @@ use std::process::Command;
 /// the screen that said so, which is why a baseline taken in 0.00 s over tests
 /// that SPAWN a compiler is not a baseline.
 ///
-/// Set `CODETRACER_TRACER_TESTS_ALLOW_SKIP=1` to get the old behaviour
-/// locally. Never set it in CI — a run under that variable still reports
+/// Set `CODETRACER_TRACER_TESTS_ALLOW_SKIP=1` to downgrade the panic to a skip
+/// while iterating locally.
+///
+/// **WHAT THIS COMMENT USED TO CLAIM WAS ALREADY OUT OF DATE, AND THE CORRECTION
+/// IS SMALLER THAN THE CLAIM.** It said "a run under that variable still reports
 /// `ok. N passed` with nothing in the summary line marking it vacuous, so it
-/// inherits the whole original defect.
+/// inherits the whole original defect". Measured on 2026-08-31 with the opt-out
+/// set and `ct-print` forced absent, the run is **not** green and was not green
+/// before this change either: `test_source_views_embed_the_compiled_source`
+/// ignores the opt-out and panics, and it has done since `6939457ff`, which is
+/// in the merged mainline. So the sentence described the branch's state and
+/// survived the merge that falsified it — this campaign's stale-reason shape,
+/// in a comment about vacuity.
+///
+/// What was genuinely missing is narrower and still worth closing: the failure
+/// that marked the run said *"a trace with no embedded source is the defect this
+/// test exists to catch"*, which is **a wrong explanation for a run whose real
+/// problem is that `ct-print` is not there** — and a wrong explanation is worse
+/// than none, because it names a cause the reader will go and check.
+/// `test_prerequisites_are_present_or_the_run_is_declared_vacuous` fails in the
+/// same runs and names the actual cause and the actual consequence.
+///
+/// `cargo test` captures stderr for a passing test, so no amount of printing
+/// from inside a skipped test can reach the summary line; a test that FAILS is
+/// the only mechanism that can. The opt-out keeps its value — the other tests
+/// skip instead of each panicking with a wall of text.
 fn skipping_allowed() -> bool {
     matches!(std::env::var("CODETRACER_TRACER_TESTS_ALLOW_SKIP").as_deref(), Ok("1") | Ok("true"))
+}
+
+/// The vacuity guard for the `CODETRACER_TRACER_TESTS_ALLOW_SKIP` opt-out.
+///
+/// It is deliberately not conditional on the opt-out: with the variable unset
+/// and the binaries present it asserts they are present (a real, if cheap,
+/// measurement), and with the variable unset and a binary missing it takes the
+/// same panic every other test takes. The case it exists for is the third one —
+/// opt-out set, binary missing — where every other test in this file returns
+/// early and reports `ok`.
+///
+/// Calibrated both ways on 2026-08-31:
+///
+///   * `CODETRACER_TRACER_TESTS_ALLOW_SKIP=1
+///     CODETRACER_TRACER_TESTS_PRETEND_CT_PRINT_MISSING=1`: **`11 passed; 1
+///     failed`** in 0.00 s — this test naming `ct-print` and the vacuity, and
+///     `test_source_views_embed_the_compiled_source` naming its own subject.
+///     Without this test the same run is `11 passed; 1 failed`: still red, but
+///     the only thing red is a test about embedded source views, over a run
+///     whose actual problem is a binary that is not there.
+///   * With both binaries present: passes, and the run is **12 passed** in
+///     ~1.4 s, which is the elapsed time of a suite that really spawned a
+///     compiler twelve times.
+///
+/// The first calibration needed a mechanism of its own, and finding out why is
+/// the reason `locator_override` exists: the obvious way to fake an absent
+/// binary — point `CODETRACER_CT_PRINT_BIN` at a path that is not there — did
+/// nothing, because the locator silently fell back to the workspace default.
+/// So the first attempt at this calibration reported twelve passes and would
+/// have been written down as "the guard fires".
+#[test]
+fn test_prerequisites_are_present_or_the_run_is_declared_vacuous() {
+    // `locate_*` panic by default, so reaching the checks below at all means
+    // either both are present or the opt-out is set.
+    let nargo = locate_nargo("test_prerequisites_are_present_or_the_run_is_declared_vacuous");
+    let ct_print = locate_ct_print("test_prerequisites_are_present_or_the_run_is_declared_vacuous");
+
+    let mut missing: Vec<&str> = Vec::new();
+    if nargo.is_none() {
+        missing.push("nargo (build it with `cargo build -p nargo_cli --bin nargo`)");
+    }
+    if ct_print.is_none() {
+        missing.push("ct-print (build the sibling codetracer-trace-format-nim checkout)");
+    }
+
+    assert!(
+        missing.is_empty(),
+        "THIS RUN IS VACUOUS. CODETRACER_TRACER_TESTS_ALLOW_SKIP is set and these \
+         prerequisites are missing, so every other test in this file returned before \
+         asserting anything: {}.\n\n\
+         This failure is the only thing that puts the vacuity in the summary line — \
+         `cargo test` captures a passing test's stderr, so the `SKIP:` diagnostics above \
+         are invisible in CI. Build the missing binaries, or accept that this run \
+         measured nothing.",
+        missing.join("; "),
+    );
 }
 
 /// Report a missing prerequisite: panic by default, skip only when the
@@ -201,6 +301,38 @@ fn missing_prerequisite(test_name: &str, what: &str) -> Option<PathBuf> {
          `CODETRACER_TRACER_TESTS_ALLOW_SKIP=1` to downgrade this to a skip. \
          Do not set it in CI."
     );
+}
+
+/// Resolve an explicitly-set locator override, refusing a path that is not there.
+///
+/// **A SET-BUT-MISSING OVERRIDE IS A MISTAKE, NOT A MISSING PREREQUISITE, AND IT
+/// USED TO BE SILENT.** `CODETRACER_NARGO_BIN` and `CODETRACER_CT_PRINT_BIN`
+/// were read with `if p.exists() { return Some(p) }` and no `else`, so a typo,
+/// a stale path or a relative path resolved against the wrong cwd fell straight
+/// through to the workspace default — and the run then measured a DIFFERENT
+/// binary from the one the developer named, reporting success. That is the exact
+/// hazard this file's own header warns about ("a stale `nargo` is how a baseline
+/// measurement was got wrong once already"), reached through the escape hatch
+/// provided to avoid it. Found on 2026-08-31 while trying to mutation-test the
+/// vacuity guard below: pointing `CODETRACER_CT_PRINT_BIN` at a path that does
+/// not exist changed nothing at all, and the suite reported twelve passes.
+///
+/// It is a `panic!` and not a skip on purpose: the opt-out exists for a binary
+/// you have not BUILT, and this is a binary you have NAMED.
+fn locator_override(var: &str) -> Option<PathBuf> {
+    let raw = std::env::var(var).ok()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(&raw);
+    assert!(
+        p.exists(),
+        "{var} is set to {raw:?}, which does not exist.\n\n\
+         This is a hard failure rather than a fall-back to the workspace default, \
+         because falling back would silently run a DIFFERENT binary from the one \
+         you named and report success. Fix the path or unset {var}.",
+    );
+    Some(p)
 }
 
 /// Workspace root (=`noir/`).  `CARGO_MANIFEST_DIR` is `noir/tooling/tracer`,
@@ -226,11 +358,8 @@ fn noir_workspace_root() -> PathBuf {
 /// Panics if none is found; returns `None` only under the explicit
 /// `CODETRACER_TRACER_TESTS_ALLOW_SKIP` opt-out.
 fn locate_nargo(test_name: &str) -> Option<PathBuf> {
-    if let Ok(env_path) = std::env::var("CODETRACER_NARGO_BIN") {
-        let p = PathBuf::from(env_path);
-        if p.exists() {
-            return Some(p);
-        }
+    if let Some(p) = locator_override("CODETRACER_NARGO_BIN") {
+        return Some(p);
     }
 
     let root = noir_workspace_root();
@@ -263,11 +392,21 @@ fn locate_nargo(test_name: &str) -> Option<PathBuf> {
 /// Panics if neither is found; returns `None` only under the explicit
 /// `CODETRACER_TRACER_TESTS_ALLOW_SKIP` opt-out.
 fn locate_ct_print(test_name: &str) -> Option<PathBuf> {
-    if let Ok(env_path) = std::env::var("CODETRACER_CT_PRINT_BIN") {
-        let p = PathBuf::from(env_path);
-        if p.exists() {
-            return Some(p);
-        }
+    if let Some(p) = locator_override("CODETRACER_CT_PRINT_BIN") {
+        return Some(p);
+    }
+
+    // The one deliberate way to make this binary ABSENT rather than misnamed,
+    // which is what the vacuity guard has to be calibrated against:
+    // `CODETRACER_TRACER_TESTS_PRETEND_CT_PRINT_MISSING=1`. Without it the
+    // sibling checkout is always there on a developer box and the guard cannot
+    // be shown to fire; with it, the run takes exactly the path a machine
+    // without the sibling repository takes.
+    if std::env::var("CODETRACER_TRACER_TESTS_PRETEND_CT_PRINT_MISSING").as_deref() == Ok("1") {
+        return missing_prerequisite(
+            test_name,
+            "`ct-print` (forced absent by CODETRACER_TRACER_TESTS_PRETEND_CT_PRINT_MISSING=1)",
+        );
     }
 
     let root = noir_workspace_root();
@@ -349,6 +488,95 @@ fn record_and_dump_full(test_name: &str, fixture: &str) -> Option<serde_json::Va
         dump.status.success(),
         "ct-print --full failed for {}: stderr={}",
         fixture,
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let doc: serde_json::Value =
+        serde_json::from_slice(&dump.stdout).expect("ct-print --full should emit valid JSON");
+
+    drop(tmp);
+    Some(doc)
+}
+
+/// Record an ad-hoc Noir program written into a temporary package, and return
+/// the `ct-print --full --strip-paths` JSON.
+///
+/// This exists for CONTROLS — a variant of a fixture that differs in one thing,
+/// where committing a second fixture would put the pair two directories apart
+/// and let them drift. `test_multi_stmt_line_3_assert_is_constant_folded_not_
+/// dropped` uses it to show that the statement the fixture's `assert` compiles
+/// to is absent because the compiler folded it and not because the recorder
+/// dropped it; that claim is only worth anything if the near-identical program
+/// which is NOT folded does produce the steps, in the same run, through the same
+/// `nargo` and the same `ct-print`.
+///
+/// The package is created under a `tempfile::tempdir`, so it is removed with the
+/// trace and nothing is left in the worktree.
+fn record_and_dump_full_source(
+    test_name: &str,
+    package: &str,
+    main_nr: &str,
+    prover_toml: &str,
+) -> Option<serde_json::Value> {
+    let nargo = locate_nargo(test_name)?;
+    let ct_print = locate_ct_print(test_name)?;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let program_dir = tmp.path().join(package);
+    std::fs::create_dir_all(program_dir.join("src")).expect("create program src dir");
+    std::fs::write(
+        program_dir.join("Nargo.toml"),
+        format!(
+            "[package]\nname = \"{package}\"\nversion = \"0.1.0\"\ntype = \"bin\"\n\
+             authors = [\"\"]\n\n[dependencies]\n"
+        ),
+    )
+    .expect("write Nargo.toml");
+    std::fs::write(program_dir.join("src").join("main.nr"), main_nr).expect("write main.nr");
+    std::fs::write(program_dir.join("Prover.toml"), prover_toml).expect("write Prover.toml");
+
+    let out_dir = tmp.path().join("traces");
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+
+    let nargo_status = Command::new(&nargo)
+        .arg("--program-dir")
+        .arg(&program_dir)
+        .arg("trace")
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .output()
+        .expect("nargo trace invocation");
+    assert!(
+        nargo_status.status.success(),
+        "nargo trace failed for the ad-hoc package {}: stdout={} stderr={}",
+        package,
+        String::from_utf8_lossy(&nargo_status.stdout),
+        String::from_utf8_lossy(&nargo_status.stderr)
+    );
+
+    let ct_files: Vec<PathBuf> = std::fs::read_dir(&out_dir)
+        .expect("read_dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|e| e == "ct").unwrap_or(false))
+        .collect();
+    assert_eq!(
+        ct_files.len(),
+        1,
+        "expected exactly one .ct file for the ad-hoc package {}, got {:?}",
+        package,
+        ct_files
+    );
+
+    let dump = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("ct-print invocation");
+    assert!(
+        dump.status.success(),
+        "ct-print --full failed for the ad-hoc package {}: stderr={}",
+        package,
         String::from_utf8_lossy(&dump.stderr)
     );
 
@@ -544,6 +772,29 @@ fn test_a_1_mul_via_ct_print_full() {
     // Each `x *= y;` line surfaces two steps: the right-hand-side read
     // (column 10) and the instrumented assignment (column 5), so every value
     // of `x` is observed twice before the next multiplication.
+    //
+    // THE TWO LEADING `None`s ARE NOW ESTABLISHED RATHER THAN MERELY PINNED.
+    // The 2026-08 reconciliation re-pinned this vector to what the tree emits
+    // and dropped the record that the leading run had ever been in doubt — the
+    // campaign's "a pin that has forgotten it was provisional" shape. Measured
+    // on 2026-08-31, the recorder's full (line, column) sequence for `a_1_mul`
+    // explains it exactly, and `test_a_1_mul_parameter_binding_explains_the_
+    // leading_unbound_steps` below turns that explanation into assertions:
+    //
+    //   step 1  line 1 col 1   — the historical entry step `ensure_trace_started`
+    //                            emits via `TraceSink::start(path, Line(1))`.
+    //                            No frame variables are bound yet.
+    //   step 2  line 3 col 13  — the column of `x` in `fn main(mut x: u32, …)`.
+    //                            This is `x`'s OWN binding step, and a parameter
+    //                            is bound after its step is recorded, so `x` is
+    //                            still absent here.
+    //   step 3  line 3 col 21  — the column of `y`. `x` now reads 3.
+    //
+    // So the run of `None`s is two because there are exactly two steps before
+    // `x`'s binding takes effect — the entry step and `x`'s own — and it would
+    // be three only if a parameter were bound before its step or a second entry
+    // step existed. That is a property with a cause, not a number that came out
+    // of a run.
     assert_eq!(
         xs,
         vec![
@@ -569,6 +820,212 @@ fn test_a_1_mul_via_ct_print_full() {
     assert_eq!(exit["kind"], "call_exit");
     assert_eq!(exit["function"].as_str(), Some("main"));
     assert_eq!(exit["return_value"]["kind"].as_str(), Some("Void"));
+}
+
+/// THE TWO LEADING `None`s IN `a_1_mul`'s VALUE SEQUENCE, ESTABLISHED.
+///
+/// `test_a_1_mul_via_ct_print_full` pins `xs` as `[None, None, Some(3), …]`.
+/// The 2026-08 reconciliation re-pinned that vector to whatever the tree
+/// emitted and removed the note that the leading run had ever been questioned,
+/// which left a correct number standing on nothing — the same "a pin that has
+/// forgotten it was provisional" shape this campaign records elsewhere. The
+/// question was whether the run should be two or three.
+///
+/// It is two, and the cause is the parameter-binding steps. Measured on this
+/// tree, `a_1_mul`'s first four steps are `(1,1)`, `(3,13)`, `(3,21)`, `(3,29)`
+/// — the entry step, then one step per parameter AT THAT PARAMETER'S OWN COLUMN
+/// in `fn main(mut x: u32, y: u32, z: u32) {`. A parameter's value is bound
+/// after its own step is recorded, so `x` is absent at step 2 and present from
+/// step 3, `y` absent through step 3 and present at step 4, and `z` present only
+/// from step 5.
+///
+/// This test asserts that structure instead of restating the vector, and every
+/// column it uses is DERIVED from the fixture's own signature line rather than
+/// typed, so a recorder that started binding parameters eagerly, or emitted a
+/// second entry step, fails here by name rather than moving a number in a list
+/// nobody can explain.
+/// One step of `a_1_mul` as
+/// `test_a_1_mul_parameter_binding_explains_the_leading_unbound_steps` reads it:
+/// `(line, column, x, y, z)`, with each parameter `None` until it is bound.
+type ParamBindingStep = (i64, i64, Option<i64>, Option<i64>, Option<i64>);
+
+#[test]
+fn test_a_1_mul_parameter_binding_explains_the_leading_unbound_steps() {
+    let Some(doc) = record_and_dump_full(
+        "test_a_1_mul_parameter_binding_explains_the_leading_unbound_steps",
+        "a_1_mul",
+    ) else {
+        return;
+    };
+
+    // The signature line, read off disk, and each parameter's column in it.
+    let fixture = trace_fixture("a_1_mul").join("src").join("main.nr");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", fixture.display()));
+    let (sig_index, sig_line) = source
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.starts_with("fn main("))
+        .expect("a_1_mul declares `fn main(`");
+    let sig_line_number = sig_index as i64 + 1;
+    // 1-indexed byte column of each parameter name in the signature.
+    let column_of = |needle: &str| -> i64 {
+        sig_line.find(needle).unwrap_or_else(|| panic!("{needle} in {sig_line:?}")) as i64 + 1
+    };
+    // `mut x` — find the binding, not the later `u32`s.
+    let col_x = column_of("x: u32");
+    let col_y = column_of("y: u32");
+    let col_z = column_of("z: u32");
+    assert!(
+        col_x < col_y && col_y < col_z,
+        "the three parameters must be distinct and in order; got {col_x}/{col_y}/{col_z}",
+    );
+
+    let steps: Vec<ParamBindingStep> = doc["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .map(|e| {
+            let var = |name: &str| {
+                e["vars"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|v| v["varname"] == name)
+                    .and_then(|v| v["value"]["i"].as_i64())
+            };
+            (
+                e["line"].as_i64().expect("step.line"),
+                e["column"].as_i64().unwrap_or(-1),
+                var("x"),
+                var("y"),
+                var("z"),
+            )
+        })
+        .collect();
+    assert!(steps.len() >= 5, "expected at least five steps; got {}", steps.len());
+
+    // 1. The entry step: line 1, column 1, nothing bound.
+    assert_eq!((steps[0].0, steps[0].1), (1, 1), "step 1 is the line-1 entry step");
+    assert_eq!(
+        (steps[0].2, steps[0].3, steps[0].4),
+        (None, None, None),
+        "entry step binds nothing"
+    );
+
+    // 2. `x`'s own binding step, at `x`'s column, with `x` still absent.
+    assert_eq!(
+        (steps[1].0, steps[1].1),
+        (sig_line_number, col_x),
+        "step 2 is `x`'s binding step, at `x`'s own column in the signature",
+    );
+    assert_eq!(steps[1].2, None, "`x` is not yet bound at its own binding step");
+
+    // 3. `y`'s step: `x` is bound now, `y` is not.
+    assert_eq!((steps[2].0, steps[2].1), (sig_line_number, col_y), "step 3 is `y`'s binding step",);
+    assert_eq!(steps[2].2, Some(3), "`x` reads its argument from `y`'s step onward");
+    assert_eq!(steps[2].3, None, "`y` is not yet bound at its own binding step");
+
+    // 4. `z`'s step: `x` and `y` bound, `z` not.
+    assert_eq!((steps[3].0, steps[3].1), (sig_line_number, col_z), "step 4 is `z`'s binding step",);
+    assert_eq!(steps[3].3, Some(4), "`y` reads its argument from `z`'s step onward");
+    assert_eq!(steps[3].4, None, "`z` is not yet bound at its own binding step");
+
+    // 5. The first body step has all three.
+    assert!(
+        steps[4].2.is_some() && steps[4].3.is_some() && steps[4].4.is_some(),
+        "all three parameters are bound by the first body step; got {:?}",
+        steps[4],
+    );
+
+    // THE CONCLUSION THE PIN NEEDED: the run of leading steps at which `x` is
+    // unbound is exactly two, and it is two because of the two steps named
+    // above — not because a run once produced two.
+    let leading_unbound = steps.iter().take_while(|s| s.2.is_none()).count();
+    assert_eq!(
+        leading_unbound, 2,
+        "`x` should be unbound for exactly the entry step and its own binding step",
+    );
+}
+
+/// THE `assert` ON LINE 3 OF `multi_stmt_per_line` PRODUCES NO STEP — **AND THAT
+/// IS THE COMPILER, NOT THE RECORDER.** Established on 2026-08-31; it had been
+/// carried as a recorder gap ("pinned so that fixing the gap trips this test").
+///
+/// `multi_stmt_per_line/src/main.nr` binds `a`, `b` and `c` to the literals 1, 2
+/// and 3 and then asserts `a + b + c == 6`. Every operand is a compile-time
+/// constant, so the SSA pipeline proves the constraint and removes it: there is
+/// no opcode left for the debugger to stop on, and a recorder cannot record a
+/// step for code that is not in the program.
+///
+/// Measured by CONTROL rather than by argument. The same three statements with
+/// `a` bound to a runtime parameter instead of a literal — the only change —
+/// produce **two** steps on line 3. So the absence is a fact about constant
+/// folding, and this test asserts both halves: the folded program has no line-3
+/// step, and the unfolded one does. Without the second half "no step on line 3"
+/// is satisfied by a recorder that dropped it, which is exactly the reading this
+/// test carried before.
+#[test]
+fn test_multi_stmt_line_3_assert_is_constant_folded_not_dropped() {
+    // --- half 1: the fixture, whose `assert` is over three literals ---------
+    let Some(doc) = record_and_dump_full(
+        "test_multi_stmt_line_3_assert_is_constant_folded_not_dropped",
+        "multi_stmt_per_line",
+    ) else {
+        return;
+    };
+    // The fixture must still be the all-constant program this is about; if
+    // somebody parameterises it, the assertion below stops meaning anything.
+    let fixture_src =
+        std::fs::read_to_string(trace_fixture("multi_stmt_per_line").join("src").join("main.nr"))
+            .expect("reading the multi_stmt_per_line fixture");
+    assert!(
+        fixture_src.contains("fn main() {"),
+        "this test is about a main with NO parameters, so that every operand of the \
+         line-3 assert is a compile-time constant; the fixture now reads:\n{fixture_src}",
+    );
+    assert!(
+        fixture_src.contains("assert(a + b + c == 6);"),
+        "the line-3 assert this test is about is gone from the fixture",
+    );
+    let folded_line3 = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step" && e["line"].as_i64() == Some(3))
+        .count();
+    assert_eq!(folded_line3, 0, "the all-constant assert on line 3 should be folded away");
+
+    // --- half 2: the control, same statements, one runtime operand ----------
+    // Without this the assertion above is satisfied by a recorder that simply
+    // drops the statement, which is what it was previously read as saying.
+    let Some(control) = record_and_dump_full_source(
+        "test_multi_stmt_line_3_assert_is_constant_folded_not_dropped",
+        "multi_stmt_dynamic",
+        "fn main(x: Field) {\n    let a: Field = x; let b: Field = 2; let c: Field = 3;\n    assert(a + b + c == 6);\n}\n",
+        "x = \"1\"\n",
+    ) else {
+        return;
+    };
+    let dynamic_line3: Vec<i64> = control["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step" && e["line"].as_i64() == Some(3))
+        .filter_map(|e| e["column"].as_i64())
+        .collect();
+    assert!(
+        !dynamic_line3.is_empty(),
+        "with one runtime operand the line-3 assert must produce steps, or the \
+         first half of this test is measuring a recorder that drops asserts",
+    );
+    // Two: the comparison's read and the instrumented constrain.
+    assert_eq!(
+        dynamic_line3.len(),
+        2,
+        "expected the dynamic assert to surface two steps on line 3; got columns {dynamic_line3:?}",
+    );
 }
 
 /// `a_2_function_calls.nr` — main → foo → bar twice.
@@ -653,7 +1110,12 @@ fn test_a_2_function_calls_via_ct_print_full() {
             ("foo", 6),
             ("main", 11),
             ("main", 12),
-            ("main", 142),
+            // Line 13 is `main`'s closing brace, and it used to read **142** —
+            // the byte cursor at end-of-source, in a thirteen-line file. Fixed
+            // on 2026-08-31 in `debugger_glue::convert_debugger_location`,
+            // whose comment carries the mechanism; pinned in range by
+            // `test_last_main_step_is_in_range_in_every_fixture`.
+            ("main", 13),
         ]
     );
 
@@ -676,52 +1138,72 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(foo_exits, vec!["()", "()"]);
 }
 
-/// THE `("main", 142)` DEFECT, PINNED AS A DEFECT RATHER THAN SWALLOWED BY THE
-/// SEQUENCE ABOVE.
+/// THE `("main", 142)` DEFECT — **FIXED ON 2026-08-31, AND THIS IS ITS REGRESSION
+/// TEST.** It was declared here as a defect first; the declaration is what made
+/// fixing it trip a test by name instead of passing silently, and it did.
 ///
-/// `a_2_function_calls/src/main.nr` is **thirteen lines long** and the recorder
-/// records its last step at **line 142**. Measured on both sides of the 2026-08
-/// upstream reconciliation — at `blocktracer` @ `4d2381630` (1.0.0-beta.18) and
-/// on this tree (1.0.0-beta.26) — with `nargo` rebuilt for each: the number is
-/// 142 in both, so the reconciliation moved it not at all.
+/// WHAT IT WAS. `a_2_function_calls/src/main.nr` is thirteen lines long and the
+/// recorder recorded `main`'s last step at line **142**. `a_1_mul` recorded 264
+/// in a nine-line file and `multi_stmt_per_line` 96 in a four-line one, so it
+/// was the tree's defect and not one fixture's. Measured on both sides of the
+/// 2026-08 upstream reconciliation — `blocktracer` @ `4d2381630` (beta.18) and
+/// this tree (beta.26), `nargo` rebuilt for each — the numbers were identical,
+/// so it was never a regression.
 ///
-/// The sequence assertion in `test_a_2_function_calls_via_ct_print_full` has to
-/// compare against what the tree emits, so it carries `("main", 142)`. On its
-/// own that is a bogus line number written into a test with nothing saying so —
-/// the reconciliation branch re-pinned it with no comment, and a reader of that
-/// list has no way to tell the defect from the twelve correct entries beside it.
+/// WHAT IT WAS, MECHANICALLY, AND HOW THAT WAS ESTABLISHED RATHER THAN GUESSED.
+/// All three numbers equal `file_size - line_count`, which is the sum of the
+/// per-line byte lengths — i.e. the global byte cursor at end of source, not a
+/// line at all. Proved by padding line 2 of `multi_stmt_per_line` with ten
+/// spaces WITHOUT changing its line count: the number moved **96 -> 106**. The
+/// cause is one off-by-one, in `debugger_glue::convert_debugger_location`: a
+/// `codespan` line range includes its terminator, so the debugger's final
+/// location — the empty span at the newline after `main`'s closing brace —
+/// reported `column = line_length + 1`. The writer encodes a step as
+/// `sum(len(1..line-1)) + (column - 1)`, so that column produced a position one
+/// past the last addressable byte, the reader could not invert it, and it
+/// surfaced the raw cursor as the line. Every traced program hit it exactly
+/// once. The fix clamps the column to the line's byte length; that comment
+/// carries the full account and the second defect found beside it (the column
+/// unit: `codespan` counts characters, the writer counts bytes).
 ///
-/// This test is the declaration. It asserts the defect is STILL THERE and reads
-/// each fixture's real length off disk rather than restating it, so:
+/// WHAT THIS TEST NOW ASSERTS, and why each part can fail:
 ///
-///   * fixing the recorder trips THIS test, by name, instead of passing;
-///   * lengthening a fixture past its pinned line trips it too, because then the
-///     line would no longer be out of range and the pin would stop meaning anything;
-///   * and the two halves cannot both be satisfied by a step list that is
-///     simply missing, because the last step is asserted to exist first.
+///   * the last step of `main` is IN RANGE for the file — the property that was
+///     false;
+///   * it is exactly the fixture's LAST line, which is `main`'s closing brace in
+///     all three — a stronger statement than "in range", and the one that says
+///     the clamp landed on a meaningful position rather than merely a legal one;
+///   * and it is NOT the old byte cursor, which is **derived** here as
+///     `file_size - line_count` rather than typed, so the regression is named by
+///     its mechanism and the needle cannot rot when a fixture is edited.
 ///
-/// AND IT COVERS THREE FIXTURES, NOT ONE, BECAUSE THE DEFECT IS THE TREE'S AND NOT
-/// `a_2`'s. Measured on this tree, `main`'s last recorded step line against the
-/// fixture's real length: `a_2_function_calls` 142 in 13 lines, `a_1_mul` 264 in 9,
-/// `multi_stmt_per_line` 96 in 4. Declaring one of the three read as one fixture's
-/// problem, and the other two carry the same out-of-range line inside pins that
-/// never assert it — `a_1_mul`'s fourteen-entry sequence covers line 264 silently.
-///
-/// THE OUT-OF-RANGE COMPARISON USED TO BE A TAUTOLOGY. It sat beside
-/// `assert_eq!(fixture_lines, 13)`, so with the line pinned at 142 and the length
-/// pinned at 13, `142 > 13` could not fail — and the property the header credits it
-/// with ("lengthening the fixture trips it") was actually delivered by the LENGTH
-/// pin, which trips at 14 lines rather than at 143. The length is read and not
-/// pinned now, so the comparison is the one the header describes.
+/// The length and the cursor are both read off disk. The earlier version of this
+/// test pinned the length (`assert_eq!(fixture_lines, 13)`) beside the range
+/// comparison, which made `142 > 13` true by construction — an assertion that
+/// could not fail, in the test written to declare a defect.
 #[test]
-fn test_a_2_last_step_line_is_the_known_out_of_range_defect() {
-    // (fixture, the line `main`'s last step is recorded at on this tree)
-    const DECLARED: [(&str, i64); 3] =
-        [("a_2_function_calls", 142), ("a_1_mul", 264), ("multi_stmt_per_line", 96)];
+fn test_last_main_step_is_in_range_in_every_fixture() {
+    // The three that carried the defect, plus the four that did not — because
+    // "the fix holds where the defect was" and "the fix broke nothing where it
+    // was not" are different statements and both are cheap here.
+    const FIXTURES: [&str; 7] = [
+        "a_2_function_calls",
+        "a_1_mul",
+        "multi_stmt_per_line",
+        "assert",
+        "if_then_else_reduced",
+        "while_loop",
+        "types_test",
+    ];
 
-    for (name, pinned) in DECLARED {
+    // Both arms of the partition below must actually be taken, or a branch that
+    // stopped being reachable would read as agreement.
+    let mut aborted_seen = 0usize;
+    let mut completed_seen = 0usize;
+
+    for name in FIXTURES {
         let Some(doc) =
-            record_and_dump_full("test_a_2_last_step_line_is_the_known_out_of_range_defect", name)
+            record_and_dump_full("test_last_main_step_is_in_range_in_every_fixture", name)
         else {
             return;
         };
@@ -732,8 +1214,12 @@ fn test_a_2_last_step_line_is_the_known_out_of_range_defect() {
         let fixture_lines = source.lines().count() as i64;
         assert!(
             fixture_lines > 0,
-            "{name}: the fixture read as empty, so the comparison below would measure nothing",
+            "{name}: the fixture read as empty, so nothing below measures anything",
         );
+        // The value the recorder used to emit, derived from the fixture rather
+        // than typed: the sum of the per-line byte lengths, which is
+        // `file_size - line_count` for a file whose every line ends in `\n`.
+        let old_byte_cursor = source.lines().map(|l| l.len() as i64).sum::<i64>();
 
         let steps: Vec<i64> = doc["events"]
             .as_array()
@@ -748,19 +1234,60 @@ fn test_a_2_last_step_line_is_the_known_out_of_range_defect() {
         );
 
         let last = *steps.last().unwrap();
-        assert_eq!(
-            last, pinned,
-            "KNOWN DEFECT: {name}'s main recorded its last step at line {last}, not the \
-             pinned {pinned}. If it is now in range, the recorder has been FIXED — delete \
-             this fixture's row and re-pin the sequence in that fixture's own test."
-        );
         assert!(
-            last > fixture_lines,
-            "{name}: the pinned line {last} is supposed to be OUT OF RANGE for a \
-             {fixture_lines}-line file; if the fixture grew past it this pin has stopped \
-             meaning anything",
+            last >= 1 && last <= fixture_lines,
+            "{name}: main's last step is at line {last}, outside a {fixture_lines}-line file. \
+             This is the byte-cursor defect returning; see \
+             `debugger_glue::convert_debugger_location`.",
+        );
+        // WHERE THE LAST STEP SHOULD BE, PARTITIONED BY WHETHER THE PROGRAM
+        // FINISHED — derived from the recording, not from a list typed here.
+        // A run that recorded an error event aborted at the failing statement
+        // and never reached the closing brace; `assert`'s `assert(a != b)` on
+        // line 4 of a five-line file is exactly that, and pinning "the last
+        // line" for every fixture would have been a claim that is false for it.
+        // (It was: this assertion read `last == fixture_lines` unconditionally
+        // on its first run and went red on `assert` for precisely this reason.)
+        let aborted = doc["counts"]["io_events"].as_u64().unwrap_or(0) > 0;
+        if aborted {
+            aborted_seen += 1;
+            assert!(
+                last < fixture_lines,
+                "{name}: the run recorded an error event, so it aborted before the \
+                 closing brace; its last step is at line {last} of {fixture_lines}",
+            );
+        } else {
+            completed_seen += 1;
+            assert_eq!(
+                last, fixture_lines,
+                "{name}: this run recorded no error event, so main ran to its closing \
+                 brace on line {fixture_lines}; its last step is at line {last}",
+            );
+        }
+        assert_ne!(
+            last, old_byte_cursor,
+            "{name}: main's last step is the end-of-source BYTE CURSOR ({old_byte_cursor}), \
+             which is the defect this test exists for",
+        );
+        // …and the derivation is only meaningful if the two could differ. Every
+        // fixture here is longer than one line, so they do.
+        assert_ne!(
+            old_byte_cursor, fixture_lines,
+            "{name}: the derived byte cursor equals the line count, so the assertion above \
+             could not have failed — pick a fixture where they differ",
         );
     }
+
+    assert!(
+        aborted_seen >= 1,
+        "no fixture in this set aborted, so the aborted arm of the partition above was \
+         never taken and is not being measured",
+    );
+    assert!(
+        completed_seen >= 1,
+        "no fixture in this set completed, so the closing-brace arm of the partition \
+         above was never taken and is not being measured",
+    );
 }
 
 /// `if_then_else_reduced.nr` — `for i in 1..11 { if i % 2 == 0 { ... } }`.
@@ -1097,18 +1624,30 @@ fn test_multi_stmt_per_line_column_aware() {
         .and_then(|e| e["column"].as_i64());
     assert_eq!(line1_col, Some(1), "line 1 entry step column");
 
-    // Known gap, unchanged by the 2026-08 upstream reconciliation: the
-    // `assert(a + b + c == 6);` on line 3 produces no step of its own. The
-    // previous revision of this test looked for it on line 4 (off by one) and
-    // never reached the assertion, because an earlier one always failed.
-    // Pinned so that fixing the gap trips this test rather than passing
-    // silently.
+    // The `assert(a + b + c == 6);` on line 3 produces no step of its own, and
+    // as of 2026-08-31 that is ESTABLISHED AS THE COMPILER'S DOING rather than
+    // carried as a recorder gap: every operand is a compile-time constant, the
+    // SSA pipeline folds the constraint away, and there is no opcode to stop on.
+    // `test_multi_stmt_line_3_assert_is_constant_folded_not_dropped` owns that
+    // claim and carries the control that makes it a measurement — the same
+    // program with one runtime operand produces two steps on line 3. The
+    // assertion is kept here as well because this test is the one that reads
+    // line-by-line structure, but the reason lives with the control.
+    //
+    // (Two earlier revisions of this comment were wrong in different ways: one
+    // looked for the step on line 4, an off-by-one that never reached its own
+    // assertion; the next pinned the absence as a defect "so that fixing the gap
+    // trips this test", which described a fix nobody could make.)
     let assert_line_step = doc["events"]
         .as_array()
         .unwrap()
         .iter()
         .any(|e| e["kind"] == "step" && e["line"].as_i64() == Some(3));
-    assert!(!assert_line_step, "line 3 (the `assert`) is expected to have no step yet");
+    assert!(
+        !assert_line_step,
+        "line 3's assert is over three literals and is expected to be constant-folded away; \
+         see test_multi_stmt_line_3_assert_is_constant_folded_not_dropped",
+    );
 }
 
 /// Assignments inside a `while` body must be recorded.
