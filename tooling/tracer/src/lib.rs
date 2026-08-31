@@ -93,6 +93,12 @@ pub struct TracingContext<'a, B: BlackBoxFunctionSolver<FieldElement>> {
     saved_return_value: Option<Variable>,
     print_output: Rc<RefCell<String>>,
     trace_started: bool,
+    /// Whether the artifact carries any source-level debug instrumentation at all.
+    ///
+    /// `true` when no `DebugInfo` in the artifact declares a variable or a function, which is what
+    /// a compile without `instrument_debug` produces — and what every Aztec contract artifact is.
+    /// See [`TracingContext::update_record`], which is the only reader.
+    uninstrumented: bool,
 }
 
 impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
@@ -166,6 +172,11 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
             unconstrained_functions,
         );
 
+        let uninstrumented = debug_artifact
+            .debug_symbols
+            .iter()
+            .all(|info| info.variables.is_empty() && info.functions.is_empty());
+
         Self {
             debug_context,
             source_locations: vec![],
@@ -173,6 +184,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
             saved_return_value: None,
             print_output,
             trace_started: false,
+            uninstrumented,
         }
     }
 
@@ -354,6 +366,41 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         if !new_frames.is_empty() {
             let location = self.source_locations.last().expect("no previous location before call");
             register_call(tracer, location, new_frames[0]);
+        }
+
+        // AN UNINSTRUMENTED PROGRAM HAS NO VARIABLE FRAMES AND STILL HAS SOURCE POSITIONS, AND IT
+        // USED TO RECORD NOTHING AT ALL.
+        //
+        // `stack_frames` comes from `DebugVars`, which is filled by the `__debug_fn_enter` /
+        // `__debug_var_assign` calls the source-level instrumenter injects. A program compiled
+        // WITHOUT `instrument_debug` carries none of those, so `stack_frames` is empty at every
+        // step, `index` is -1, and the branch below never runs: the whole recording comes out with
+        // zero `Step` records over an execution the debugger positions perfectly well.
+        //
+        // Measured on `@aztec/noir-test-contracts.js`'s `OracleVersionCheck.private_function`:
+        // 1,004 opcodes stepped, 44 of them carrying a source location at 13 distinct positions,
+        // and **0 steps recorded**.
+        //
+        // A step is a SOURCE POSITION; variables are what a step may additionally carry. So the
+        // position is recorded either way, and the variables only when there is a frame to read
+        // them from.
+        //
+        // THE GATE IS A PROPERTY OF THE ARTIFACT, NOT OF THE MOMENT, and the difference was
+        // measured rather than reasoned about. A first version fired whenever `stack_frames` was
+        // empty, on the argument that an empty frame stack recorded nothing before and so nothing
+        // could change. **That is false**: an instrumented program's frame stack is also empty
+        // before its first `__debug_fn_enter`, and six of this crate's twelve fixture tests went
+        // red with one extra step each (`a_1_mul` 14 -> 15). Keying on
+        // `debug_symbols[*].variables`/`functions` being empty — which the instrumenter always
+        // fills and an uninstrumented compile never does — separates the two cases by their cause
+        // instead of by a symptom they share.
+        if self.uninstrumented && !returned_from_frame {
+            if let Some(location) = source_locations.last() {
+                self.maybe_report_print_events(tracer);
+                register_step(tracer, location);
+            }
+            self.stack_frames = stack_frames;
+            return;
         }
 
         let index = stack_frames.len() as isize - 1;
