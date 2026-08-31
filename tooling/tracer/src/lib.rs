@@ -25,13 +25,17 @@ use tail_diff_vecs::tail_diff_vecs;
 pub mod sink;
 pub use sink::{SOURCE_VIEW_KIND_RAW, TraceSink};
 
+/// Re-exported so an embedder can supply an executor to [`trace_circuit_with_executor`]
+/// without taking a direct dependency on `noir_debugger`.
+pub use noir_debugger::foreign_calls::DebugForeignCallExecutor as TraceForeignCallExecutor;
+
 use acvm::acir::circuit::brillig::{BrilligBytecode, BrilligFunctionId};
 use acvm::{AcirField, BlackBoxFunctionSolver, FieldElement};
 use acvm::{acir::circuit::Circuit, acir::native_types::WitnessMap};
 use codetracer_trace_types::{Line, TypeKind};
 use nargo::NargoError;
 use noir_debugger::context::{DebugCommandResult, DebugContext};
-use noir_debugger::foreign_calls::DefaultDebugForeignCallExecutor;
+use noir_debugger::foreign_calls::{DebugForeignCallExecutor, DefaultDebugForeignCallExecutor};
 use noirc_artifacts::debug::DebugArtifact;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
@@ -99,16 +103,60 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         initial_witness: WitnessMap<FieldElement>,
         unconstrained_functions: &'a [BrilligBytecode<FieldElement>],
     ) -> Self {
-        let print_output = Rc::new(RefCell::new(String::new()));
-        let writer: StringWriter = StringWriter::new(Rc::clone(&print_output));
-
-        let foreign_call_executor = Box::new(DefaultDebugForeignCallExecutor::from_artifact(
-            writer,
-            None,
+        Self::with_executor(
+            blackbox_solver,
+            circuit,
             debug_artifact,
+            initial_witness,
+            unconstrained_functions,
             None,
-            String::new(),
-        ));
+        )
+    }
+
+    /// As [`TracingContext::new`], with the foreign-call executor supplied by the caller.
+    ///
+    /// [`DebugContext::new`] has always taken the executor as a boxed trait object; this
+    /// constructor is the same parameter one level up, so an embedder can answer foreign calls the
+    /// recorder knows nothing about. `None` builds exactly the executor
+    /// [`TracingContext::new`] has always built, so the default path is unchanged.
+    ///
+    /// A supplied executor REPLACES the default rather than sitting beside it. The default is
+    /// `DefaultDebugForeignCallExecutor::from_artifact`, whose stack is (top first) the
+    /// `__debug_*` variable handler, `print`, the mock handler, and — as its base —
+    /// `layers::Empty`, which answers every remaining call with an empty result. A caller that
+    /// wants those behaviours composes them itself; `nargo::foreign_calls::layers` is the
+    /// machinery for it. Two consequences are worth stating rather than leaving to be discovered:
+    ///
+    /// * `print` and `debug_log` output is captured through the writer this constructor installs
+    ///   into the default executor. An executor supplied here owns its own output, so
+    ///   [`TracingContext`]'s `print_output` stays empty unless the caller's stack writes into it.
+    /// * `layers::Empty` is what makes an unrecognised foreign call succeed today. An executor
+    ///   that refuses instead — returning `ForeignCallError::NoHandler` — turns the same call into
+    ///   a named execution error, which is usually what an embedder wants.
+    pub fn with_executor(
+        blackbox_solver: &'a B,
+        circuit: &'a [Circuit<FieldElement>],
+        debug_artifact: &'a DebugArtifact,
+        initial_witness: WitnessMap<FieldElement>,
+        unconstrained_functions: &'a [BrilligBytecode<FieldElement>],
+        foreign_call_executor: Option<Box<dyn DebugForeignCallExecutor + 'a>>,
+    ) -> Self {
+        let print_output = Rc::new(RefCell::new(String::new()));
+
+        let foreign_call_executor: Box<dyn DebugForeignCallExecutor + 'a> =
+            match foreign_call_executor {
+                Some(executor) => executor,
+                None => {
+                    let writer: StringWriter = StringWriter::new(Rc::clone(&print_output));
+                    Box::new(DefaultDebugForeignCallExecutor::from_artifact(
+                        writer,
+                        None,
+                        debug_artifact,
+                        None,
+                        String::new(),
+                    ))
+                }
+            };
         let debug_context = DebugContext::new(
             blackbox_solver,
             circuit,
@@ -374,12 +422,43 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
     options: &TraceOptions,
     tracer: &mut dyn TraceSink,
 ) -> Result<(), NargoError<FieldElement>> {
-    let mut tracing_context = TracingContext::new(
+    trace_circuit_with_executor(
         blackbox_solver,
         circuit,
         debug_artifact,
         initial_witness,
         unconstrained_functions,
+        error_types,
+        options,
+        tracer,
+        None,
+    )
+}
+
+/// As [`trace_circuit`], with the foreign-call executor supplied by the caller.
+///
+/// The trace destination has been injectable since this function took `&mut dyn TraceSink`; this
+/// is the same treatment for the other end. `None` reproduces [`trace_circuit`] exactly — see
+/// [`TracingContext::with_executor`] for what the default is and what replacing it costs.
+#[allow(clippy::too_many_arguments)]
+pub fn trace_circuit_with_executor<'a, B: BlackBoxFunctionSolver<FieldElement>>(
+    blackbox_solver: &'a B,
+    circuit: &'a [Circuit<FieldElement>],
+    debug_artifact: &'a DebugArtifact,
+    initial_witness: WitnessMap<FieldElement>,
+    unconstrained_functions: &'a [BrilligBytecode<FieldElement>],
+    error_types: &BTreeMap<ErrorSelector, AbiErrorType>,
+    options: &TraceOptions,
+    tracer: &mut dyn TraceSink,
+    foreign_call_executor: Option<Box<dyn DebugForeignCallExecutor + 'a>>,
+) -> Result<(), NargoError<FieldElement>> {
+    let mut tracing_context = TracingContext::with_executor(
+        blackbox_solver,
+        circuit,
+        debug_artifact,
+        initial_witness,
+        unconstrained_functions,
+        foreign_call_executor,
     );
 
     if tracing_context.debug_context.get_current_debug_location().is_none() {
