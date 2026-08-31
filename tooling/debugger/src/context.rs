@@ -562,9 +562,20 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> DebugContext<'a, B> {
                         [debug_location.circuit_id as usize]
                         .brillig_locations
                         .get(&brillig_function_id);
+                    // A Brillig function with NO entry in `brillig_locations` is treated exactly
+                    // like a Brillig OPCODE with no entry: the default call stack, which resolves
+                    // to no source location, which is what this function's own doc comment says an
+                    // unmappable opcode returns. The line below has always tolerated the missing
+                    // opcode; tolerating the missing function is the same statement one level up.
+                    //
+                    // It is reachable from a shipped artifact rather than hypothetical. A program
+                    // may carry more Brillig functions than its debug info describes — measured on
+                    // `@aztec/noir-test-contracts.js`'s `OracleVersionCheck.private_function`,
+                    // which has five Brillig functions and `brillig_locations` for three — and
+                    // stepping into the fourth panicked here instead of producing an unpositioned
+                    // step.
                     let call_stack_id = brillig_locations
-                        .unwrap()
-                        .get(&brillig_location)
+                        .and_then(|locations| locations.get(&brillig_location))
                         .copied()
                         .unwrap_or_default();
                     self.debug_artifact.debug_symbols[debug_location.circuit_id as usize]
