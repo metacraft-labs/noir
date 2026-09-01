@@ -258,9 +258,19 @@ PY
 		return
 	fi
 	(cd "${REPO_ROOT}" && cargo test -p noir_wasm --lib "${target}" -- --exact \
-		"compile_vfs::tests::${target}") >"${WORK}/mut-${label}.log" 2>&1
+		--include-ignored "compile_vfs::tests::${target}") >"${WORK}/mut-${label}.log" 2>&1
 	local status=$?
 	git -C "${REPO_ROOT}" checkout -- "${SRC}"
+
+	# The same vacuity guard as `mutate_in`: a test that was ignored or filtered out exits
+	# 0, which is indistinguishable from passing.
+	local ran
+	ran="$(sed -n 's/^test result:.*[.] \([0-9]*\) passed; \([0-9]*\) failed.*/\1 \2/p' \
+		"${WORK}/mut-${label}.log" | tail -1 | tr ' ' '+')"
+	if [ "$(( ${ran:-0} ))" -eq 0 ]; then
+		fail "${label}: ${target} never ran — the arm is vacuous, not covered"
+		return
+	fi
 
 	if [ "${status}" -eq 0 ]; then
 		fail "${label}: ${target} still passed — the mutation is not covered"
@@ -328,10 +338,25 @@ PY
 		git -C "${REPO_ROOT}" checkout -- "${file}"
 		return
 	fi
+	# `--include-ignored` because the Aztec arms are `#[ignore]`: without it cargo runs
+	# ZERO tests, exits 0, and the arm reports "not covered" while having measured
+	# nothing at all. That is the vacuous arm this campaign keeps meeting, and it cost a
+	# full script run to notice.
 	(cd "${REPO_ROOT}" && cargo test -p "${krate}" --lib "${target}" -- --exact \
-		"${testpath}") >"${WORK}/mut-${label}.log" 2>&1
+		--include-ignored "${testpath}") >"${WORK}/mut-${label}.log" 2>&1
 	local status=$?
 	git -C "${REPO_ROOT}" checkout -- "${file}"
+
+	# Did the target actually RUN? A filtered-out or ignored test produces a green exit
+	# that is indistinguishable from a passing one, so the count is checked explicitly
+	# rather than inferred from the status.
+	local ran
+	ran="$(sed -n 's/^test result:.*[.] \([0-9]*\) passed; \([0-9]*\) failed.*/\1 \2/p' \
+		"${WORK}/mut-${label}.log" | tail -1 | tr ' ' '+')"
+	if [ "$(( ${ran:-0} ))" -eq 0 ]; then
+		fail "${label}: ${target} never ran — the arm is vacuous, not covered"
+		return
+	fi
 
 	if [ "${status}" -eq 0 ]; then
 		fail "${label}: ${target} still passed — the mutation is not covered"
