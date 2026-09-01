@@ -769,7 +769,7 @@ mod tests {
     //
     // Both tests below are `#[ignore]` because they need a vendored `aztec-nr` closure
     // that is 4.3 MB of sources and is generated rather than committed. They are NOT
-    // skipped quietly: `verification/aztec_contract_is_steppable.sh` runs them with
+    // skipped quietly: `scripts/aztec_contract_is_steppable.sh` runs them with
     // `--ignored` and asserts the harness reported the expected number of PASSED tests,
     // so "it was ignored" cannot be mistaken for "it passed".
     //
@@ -783,7 +783,7 @@ mod tests {
     fn vendored_aztec_tree() -> (BTreeMap<String, String>, String) {
         let path = std::env::var("AZTEC_VFS_JSON").expect(
             "AZTEC_VFS_JSON must point at a vendored VFS; these tests are driven by \
-             verification/aztec_contract_is_steppable.sh, not run bare",
+             scripts/aztec_contract_is_steppable.sh, not run bare",
         );
         let package_dir =
             std::env::var("AZTEC_VFS_PACKAGE_DIR").unwrap_or_else(|_| "contract".to_string());
@@ -816,7 +816,7 @@ mod tests {
     /// This is the half that was previously UNREACHABLE: `debug` meant `compile_main`, and
     /// an Aztec contract crate has no `main`, so no mode could produce this artifact.
     #[test]
-    #[ignore = "needs a vendored aztec-nr tree; see verification/aztec_contract_is_steppable.sh"]
+    #[ignore = "needs a vendored aztec-nr tree; see scripts/aztec_contract_is_steppable.sh"]
     fn a_real_aztec_contract_compiles_for_debugging_and_is_instrumented() {
         use noirc_artifacts::contract::ContractArtifact;
 
@@ -916,7 +916,7 @@ mod tests {
     /// closure and compiled through `compile_contract` with instrumentation, executes and
     /// produces source-level steps in the contract's own file.
     #[test]
-    #[ignore = "needs a vendored aztec-nr tree; see verification/aztec_contract_is_steppable.sh"]
+    #[ignore = "needs a vendored aztec-nr tree; see scripts/aztec_contract_is_steppable.sh"]
     fn a_contract_on_the_real_aztec_tree_steps_through_its_own_source() {
         use codetracer_trace_types::TraceLowLevelEvent;
         use noirc_artifacts::contract::ContractArtifact;
@@ -1072,7 +1072,7 @@ mod tests {
     /// If an Aztec oracle host lands, this test fails — deliberately. It is a record of a
     /// present boundary, not a claim that the boundary is correct.
     #[test]
-    #[ignore = "needs a vendored aztec-nr tree; see verification/aztec_contract_is_steppable.sh"]
+    #[ignore = "needs a vendored aztec-nr tree; see scripts/aztec_contract_is_steppable.sh"]
     fn the_aztec_entrypoints_halt_at_the_first_oracle() {
         use codetracer_trace_types::TraceLowLevelEvent;
         use noirc_artifacts::contract::ContractArtifact;
