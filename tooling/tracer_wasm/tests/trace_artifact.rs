@@ -209,6 +209,71 @@ fn records_capabilities_paths_and_line_lengths() {
     assert_eq!(t.workdir, None);
 }
 
+/// The `<toplevel>` Call must reach the stream before the entry Step.
+///
+/// CodeTracer's `TraceProcessor` opens a frame on a `Call` and attributes each
+/// following `Step` to whatever frame is open. A `Step` that arrives with none
+/// open makes it synthesize a `<top-level>` frame, and that synthetic frame
+/// shadows both this recording's `<toplevel>` and the program's `main` —
+/// measured through the real `replay-server` over DAP as a three-frame stack
+/// with `main` absent, against one frame named `main` from the `.ct` container
+/// the native writer produces for the same fixture.
+///
+/// This is an ordering claim about two events, so it is only meaningful if
+/// both events exist; the counts are asserted first so a stream that lost its
+/// steps or its calls fails here rather than passing vacuously.
+#[test]
+fn the_entry_call_precedes_the_entry_step() {
+    let Some((artifact, inputs)) =
+        debug_artifact_for("the_entry_call_precedes_the_entry_step", "a_1_mul")
+    else {
+        return;
+    };
+    let t = trace_artifact(&artifact, &inputs, false).expect("tracing a_1_mul");
+
+    // a_1_mul's numbers, from NATIVE_COUNTS above: 14 steps and, counting the
+    // `<toplevel>` call that `calls()` excludes, 2 calls.
+    assert_eq!(steps(&t), 14, "a_1_mul: steps");
+    assert_eq!(calls(&t) + 1, 2, "a_1_mul: calls including <toplevel>");
+
+    let first_call = t
+        .events
+        .iter()
+        .position(|e| matches!(e, TraceLowLevelEvent::Call(_)))
+        .expect("a stream with 2 calls has a first one");
+    let first_step = t
+        .events
+        .iter()
+        .position(|e| matches!(e, TraceLowLevelEvent::Step(_)))
+        .expect("a stream with 14 steps has a first one");
+    assert!(
+        first_call < first_step,
+        "the entry Call is at index {first_call} and the entry Step at {first_step}; \
+         a Step ahead of every Call makes the replay engine invent a frame that \
+         shadows both <toplevel> and main"
+    );
+
+    // ...and the call that opens the frame must be `<toplevel>` itself, not
+    // `main`'s. An entry Step moved after `main`'s call would satisfy the
+    // ordering above while still leaving the toplevel frame unopened.
+    let TraceLowLevelEvent::Call(entry) = &t.events[first_call] else {
+        unreachable!("selected by matches! above")
+    };
+    let toplevel_id = t
+        .events
+        .iter()
+        .find_map(|e| match e {
+            TraceLowLevelEvent::Function(f) if f.name == "<toplevel>" => Some(f),
+            _ => None,
+        })
+        .map(|_| 0usize)
+        .expect("the recorder interns <toplevel> as function id 0");
+    assert_eq!(
+        entry.function_id.0, toplevel_id,
+        "the first Call must open the <toplevel> frame"
+    );
+}
+
 #[test]
 fn call_tree_names_are_recorded_in_call_order() {
     let Some((artifact, inputs)) =

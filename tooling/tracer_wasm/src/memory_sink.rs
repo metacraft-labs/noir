@@ -163,16 +163,29 @@ impl TraceSink for MemorySink {
 
     /// Open the recording at `path:line`.
     ///
-    /// Emits, in order, the `<toplevel>` function (id 0), the entry Step, the
-    /// `<toplevel>` Call, and the `None` type (id 0). The entry Step is the
+    /// Emits, in order, the `<toplevel>` function (id 0), the `<toplevel>`
+    /// Call, the entry Step, and the `None` type (id 0). The entry Step is the
     /// reason the native container reports exactly one more step than the
     /// recorder's own `register_step` calls.
+    ///
+    /// ## Why the Call is pushed BEFORE the Step
+    ///
+    /// CodeTracer's `TraceProcessor` opens a frame when it reads a `Call` and
+    /// attributes every subsequent `Step` to the frame that is open. A `Step`
+    /// that arrives with no open call makes it synthesize a `<top-level>`
+    /// frame of its own — and that synthetic frame then shadows both this
+    /// recording's `<toplevel>` and the program's `main`. Measured against the
+    /// `.ct` container the native writer produces for the same fixture: one
+    /// frame named `main` becomes a three-frame stack with `main` nowhere in
+    /// it. The order below is the order the native writer emits, and
+    /// `tests/trace_artifact.rs::the_entry_call_precedes_the_entry_step`
+    /// holds it there.
     fn start(&mut self, path: &Path, line: Line) {
         let function_id = self.ensure_function_id("<toplevel>", path, line);
         debug_assert_eq!(function_id, TOP_LEVEL_FUNCTION_ID);
         let path_id = self.ensure_path_id(path);
-        self.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
         self.push(TraceLowLevelEvent::Call(CallRecord { function_id, args: vec![] }));
+        self.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
         let none_type = self.ensure_type_id(TypeKind::None, "None");
         debug_assert_eq!(none_type, NONE_TYPE_ID);
     }
