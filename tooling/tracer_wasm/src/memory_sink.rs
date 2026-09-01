@@ -23,12 +23,18 @@
 //! exactly, so the produced stream is the same one that writer would have
 //! buffered.
 //!
-//! Columns: `register_step_with_column` drops the column, because the
-//! `StepRecord` in `codetracer_trace_types` carries only `(path_id, line)`.
-//! The pure-Rust writer drops it at the same place and for the same reason;
-//! only the Nim writer's `DeltaColumn` follow-up event preserves it. The
-//! capability latches are recorded on the sink so a host that later encodes a
-//! container can set the corresponding `meta.dat` flags.
+//! Columns: the `StepRecord` in `codetracer_trace_types` carries only
+//! `(path_id, line)`, so a column cannot travel inside the event stream. The
+//! pure-Rust writer has the same limitation at the same place; only the Nim
+//! writer's `DeltaColumn` follow-up event preserves it. So the column travels
+//! **alongside** the stream, in [`MemoryTrace::step_columns`] — one entry per
+//! `Step` event, in step order — for exactly the reason `line_lengths` already
+//! travels alongside it: nothing in the low-level event stream can carry it,
+//! and a host that later encodes a container needs it. Dropping it here would
+//! make a wasm-side recording strictly weaker than the native one over the same
+//! execution, and the column is not decoration: it is what distinguishes two
+//! steps on one source line. The capability latches are recorded on the sink so
+//! a host that encodes a container can set the corresponding `meta.dat` flags.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -58,6 +64,15 @@ pub struct MemoryTrace {
     /// `paths.dat` Layout A needs these to recover columns; nothing in the
     /// low-level event stream carries them, so they are kept alongside.
     pub line_lengths: Vec<Vec<u32>>,
+    /// One entry per `Step` event in [`MemoryTrace::events`], in the order those
+    /// events were pushed: the column that step was recorded at, or `None` for a
+    /// step that carries none.
+    ///
+    /// `StepRecord` has no column field, so this is the only place a wasm-side
+    /// recording's columns survive. The invariant a consumer relies on is
+    /// `step_columns.len() == events.iter().filter(is_step).count()`, and it is
+    /// asserted rather than documented — see this crate's tests.
+    pub step_columns: Vec<Option<Line>>,
     /// The source text of each registered path, in registration order — the
     /// in-memory stand-in for the container's `source_views.dat`. Kept so a
     /// wasm-side recording can still be turned into a *self-contained*
@@ -121,6 +136,17 @@ impl MemorySink {
         self.trace.events.push(event);
     }
 
+    /// The ONLY place a `Step` event is pushed.
+    ///
+    /// `step_columns` runs in step with the `Step` events and there is no way to
+    /// keep two sequences in step except by advancing them together, so both
+    /// call sites — the entry step in [`TraceSink::start`] and every recorded
+    /// step — go through here.
+    fn push_step(&mut self, path_id: PathId, line: Line, column: Option<Line>) {
+        self.trace.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
+        self.trace.step_columns.push(column);
+    }
+
     fn ensure_path_id(&mut self, path: &Path) -> PathId {
         if let Some(id) = self.path_ids.get(path) {
             return *id;
@@ -171,7 +197,7 @@ impl TraceSink for MemorySink {
         let function_id = self.ensure_function_id("<toplevel>", path, line);
         debug_assert_eq!(function_id, TOP_LEVEL_FUNCTION_ID);
         let path_id = self.ensure_path_id(path);
-        self.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
+        self.push_step(path_id, line, None);
         self.push(TraceLowLevelEvent::Call(CallRecord { function_id, args: vec![] }));
         let none_type = self.ensure_type_id(TypeKind::None, "None");
         debug_assert_eq!(none_type, NONE_TYPE_ID);
@@ -261,9 +287,9 @@ impl TraceSink for MemorySink {
         id
     }
 
-    fn register_step_with_column(&mut self, path: &Path, line: Line, _column: Option<Line>) {
+    fn register_step_with_column(&mut self, path: &Path, line: Line, column: Option<Line>) {
         let path_id = self.ensure_path_id(path);
-        self.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
+        self.push_step(path_id, line, column);
     }
 
     fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {

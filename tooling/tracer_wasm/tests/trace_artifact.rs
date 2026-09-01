@@ -17,8 +17,16 @@
 //! the test is precisely that the in-memory path and the container path agree,
 //! so substituting a double on either side would destroy its meaning.
 //!
-//! Tests SKIP loudly (never silently) when `nargo` has not been built, matching
-//! the convention in `tooling/tracer/tests/test_tracer.rs`.
+//! When `nargo` has not been built these tests **panic**, naming what is missing
+//! and the command that supplies it — the convention
+//! `tooling/tracer/tests/test_tracer.rs` carries and the reason it carries it:
+//! `cargo test` CAPTURES stderr for a test that PASSES, so a `SKIP:` line
+//! printed from inside a returning test is the one diagnostic the runner
+//! swallows, and the suite reports `ok. 6 passed` over a tree that ran nothing.
+//! `CODETRACER_TRACER_TESTS_ALLOW_SKIP=1` downgrades the panic to a skip while
+//! iterating locally, and `prerequisites_are_present_or_the_run_is_declared_vacuous`
+//! is the guard that keeps THAT from being green over nothing: it ignores the
+//! opt-out.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -34,7 +42,31 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn locate_nargo(test_name: &str) -> Option<PathBuf> {
+/// Whether a missing prerequisite may be skipped rather than panicked over.
+///
+/// The same variable `tooling/tracer/tests/test_tracer.rs` reads, so one export
+/// governs both suites.
+fn skipping_allowed() -> bool {
+    matches!(std::env::var("CODETRACER_TRACER_TESTS_ALLOW_SKIP").as_deref(), Ok("1") | Ok("true"))
+}
+
+/// The knob the vacuity guard is calibrated with: pretend `nargo` is absent on a
+/// machine where it is present.
+///
+/// Without it "these tests panic when `nargo` is missing" is a claim nobody on a
+/// developed checkout can test, because every such checkout has built one — and
+/// an untested refusal is how the silent skip survived here in the first place.
+fn nargo_pretend_missing() -> bool {
+    matches!(
+        std::env::var("CODETRACER_TRACER_TESTS_PRETEND_NARGO_MISSING").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+fn nargo_path() -> Option<PathBuf> {
+    if nargo_pretend_missing() {
+        return None;
+    }
     if let Ok(p) = std::env::var("CODETRACER_NARGO_BIN") {
         let p = PathBuf::from(p);
         if p.exists() {
@@ -42,14 +74,24 @@ fn locate_nargo(test_name: &str) -> Option<PathBuf> {
         }
     }
     let root = workspace_root();
-    let found = ["target/debug/nargo", "target/release/nargo"]
-        .iter()
-        .map(|s| root.join(s))
-        .find(|p| p.exists());
+    ["target/debug/nargo", "target/release/nargo"].iter().map(|s| root.join(s)).find(|p| p.exists())
+}
+
+const NARGO_REMEDY: &str = "build it with `cargo build -p nargo_cli --bin nargo`, \
+     or set CODETRACER_NARGO_BIN to one";
+
+fn locate_nargo(test_name: &str) -> Option<PathBuf> {
+    let found = nargo_path();
     if found.is_none() {
-        eprintln!(
-            "SKIP: {test_name} requires the workspace `nargo` binary; build it with \
-             `cargo build -p nargo_cli --bin nargo` or set CODETRACER_NARGO_BIN."
+        if skipping_allowed() {
+            eprintln!("SKIP: {test_name} requires the workspace `nargo` binary; {NARGO_REMEDY}.");
+            return None;
+        }
+        panic!(
+            "{test_name} requires the workspace `nargo` binary and there is none: {NARGO_REMEDY}. \
+             This is a PANIC and not a skip because `cargo test` captures a passing test's stderr, \
+             so a returning test reports `ok` over a run that traced nothing. Set \
+             CODETRACER_TRACER_TESTS_ALLOW_SKIP=1 to downgrade it while iterating locally."
         );
     }
     found
@@ -69,8 +111,16 @@ fn debug_artifact_for(test_name: &str, fixture: &str) -> Option<(String, String)
 
     let inputs_path = dir.join("Prover.toml");
     if !inputs_path.exists() {
-        eprintln!("SKIP: {test_name}: fixture {fixture} has no Prover.toml");
-        return None;
+        // A fixture without inputs is a fact about the corpus rather than about
+        // the environment, so `every_fixture_traces_without_panicking` — which
+        // enumerates the whole of `test_programs/trace` — passes over it. A
+        // NAMED fixture that has lost its `Prover.toml` is a different thing and
+        // must not read as a smaller test.
+        if test_name == "every_fixture_traces_without_panicking" {
+            eprintln!("SKIP: {test_name}: fixture {fixture} has no Prover.toml");
+            return None;
+        }
+        panic!("{test_name} names fixture {fixture}, which has no Prover.toml at {inputs_path:?}");
     }
 
     // Per-*test* scratch dir, not per-fixture: three tests here compile
@@ -101,6 +151,28 @@ fn debug_artifact_for(test_name: &str, fixture: &str) -> Option<(String, String)
     let artifact = std::fs::read_to_string(&artifact_path).expect("debug artifact");
     let inputs = std::fs::read_to_string(&inputs_path).expect("Prover.toml");
     Some((artifact, inputs))
+}
+
+/// The one test that ignores `CODETRACER_TRACER_TESTS_ALLOW_SKIP`.
+///
+/// With the opt-out set and `nargo` absent every other test in this file returns
+/// early and reports `ok`, and `cargo test` swallows the `SKIP:` lines — so the
+/// summary line says the suite passed. Only a FAILING test can reach that line.
+/// This one therefore refuses the opt-out and says both what is missing and what
+/// the run's result actually means.
+#[test]
+fn prerequisites_are_present_or_the_run_is_declared_vacuous() {
+    let Some(nargo) = nargo_path() else {
+        panic!(
+            "THIS RUN IS VACUOUS: there is no workspace `nargo`, so every other test in this \
+             file traced nothing. {NARGO_REMEDY}. This test ignores \
+             CODETRACER_TRACER_TESTS_ALLOW_SKIP on purpose — it is the only mechanism that can \
+             mark the summary line, because `cargo test` captures a passing test's stderr."
+        );
+    };
+    // With the binary present this is a real, if cheap, measurement rather than a
+    // tautology: it is the path every other test spawns.
+    assert!(nargo.is_file(), "{nargo:?} is not a file");
 }
 
 fn count<F: Fn(&TraceLowLevelEvent) -> bool>(t: &MemoryTrace, f: F) -> usize {
@@ -207,6 +279,48 @@ fn records_capabilities_paths_and_line_lengths() {
     // No workdir was supplied, so none was recorded -- the recorder no longer
     // invents one from `std::env::current_dir()`.
     assert_eq!(t.workdir, None);
+}
+
+/// The column survives the wasm boundary, and the two sequences stay in step.
+///
+/// A `StepRecord` has no column field, so `MemoryTrace::step_columns` is the only
+/// place a wasm-side recording's columns can live. Three things are asserted and
+/// each fails differently: the lengths agree (a sink that pushed a `Step` without
+/// a column, or the reverse, desynchronises every later step's column); the entry
+/// step carries none (it is `TraceSink::start`'s, at line 1, and there is no
+/// column to have); and **at least one recorded step carries one**, which is what
+/// a sink that dropped the column — the state this crate shipped in — could not
+/// satisfy. Without that third assertion an all-`None` vector passes the first two.
+#[test]
+fn columns_travel_beside_the_step_stream() {
+    let Some((artifact, inputs)) =
+        debug_artifact_for("columns_travel_beside_the_step_stream", "a_2_function_calls")
+    else {
+        return;
+    };
+    let t = trace_artifact(&artifact, &inputs, false).expect("tracing a_2_function_calls");
+
+    assert_eq!(
+        t.step_columns.len(),
+        steps(&t),
+        "one column slot per Step event; got {} slots for {} steps",
+        t.step_columns.len(),
+        steps(&t)
+    );
+    assert_eq!(t.step_columns[0], None, "the entry step has no column");
+
+    let with_column = t.step_columns.iter().filter(|c| c.is_some()).count();
+    assert!(
+        with_column > 0,
+        "no step carried a column, which is what dropping it looks like: {:?}",
+        t.step_columns
+    );
+    // Every column the tracer records is a 1-based source column.
+    for (i, c) in t.step_columns.iter().enumerate() {
+        if let Some(col) = c {
+            assert!(col.0 >= 1, "step {i} carries column {}, which is not 1-based", col.0);
+        }
+    }
 }
 
 #[test]
