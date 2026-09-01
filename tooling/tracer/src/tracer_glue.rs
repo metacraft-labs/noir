@@ -134,6 +134,51 @@ fn register_variable(tracer: &mut dyn TraceSink, variable: &Variable) {
     TraceSink::register_variable_with_full_value(tracer, &variable.name, value_record);
 }
 
+/// Record an integer-like field element without losing it.
+///
+/// `ValueRecord::Int` carries an `i64`, and this used to be reached as
+/// `field.to_i128() as i64` — two silent failures stacked on one line:
+///
+/// * `AcirField::to_i128` **panics** (`field element too large for i128`) on anything
+///   wider than 128 bits. A Poseidon digest always is, so this was not an edge case on
+///   Aztec code — it was every contract that hashes anything, which is every contract.
+/// * `as i64` then truncates whatever survived, so a value between `i64::MAX` and
+///   `i128::MAX` was recorded as a *different number* with no error at all. That is the
+///   worse of the two: a debugger showing a confidently wrong value.
+///
+/// `ValueRecord::BigInt` exists for exactly this and carries the big-endian magnitude, so
+/// wide values are now recorded EXACTLY rather than approximated or fatal.
+fn field_to_int_record(
+    field: &FieldElement,
+    typ: &PrintableType,
+    type_id: codetracer_trace_types::TypeId,
+) -> ValueRecord {
+    // Only a signed Noir type may use the field's negative half; for `Field` and unsigned
+    // integers the whole range is a magnitude, and reading the top half as negative would
+    // turn a large hash into a small negative number.
+    let signed = matches!(typ, PrintableType::SignedInteger { .. });
+
+    if field.fits_in_i128() {
+        let wide = field.to_i128();
+        // `as i64` is what truncated; `try_from` is what refuses to.
+        if let Ok(i) = i64::try_from(wide)
+            && (signed || wide >= 0)
+        {
+            return ValueRecord::Int { i, type_id };
+        }
+    }
+
+    let negated = -*field;
+    let negative = signed && negated.num_bits() < field.num_bits();
+    let magnitude = if negative { negated } else { *field };
+    let mut bytes = magnitude.to_be_bytes();
+    // Trim leading zeros — the encoding is a magnitude, not a fixed-width word — but keep
+    // one byte so zero stays representable.
+    let first_significant = bytes.iter().position(|b| *b != 0).unwrap_or(bytes.len() - 1);
+    bytes.drain(..first_significant);
+    ValueRecord::BigInt { b: bytes, negative, type_id }
+}
+
 /// Registers a value of a given type. Registers the type, if it's the first time it occurs.
 fn register_value(
     tracer: &mut dyn TraceSink,
@@ -151,7 +196,7 @@ fn register_value(
             if let PrintableValue::Field(field_value) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
                 let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
-                ValueRecord::Int { i: field_value.to_i128() as i64, type_id }
+                field_to_int_record(field_value, typ, type_id)
             } else {
                 // Note(stanm): panic here, because this means the compiler frontend is broken, which
                 // is not the responsibility of this module. Should not be reachable in integration
@@ -165,7 +210,7 @@ fn register_value(
             if let PrintableValue::Field(field_value) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
                 let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
-                ValueRecord::Int { i: field_value.to_i128() as i64, type_id }
+                field_to_int_record(field_value, typ, type_id)
             } else {
                 panic!(
                     "type-value mismatch: value: {:?} does not match type UnsignedInteger",
@@ -177,7 +222,7 @@ fn register_value(
             if let PrintableValue::Field(field_value) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
                 let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
-                ValueRecord::Int { i: field_value.to_i128() as i64, type_id }
+                field_to_int_record(field_value, typ, type_id)
             } else {
                 panic!("type-value mismatch: value: {:?} does not match type SignedInteger", value)
             }
@@ -186,7 +231,9 @@ fn register_value(
             if let PrintableValue::Field(field_value) = value {
                 let (type_kind, type_name) = printable_type_to_kind_and_name(typ);
                 let type_id = TraceSink::ensure_type_id(tracer, type_kind, &type_name);
-                ValueRecord::Bool { b: field_value.to_i128() as i64 == 1, type_id }
+                // `is_one` rather than `to_i128() == 1`: a bool is 0 or 1, but the old form
+                // would still panic if a malformed witness put a wide value here.
+                ValueRecord::Bool { b: field_value.is_one(), type_id }
             } else {
                 panic!("type-value mismatch: value: {:?} does not match type Bool", value)
             }
@@ -393,5 +440,106 @@ fn printable_type_to_kind_and_name(printable_type: &PrintableType) -> (TypeKind,
             // As in the original code, tracing for enums is not yet implemented.
             todo!("Tracing support for enums is not yet implemented")
         }
+    }
+}
+
+#[cfg(test)]
+mod field_recording_tests {
+    use super::*;
+    use codetracer_trace_types::TypeId;
+
+    const TID: TypeId = TypeId(0);
+
+    /// A Poseidon digest is wider than `i128`, and recording one used to abort the whole
+    /// trace with `field element too large for i128`. Since every Aztec contract hashes
+    /// something, that made this unavoidable on real contract code rather than an edge
+    /// case. It must now be recorded exactly, as a `BigInt`.
+    #[test]
+    fn a_field_wider_than_i128_records_as_a_bigint_rather_than_panicking() {
+        // 2^200: comfortably past i128 and a valid bn254 field element.
+        let wide = FieldElement::from(2u128).pow(&FieldElement::from(200u128));
+
+        // The non-panicking half is asserted EXPLICITLY rather than by the test simply
+        // completing. If the `to_i128` path is ever restored, this reddens on its own
+        // assertion below instead of dying inside the call and being killed by a panic
+        // this test never names.
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            field_to_int_record(&wide, &PrintableType::Field, TID)
+        }));
+        std::panic::set_hook(previous_hook);
+
+        let record = match outcome {
+            Ok(record) => record,
+            Err(_) => panic!(
+                "recording a field wider than i128 must not panic — a Poseidon digest \
+                 always is one, so this aborts the trace of any contract that hashes"
+            ),
+        };
+
+        let ValueRecord::BigInt { b, negative, .. } = record else {
+            panic!("a field wider than i128 must record as BigInt, got {record:?}");
+        };
+        assert!(!negative, "a `Field` is a magnitude; it is never negative");
+        // 2^200 is a 1 followed by 200 zero bits = 26 bytes: 0x01 then 25 zero bytes.
+        assert_eq!(b.len(), 26, "the magnitude keeps every significant byte: {b:?}");
+        assert_eq!(b[0], 1, "big-endian, leading zeros trimmed");
+        assert!(b[1..].iter().all(|byte| *byte == 0), "2^200 has one set bit");
+    }
+
+    /// The quieter half of the same defect. `to_i128() as i64` did not panic here — it
+    /// TRUNCATED, so a value above `i64::MAX` was recorded as a different, smaller number
+    /// with no error anywhere. A debugger showing a confidently wrong value is worse than
+    /// one that stops.
+    #[test]
+    fn a_field_above_i64_max_is_not_silently_truncated() {
+        let above = FieldElement::from(i64::MAX as u128 + 1);
+        let record = field_to_int_record(&above, &PrintableType::Field, TID);
+
+        let ValueRecord::BigInt { b, negative, .. } = record else {
+            panic!("a value above i64::MAX must not be squeezed into Int, got {record:?}");
+        };
+        assert!(!negative);
+        // 2^63 = 0x80 followed by seven zero bytes.
+        assert_eq!(b, vec![0x80, 0, 0, 0, 0, 0, 0, 0], "the exact magnitude survives");
+    }
+
+    /// The common case must not regress into `BigInt`: an ordinary small value is still an
+    /// `Int`, or every integer in every trace would become a base64 blob.
+    #[test]
+    fn an_ordinary_small_field_still_records_as_an_int() {
+        let record = field_to_int_record(&FieldElement::from(42u128), &PrintableType::Field, TID);
+        assert!(
+            matches!(record, ValueRecord::Int { i: 42, .. }),
+            "a small field stays an Int, got {record:?}"
+        );
+    }
+
+    /// A signed Noir integer may legitimately use the field's negative half, and must keep
+    /// its sign rather than being read as an enormous magnitude.
+    #[test]
+    fn a_negative_signed_integer_keeps_its_sign() {
+        let typ = PrintableType::SignedInteger { width: 64 };
+        let minus_one = -FieldElement::from(1u128);
+        let record = field_to_int_record(&minus_one, &typ, TID);
+        assert!(
+            matches!(record, ValueRecord::Int { i: -1, .. }),
+            "-1 as an i64 stays -1, got {record:?}"
+        );
+    }
+
+    /// …and an UNSIGNED type must not have the field's top half read as negative, which is
+    /// how a large hash would turn into a small negative number.
+    #[test]
+    fn a_large_unsigned_value_is_never_reported_negative() {
+        let typ = PrintableType::UnsignedInteger { width: 128 };
+        let big = -FieldElement::from(1u128); // p-1: the field's largest element
+        let record = field_to_int_record(&big, &typ, TID);
+        let ValueRecord::BigInt { negative, b, .. } = record else {
+            panic!("p-1 does not fit an i64, so it must be a BigInt, got {record:?}");
+        };
+        assert!(!negative, "an unsigned type never yields a negative record");
+        assert!(b.len() >= 31, "p-1 is a full-width field element, got {} bytes", b.len());
     }
 }

@@ -72,3 +72,10 @@ codetracer_trace_types.workspace = true
 # The ABI is what an all-zero input map is built against, so a contract function can be
 # executed without this test knowing what its parameters mean.
 noirc_abi.workspace = true
+# The brillig opcode enum, so the oracle probe matches a ForeignCall VARIANT rather than
+# grepping the serialized artifact for a substring.
+acvm.workspace = true
+# The AVM oracle host, so an Aztec contract's public entrypoints can be stepped rather than
+# halting on their first oracle.
+noir_debugger = { workspace = true, default-features = false }
+noir_tracer.workspace = true

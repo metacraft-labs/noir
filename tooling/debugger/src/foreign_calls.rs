@@ -94,6 +94,37 @@ impl DefaultDebugForeignCallExecutor {
         ex.load_artifact(artifact);
         Self::make(output, resolver_url, ex, root_path, package_name)
     }
+
+    /// As [`Self::from_artifact`], with one extra handler consulted AFTER the `__debug_*`
+    /// layer and BEFORE the default builder's.
+    ///
+    /// The ordering is the point. The debug layer must stay outermost so instrumentation
+    /// calls are never intercepted, and `extra` must sit above the default builder so a
+    /// handler it provides is not pre-empted by the builder's mock/print layers.
+    pub fn from_artifact_with_layer<'a, W: 'a + std::io::Write, L>(
+        output: W,
+        resolver_url: Option<String>,
+        artifact: &DebugArtifact,
+        root_path: Option<PathBuf>,
+        package_name: String,
+        extra: L,
+    ) -> impl DebugForeignCallExecutor + use<'a, W, L>
+    where
+        L: ForeignCallExecutor<FieldElement> + 'a,
+    {
+        let mut ex = Self::default();
+        ex.load_artifact(artifact);
+        DefaultForeignCallBuilder {
+            output,
+            enable_mocks: true,
+            resolver_url,
+            root_path,
+            package_name: Some(package_name),
+        }
+        .build()
+        .add_layer(extra)
+        .add_layer(ex)
+    }
 }
 
 /// Without `rpc` there is no HTTP oracle resolver to configure, so
@@ -133,6 +164,28 @@ impl DefaultDebugForeignCallExecutor {
         let mut ex = Self::default();
         ex.load_artifact(artifact);
         Self::make(output, resolver_url, ex, root_path, package_name)
+    }
+
+    /// As [`Self::from_artifact`], with one extra handler consulted AFTER the `__debug_*`
+    /// layer and BEFORE the default builder's. See the `rpc` variant for why the ordering
+    /// matters; the signatures are identical on purpose.
+    pub fn from_artifact_with_layer<'a, W: 'a + std::io::Write, L>(
+        output: W,
+        _resolver_url: Option<String>,
+        artifact: &DebugArtifact,
+        _root_path: Option<PathBuf>,
+        _package_name: String,
+        extra: L,
+    ) -> impl DebugForeignCallExecutor + use<'a, W, L>
+    where
+        L: ForeignCallExecutor<FieldElement> + 'a,
+    {
+        let mut ex = Self::default();
+        ex.load_artifact(artifact);
+        DefaultForeignCallBuilder { output, enable_mocks: true }
+            .build()
+            .add_layer(extra)
+            .add_layer(ex)
     }
 }
 

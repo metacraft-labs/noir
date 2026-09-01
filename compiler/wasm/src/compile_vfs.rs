@@ -1066,17 +1066,306 @@ mod tests {
         );
     }
 
-    /// The Aztec entrypoints halt at their first oracle, and this pins WHY so the number
-    /// above is not mistaken for a compiler defect.
+    /// `SimpleToken`'s public entrypoints step through their OWN source once the AVM
+    /// oracles are served.
     ///
-    /// If an Aztec oracle host lands, this test fails — deliberately. It is a record of a
-    /// present boundary, not a claim that the boundary is correct.
+    /// This is the arm `the_aztec_entrypoints_halt_at_the_first_oracle` said would have to
+    /// replace it. That test pinned a boundary — 27/27 entrypoints halting with a best step
+    /// count of 1 — and recorded that the cause was a missing oracle host rather than a
+    /// compilation or instrumentation gap. The artifact was already carrying 164,000
+    /// located brillig opcodes; nothing here recompiles anything.
+    ///
+    /// # What is real and what is not
+    ///
+    /// Every step counted below is real: the debugger genuinely advanced through
+    /// `contract/src/main.nr`. The ORACLE ANSWERS that got it there are not uniformly real,
+    /// and this test asserts the split rather than hiding it. See
+    /// `noir_debugger::aztec_oracles::Fidelity` — `Environment` answers come from a context
+    /// this test supplies explicitly, and `DebugLocal` answers (public storage reads of
+    /// slots nothing wrote, and nullifier existence) are plausible rather than correct.
+    /// The counts are printed so a reader can see the proportion.
     #[test]
     #[ignore = "needs a vendored aztec-nr tree; see scripts/aztec_contract_is_steppable.sh"]
-    fn the_aztec_entrypoints_halt_at_the_first_oracle() {
+    fn simpletoken_public_entrypoints_step_through_their_own_source() {
         use codetracer_trace_types::TraceLowLevelEvent;
+        use noir_debugger::aztec_oracles::{
+            AztecContext, Fidelity, NullifierPremise, SharedAvmOracleHost,
+        };
+        use noir_tracer::TraceOptions;
         use noirc_artifacts::contract::ContractArtifact;
         use noirc_artifacts::program::ProgramArtifact;
+        use std::collections::BTreeSet;
+
+        let (files, package_dir) = vendored_aztec_tree();
+        let response = run_request(&VfsRequest {
+            files,
+            package_dir: package_dir.clone(),
+            mode: "contract-debug".into(),
+        });
+        assert!(response.ok, "the contract compiles; got {:?}", response.message);
+        let contract: ContractArtifact =
+            serde_json::from_value(response.artifact.expect("an artifact")).expect("deserializes");
+        assert_eq!(contract.name, "SimpleToken");
+        assert_eq!(contract.functions.len(), 27, "SimpleToken's whole entrypoint surface");
+
+        // Steps that land in the contract's own file, not in aztec-nr's dispatch machinery.
+        let own_source = format!("{package_dir}/src/main.nr");
+
+        // The four call shapes SimpleToken's access control distinguishes. These are not
+        // guesses at what makes a function pass — they are the contexts a caller genuinely
+        // has, and the contract's own `assert`s pick between them. A `#[view]` function
+        // refuses a non-static call and an `#[internal]` one refuses a caller that is not
+        // the contract itself, and BOTH of those refusals were observed from this host
+        // before this table existed: "can only be called statically" and "can only be
+        // called by the same contract" are the contract's messages, not this test's.
+        let base = AztecContext::default();
+        let call_shapes: Vec<(&str, AztecContext)> = vec![
+            ("external, non-static", base.clone()),
+            ("external, static", AztecContext { is_static_call: true, ..base.clone() }),
+            ("self-call, non-static", AztecContext { sender: base.contract_address, ..base.clone() }),
+            (
+                "self-call, static",
+                AztecContext {
+                    sender: base.contract_address,
+                    is_static_call: true,
+                    ..base.clone()
+                },
+            ),
+        ];
+
+        struct Stepped {
+            name: String,
+            shape: &'static str,
+            steps: usize,
+            lines: usize,
+            host: SharedAvmOracleHost,
+        }
+        let mut stepped: Vec<Stepped> = Vec::new();
+        let mut blocked: Vec<(String, String)> = Vec::new();
+
+        for function in &contract.functions {
+            let compiled = contract.function_as_compiled_program(&function.name).expect("present");
+            let json = serde_json::to_string(&ProgramArtifact::from(compiled)).expect("serializes");
+            let inputs = zeroed_inputs_json(&function.abi);
+
+            let mut best: Option<Stepped> = None;
+            let mut last_reason = String::from("no trace");
+
+            for (shape, context) in &call_shapes {
+                let host =
+                    SharedAvmOracleHost::new(context.clone(), NullifierPremise::AlreadyDeployed);
+                let options = TraceOptions::default().with_aztec_oracles(host.clone());
+                let Ok(trace) = noir_tracer_wasm::trace_artifact_with_options(
+                    &json, &inputs, true, options,
+                ) else {
+                    continue;
+                };
+
+                let own: Vec<i64> = trace
+                    .events
+                    .iter()
+                    .filter_map(|e| match e {
+                        TraceLowLevelEvent::Step(s) => Some(s),
+                        _ => None,
+                    })
+                    .filter(|s| {
+                        trace
+                            .paths
+                            .get(s.path_id.0)
+                            .is_some_and(|p| p.to_string_lossy().ends_with(&own_source))
+                    })
+                    .map(|s| s.line.0)
+                    .collect();
+
+                if own.is_empty() {
+                    // Why it stopped: the contract's own assertion, or this host's refusal
+                    // to fabricate an oracle it has no basis for.
+                    let h = host.borrow();
+                    let event = trace.events.iter().find_map(|e| match e {
+                        TraceLowLevelEvent::Event(r) => Some(r.content.clone()),
+                        _ => None,
+                    });
+                    // A refusal outranks the assertion it caused: "Failed assertion" is
+                    // what the contract said, but the oracle this host would not invent is
+                    // WHY, and it is the actionable half.
+                    last_reason = match (h.refusals.iter().next(), event) {
+                        (Some((refused, why)), _) => format!("refused {refused} — {why}"),
+                        (None, Some(msg)) => msg,
+                        (None, None) => "stopped with no diagnostic".to_string(),
+                    };
+                    continue;
+                }
+
+                let distinct: BTreeSet<i64> = own.iter().copied().collect();
+                if best.as_ref().is_none_or(|b| own.len() > b.steps) {
+                    best = Some(Stepped {
+                        name: function.name.clone(),
+                        shape,
+                        steps: own.len(),
+                        lines: distinct.len(),
+                        host: host.clone(),
+                    });
+                }
+            }
+
+            match best {
+                Some(b) => stepped.push(b),
+                None => blocked.push((function.name.clone(), last_reason)),
+            }
+        }
+
+        println!("SimpleToken stepped with the AVM oracle host:");
+        for s in &stepped {
+            println!(
+                "  {}: {} steps over {} distinct lines  [{}]",
+                s.name, s.steps, s.lines, s.shape
+            );
+        }
+        println!("  --- not stepped, each for a NAMED reason ---");
+        for (name, why) in &blocked {
+            println!("  {name}: {why}");
+        }
+
+        let best = stepped.iter().max_by_key(|s| s.steps).expect("at least one stepped");
+        let total_steps: usize = stepped.iter().map(|s| s.steps).sum();
+        println!(
+            "  {} of 27 entrypoints stepped; {total_steps} source-level steps in {own_source} \
+             in total; best is {} with {} steps over {} distinct lines",
+            stepped.len(),
+            best.name,
+            best.steps,
+            best.lines
+        );
+
+        // The premise, asserted so this cannot go vacuous: the halt really was the oracle
+        // host and nothing else. Without one, the IDENTICAL artifact yields one step — and
+        // returns `Ok` while doing it, which is the false pass this whole path produces.
+        let compiled = contract.function_as_compiled_program(&best.name).expect("present");
+        let json = serde_json::to_string(&ProgramArtifact::from(compiled)).expect("serializes");
+        let inputs = zeroed_inputs_json(
+            &contract.functions.iter().find(|f| f.name == best.name).expect("present").abi,
+        );
+        // `TraceOptions::default()` carries `aztec_oracles: None`. `trace_artifact` will
+        // NOT do here: it now serves the AVM oracles by default, so using it would make
+        // the control a copy of the experiment — which is exactly what this assertion
+        // caught the first time it was written that way.
+        let control = noir_tracer_wasm::trace_artifact_with_options(
+            &json,
+            &inputs,
+            true,
+            TraceOptions::default(),
+        )
+        .expect("the no-host control still returns Ok — that IS the false pass");
+        let control_steps =
+            control.events.iter().filter(|e| matches!(e, TraceLowLevelEvent::Step(_))).count();
+        println!("  control for {}: {control_steps} step(s), reported ok", best.name);
+        assert_eq!(
+            control_steps, 1,
+            "without an oracle host the SAME artifact must still halt after the entry step; \
+             if this is no longer 1 the halt has another cause and every number above is \
+             measuring something else"
+        );
+
+        // The deliverable, with the counts themselves asserted rather than `> 0`.
+        assert!(
+            best.steps >= 100,
+            "a SimpleToken entrypoint must step substantively through its own source; the \
+             best was {} with {}",
+            best.name,
+            best.steps
+        );
+        assert!(
+            best.lines >= 5,
+            "…and those steps must ADVANCE: {} distinct lines over {} steps",
+            best.lines,
+            best.steps
+        );
+        assert!(
+            stepped.len() >= 8,
+            "the entrypoints that do not need the PRIVATE oracle half must step as a family, \
+             not one lucky function; {} did",
+            stepped.len()
+        );
+        assert!(
+            total_steps >= 400,
+            "…and the family's total source-level step count must be substantive; got \
+             {total_steps}"
+        );
+
+        // Every blocked entrypoint must say WHY. A silent stop is the failure mode this
+        // campaign keeps finding, so an empty reason fails the test.
+        for (name, why) in &blocked {
+            assert!(
+                !why.is_empty() && why != "stopped with no diagnostic",
+                "{name} stopped without a diagnostic; a debugger that stops silently is the \
+                 defect, not the stop"
+            );
+        }
+
+        // …and the boundary must be a REFUSAL, not a fabrication. If `unsupported()` ever
+        // starts returning an empty result instead of `NoHandler`, these entrypoints would
+        // sail past the oracle on a value nobody computed and this count would collapse —
+        // the single most dangerous change that could be made to this host, because every
+        // step it produced afterwards would be confident fiction.
+        let named_refusals =
+            blocked.iter().filter(|(_, why)| why.starts_with("refused ")).count();
+        println!("  {named_refusals} entrypoints stopped at a NAMED oracle refusal");
+        assert!(
+            named_refusals >= 10,
+            "the entrypoints this host cannot serve must stop at a refusal that NAMES the \
+             oracle; only {named_refusals} of {} did",
+            blocked.len()
+        );
+
+        // Fidelity, asserted rather than described. If this host ever answers everything
+        // `Faithful`, that is a bug in the classification, not an improvement.
+        let host = best.host.borrow();
+        let counts = host.fidelity_counts();
+        let faithful = counts.get(&Fidelity::Faithful).copied().unwrap_or(0);
+        let environment = counts.get(&Fidelity::Environment).copied().unwrap_or(0);
+        let debug_local = counts.get(&Fidelity::DebugLocal).copied().unwrap_or(0);
+        println!(
+            "  oracle answers for {}: {faithful} faithful, {environment} from the declared \
+             context, {debug_local} debug-local (plausible, NOT correct)",
+            best.name
+        );
+        for (name, fidelity) in host.answered_names() {
+            println!("    {name}: {fidelity:?}");
+        }
+        assert!(
+            faithful + environment + debug_local > 0,
+            "the host must have answered something for the steps to be attributable to it"
+        );
+        assert!(
+            debug_local > 0,
+            "this contract reads public storage the session never wrote, so at least one \
+             answer MUST be classified debug-local; if none is, the classification has \
+             stopped distinguishing and the fidelity report is worthless"
+        );
+    }
+
+    /// SimpleToken's oracle surface splits into an AVM half and a private half, and this
+    /// counts both — because that split is the whole reason this repository grew an oracle
+    /// host while a working one already existed elsewhere.
+    ///
+    /// `aztec-avm-runtime`'s `browser/src/wallet/private_oracles.ts` is a real, executing
+    /// oracle host. It is built on the vendored PXE registry `ORACLE_REGISTRY`, whose 68
+    /// entries are 49 `aztec_utl_*`, 16 `aztec_prv_*` and 3 `aztec_misc_*` — and **zero**
+    /// `aztec_avm_*`. Measured against the same vendored aztec-nr closure this test
+    /// compiles, those 68 names are an exact subset of the 133 the tree declares: every
+    /// registry entry appears in the tree, and none of the tree's 33 `aztec_avm_*` names
+    /// appears in the registry. The two hosts are not a duplication that failed to be
+    /// shared; they implement disjoint halves of Aztec's oracle interface.
+    ///
+    /// So this asserts the property that makes the AVM host necessary and bounds what it
+    /// can be expected to reach: a substantial family of SimpleToken's entrypoints calls
+    /// ONLY AVM oracles, and another family needs the private half that lives in TS.
+    #[test]
+    #[ignore = "needs a vendored aztec-nr tree; see scripts/aztec_contract_is_steppable.sh"]
+    fn simpletoken_oracle_surface_splits_into_an_avm_half_and_a_private_half() {
+        use acvm::acir::brillig::Opcode as BrilligOpcode;
+        use noirc_artifacts::contract::ContractArtifact;
+        use std::collections::BTreeSet;
 
         let (files, package_dir) = vendored_aztec_tree();
         let response =
@@ -1085,56 +1374,81 @@ mod tests {
         let contract: ContractArtifact =
             serde_json::from_value(response.artifact.expect("an artifact")).expect("deserializes");
 
-        let mut attempted = 0;
-        let mut halted_in_oracle = 0;
-        let mut best = 0usize;
+        let mut all: BTreeSet<String> = BTreeSet::new();
+        let mut avm_only = 0usize;
+        let mut needs_private = 0usize;
+
         for function in &contract.functions {
-            attempted += 1;
             let compiled = contract.function_as_compiled_program(&function.name).expect("present");
-            let json = serde_json::to_string(&ProgramArtifact::from(compiled)).expect("serializes");
-            let inputs = zeroed_inputs_json(&function.abi);
-            let Ok(trace) = noir_tracer_wasm::trace_artifact(&json, &inputs, true) else {
+            let mut names = BTreeSet::new();
+            for b in &compiled.program.unconstrained_functions {
+                for op in &b.bytecode {
+                    if let BrilligOpcode::ForeignCall { function, .. } = op
+                        && function.starts_with("aztec_")
+                    {
+                        names.insert(function.clone());
+                    }
+                }
+            }
+            all.extend(names.iter().cloned());
+            if names.is_empty() {
                 continue;
-            };
-            let steps: Vec<_> = trace
-                .events
+            }
+            // `aztec_misc_*` is stateless and served by BOTH hosts, so it does not decide
+            // which half a function belongs to.
+            let private = names
                 .iter()
-                .filter_map(|e| match e {
-                    TraceLowLevelEvent::Step(s) => Some(s),
-                    _ => None,
-                })
-                .collect();
-            best = best.max(steps.len());
-            // The single step it does emit is the tracer's entry step, and it lands in
-            // aztec-nr's own oracle/dispatch machinery rather than in contract source.
-            if steps.len() == 1
-                && trace.paths.get(steps[0].path_id.0).is_some_and(|p| {
-                    let p = p.to_string_lossy();
-                    p.contains("oracle") || p.contains("dispatch")
-                })
-            {
-                halted_in_oracle += 1;
+                .any(|n| n.starts_with("aztec_prv_") || n.starts_with("aztec_utl_"));
+            if private {
+                needs_private += 1;
+            } else {
+                avm_only += 1;
             }
         }
 
-        assert_eq!(attempted, 27, "every function of SimpleToken was attempted");
-        assert_eq!(
-            halted_in_oracle, attempted,
-            "all {attempted} Aztec entrypoints halt at their first oracle having emitted \
-             only the entry step; {halted_in_oracle} did. If this number has DROPPED, an \
-             oracle host has landed and this test should be replaced by a real step-count \
-             assertion over SimpleToken itself."
-        );
-        assert_eq!(
-            best, 1,
-            "…so the best step count over SimpleToken's own entrypoints is the entry step \
-             alone. This is an oracle-host gap, NOT a compilation or instrumentation gap: \
-             `a_real_aztec_contract_compiles_for_debugging_and_is_instrumented` asserts \
-             the artifact carries >10,000 located brillig opcodes."
+        let avm: BTreeSet<&String> = all.iter().filter(|n| n.starts_with("aztec_avm_")).collect();
+        let private: BTreeSet<&String> = all
+            .iter()
+            .filter(|n| n.starts_with("aztec_prv_") || n.starts_with("aztec_utl_"))
+            .collect();
+        println!(
+            "SimpleToken reaches {} distinct aztec oracles: {} AVM, {} private/utility",
+            all.len(),
+            avm.len(),
+            private.len()
         );
         println!(
-            "SimpleToken: {halted_in_oracle}/{attempted} entrypoints halt at the first \
-             oracle (best step count {best})"
+            "  {avm_only} entrypoints call ONLY AVM oracles; {needs_private} need the private half"
+        );
+
+        // Counts, not existence. If the AVM family ever empties, this repository's host has
+        // no reason to exist and that must be a failure rather than a silent pass.
+        assert!(
+            avm.len() >= 15,
+            "SimpleToken must reach a substantial AVM oracle surface; got {}: {avm:?}",
+            avm.len()
+        );
+        assert!(
+            private.len() >= 15,
+            "…and a substantial private surface, which is the half aztec-avm-runtime's \
+             private_oracles.ts serves; got {}",
+            private.len()
+        );
+        // The two families are disjoint by construction; assert it so a rename upstream
+        // that collapses them is caught here rather than by a confusing step count.
+        assert!(
+            avm.is_disjoint(&private),
+            "the AVM and private oracle families must not overlap"
+        );
+        assert!(
+            avm_only >= 8,
+            "a family of entrypoints must be reachable with the AVM host ALONE, otherwise \
+             the host cannot step anything on its own; {avm_only} were"
+        );
+        assert!(
+            needs_private >= 8,
+            "…and a family must genuinely need the private half, so the boundary this host \
+             stops at is real and not an artefact of how little it implements; {needs_private} did"
         );
     }
 

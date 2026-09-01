@@ -141,17 +141,17 @@ UNIT_FAILED="$(echo "${UNIT_LINE}" | sed -n 's/.*passed; \([0-9]*\) failed.*/\1/
 assert_eq "…with no failures" "0" "${UNIT_FAILED}"
 assert_ge "…and a substantive number of tests actually ran" "40" "${UNIT_PASSED:-0}"
 
-# The three Aztec arms. They are `#[ignore]` so a bare `cargo test` does not pretend to
+# The four Aztec arms. They are `#[ignore]` so a bare `cargo test` does not pretend to
 # cover them; running them here with the PASS COUNT ASSERTED is what stops "it was
 # ignored" from being mistaken for "it passed".
 run_tests "${WORK}/aztec.log" -- --ignored --nocapture --test-threads=1
 AZTEC_STATUS=$?
-sed -n 's/^\(SimpleToken:.*\)$/  \1/p;s/^\(Stepping::.*\)$/  \1/p;s/^\( *[0-9]* steps in.*\)$/  \1/p' \
+sed -n 's/^\(SimpleToken.*\)$/  \1/p;s/^\(Stepping::.*\)$/  \1/p;s/^\( *[0-9]* steps in.*\)$/  \1/p;s/^\( *[0-9]* of 27 entrypoints.*\)$/  \1/p;s/^\( *control for.*\)$/  \1/p;s/^\( *oracle answers for.*\)$/  \1/p' \
 	"${WORK}/aztec.log"
-assert_eq "the three Aztec arms pass" "0" "${AZTEC_STATUS}"
+assert_eq "the four Aztec arms pass" "0" "${AZTEC_STATUS}"
 AZTEC_LINE="$(grep -E '^test result:' "${WORK}/aztec.log" | tail -1)"
 AZTEC_PASSED="$(echo "${AZTEC_LINE}" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')"
-assert_eq "…and all three of them RAN rather than being ignored" "3" "${AZTEC_PASSED:-0}"
+assert_eq "…and all four of them RAN rather than being ignored" "4" "${AZTEC_PASSED:-0}"
 
 # The numbers themselves, lifted out of the log so this script reports a result rather
 # than a chain of green ticks.
@@ -160,6 +160,44 @@ OWN="$(sed -n 's/^ *\([0-9]*\) steps in stepping\/src\/main.nr over \([0-9]*\) d
 LOCATED="$(sed -n 's/.*instrumented, \([0-9]*\) located brillig opcodes.*/\1/p' "${WORK}/aztec.log")"
 assert_ge "a contract on the real Aztec tree traces to source-level steps" "8" "${STEPS:-0}"
 assert_ge "…and the artifact maps brillig opcodes to source in quantity" "10000" "${LOCATED:-0}"
+
+# ------------------------------------------------------------------------------------
+# The oracle host's own numbers. `the_aztec_entrypoints_halt_at_the_first_oracle` used to
+# stand here recording 27/27 entrypoints halting with a best step count of 1; it was
+# REMOVED rather than softened, under the removal rule it stated itself ("replaced by a
+# real step-count assertion over SimpleToken itself"). These are that replacement.
+# ------------------------------------------------------------------------------------
+STEPPED="$(sed -n 's/^ *\([0-9]*\) of 27 entrypoints stepped;.*/\1/p' "${WORK}/aztec.log")"
+TOTAL_OWN="$(sed -n 's/.* \([0-9]*\) source-level steps in contract\/src\/main.nr in total.*/\1/p' "${WORK}/aztec.log")"
+BEST_STEPS="$(sed -n 's/.*best is [^ ]* with \([0-9]*\) steps over \([0-9]*\) distinct lines.*/\1/p' "${WORK}/aztec.log")"
+BEST_LINES="$(sed -n 's/.*best is [^ ]* with \([0-9]*\) steps over \([0-9]*\) distinct lines.*/\2/p' "${WORK}/aztec.log")"
+CONTROL="$(sed -n 's/^ *control for [^:]*: \([0-9]*\) step(s).*/\1/p' "${WORK}/aztec.log")"
+REFUSALS="$(sed -n 's/^ *\([0-9]*\) entrypoints stopped at a NAMED oracle refusal.*/\1/p' "${WORK}/aztec.log")"
+
+assert_ge "SimpleToken entrypoints step through their own source" "8" "${STEPPED:-0}"
+assert_ge "…for a substantive total step count in the contract's own file" "400" "${TOTAL_OWN:-0}"
+assert_ge "…with the best single entrypoint stepping substantively" "100" "${BEST_STEPS:-0}"
+assert_ge "…over several distinct lines, so the steps ADVANCE" "5" "${BEST_LINES:-0}"
+# The control is the whole point: the SAME artifact, no oracle host, one step and `ok`.
+# If this stops being 1 the halt has another cause and every number above moved with it.
+assert_eq "…while the identical artifact with NO oracle host still halts after one step" \
+	"1" "${CONTROL:-0}"
+assert_ge "…and the entrypoints this host cannot serve stop at a NAMED refusal" "10" "${REFUSALS:-0}"
+
+# ------------------------------------------------------------------------------------
+echo
+echo "== 2b. the tracer records a field element wider than i128"
+# ------------------------------------------------------------------------------------
+# Recording a Poseidon digest used to abort the trace (`field element too large for
+# i128`), and values between i64::MAX and i128::MAX were silently TRUNCATED by the `as
+# i64` on the same line. Both are unavoidable on real Aztec contract code, so the fix has
+# its own unit arms rather than being implied by the step counts above.
+(cd "${REPO_ROOT}" && cargo test -p noir_tracer --lib field_recording_tests) \
+	>"${WORK}/field.log" 2>&1
+assert_eq "the field-recording arms pass" "0" "$?"
+FIELD_LINE="$(grep -E '^test result:' "${WORK}/field.log" | tail -1)"
+FIELD_PASSED="$(echo "${FIELD_LINE}" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p')"
+assert_eq "…and all five of them ran" "5" "${FIELD_PASSED:-0}"
 
 # ------------------------------------------------------------------------------------
 echo
@@ -268,6 +306,119 @@ mutate "uninstrumented-contract" "a_contract_compiled_for_debugging_traces_with_
 	'old = "            \"contract-debug\" => (true, true, false),"
 new = "            \"contract-debug\" => (true, false, false),"
 assert old in s, "the contract-debug row has moved"
+s = s.replace(old, new)'
+
+# ------------------------------------------------------------------------------------
+# Arms for the oracle host. These mutate files OTHER than `compile_vfs.rs`, and some
+# target a test in a different crate, so they need the file and the crate as parameters.
+# ------------------------------------------------------------------------------------
+mutate_in() {
+	# mutate_in <label> <file> <crate> <test path> <target filter> <fragment> <python replacement>
+	local label="$1" file="$2" krate="$3" testpath="$4" target="$5" fragment="$6" script="$7"
+	python3 - "${file}" <<PY
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+${script}
+open(p, "w", encoding="utf-8").write(s)
+PY
+	local applied=$?
+	if [ "${applied}" -ne 0 ]; then
+		fail "${label}: the mutation did not apply — its premise has moved"
+		git -C "${REPO_ROOT}" checkout -- "${file}"
+		return
+	fi
+	(cd "${REPO_ROOT}" && cargo test -p "${krate}" --lib "${target}" -- --exact \
+		"${testpath}") >"${WORK}/mut-${label}.log" 2>&1
+	local status=$?
+	git -C "${REPO_ROOT}" checkout -- "${file}"
+
+	if [ "${status}" -eq 0 ]; then
+		fail "${label}: ${target} still passed — the mutation is not covered"
+		return
+	fi
+	if grep -q "error\[E[0-9]*\]" "${WORK}/mut-${label}.log"; then
+		fail "${label}: the mutant did not compile, so nothing was measured"
+		return
+	fi
+	if grep -qF "${fragment}" "${WORK}/mut-${label}.log"; then
+		pass "${label}: ${target} reddened on its own assertion"
+	else
+		fail "${label}: ${target} failed, but not on [${fragment}]"
+	fi
+}
+
+ORACLES="${REPO_ROOT}/tooling/debugger/src/aztec_oracles.rs"
+GLUE="${REPO_ROOT}/tooling/tracer/src/tracer_glue.rs"
+# (the tracer_wasm path is no longer mutated directly; see ARM 6)
+
+# ARM 4 — the single most dangerous change that could be made to this host: refusing an
+# oracle it cannot answer becomes returning an EMPTY result. Execution then sails past the
+# oracle on a value nobody computed, and every step afterwards is confident fiction. The
+# step count would go UP, not down, so only the refusal assertion catches this.
+mutate_in "refusal-becomes-fabrication" "${ORACLES}" "noir_wasm" \
+	"compile_vfs::tests::simpletoken_public_entrypoints_step_through_their_own_source" \
+	"simpletoken_public_entrypoints_step_through_their_own_source" \
+	"must stop at a refusal that NAMES the" \
+	'old = """        self.refusals.insert(name.to_string(), needs.to_string());
+        Err(ForeignCallError::NoHandler(name.to_string()))"""
+new = """        self.refusals.insert(name.to_string(), needs.to_string());
+        Ok(ForeignCallResult::default())"""
+assert old in s, "the refusal body has moved"
+s = s.replace(old, new)'
+
+# ARM 5 — the fidelity classification stops distinguishing: a public storage read of a slot
+# nothing wrote is reported as `Faithful` rather than `DebugLocal`. Every step still
+# happens and every count above is unchanged; only the fidelity assertion notices that the
+# debugger has started calling an invented value a real one.
+mutate_in "fidelity-collapses" "${ORACLES}" "noir_wasm" \
+	"compile_vfs::tests::simpletoken_public_entrypoints_step_through_their_own_source" \
+	"simpletoken_public_entrypoints_step_through_their_own_source" \
+	"MUST be classified debug-local" \
+	'old = "                    None => self.single(name, Fidelity::DebugLocal, FieldElement::zero()),"
+new = "                    None => self.single(name, Fidelity::Faithful, FieldElement::zero()),"
+assert old in s, "the unwritten-slot arm has moved"
+s = s.replace(old, new)'
+
+# ARM 6 — the host is never wired into the executor chain, which is the state this
+# milestone started in. It is mutated where the TRACER consumes the option rather than
+# where `trace_artifact` sets it, because the stepping test passes its own host through
+# `trace_artifact_with_options`; mutating the default would leave that path untouched and
+# the arm would prove nothing.
+mutate_in "host-unwired" "${REPO_ROOT}/tooling/tracer/src/lib.rs" "noir_wasm" \
+	"compile_vfs::tests::simpletoken_public_entrypoints_step_through_their_own_source" \
+	"simpletoken_public_entrypoints_step_through_their_own_source" \
+	"must step substantively through its own source" \
+	'old = "        options.aztec_oracles.clone(),"
+new = "        None,"
+assert old in s, "the tracer no longer threads the oracle host through"
+s = s.replace(old, new)'
+
+# ARM 7 — the truncating half of the i128 defect returns: a value above `i64::MAX` is
+# squeezed into an `i64` instead of being recorded exactly. Nothing panics and no step
+# count changes; the trace just contains a different number than the program computed.
+mutate_in "i64-truncates-again" "${GLUE}" "noir_tracer" \
+	"tracer_glue::field_recording_tests::a_field_above_i64_max_is_not_silently_truncated" \
+	"a_field_above_i64_max_is_not_silently_truncated" \
+	"must not be squeezed into Int" \
+	'old = """        if let Ok(i) = i64::try_from(wide)
+            && (signed || wide >= 0)
+        {
+            return ValueRecord::Int { i, type_id };
+        }"""
+new = """        return ValueRecord::Int { i: wide as i64, type_id };"""
+assert old in s, "the i64 guard has moved"
+s = s.replace(old, new)'
+
+# ARM 8 — the panicking half returns: `to_i128` is reached for a field that does not fit,
+# which is what aborted the trace of every contract that hashes anything.
+mutate_in "i128-panics-again" "${GLUE}" "noir_tracer" \
+	"tracer_glue::field_recording_tests::a_field_wider_than_i128_records_as_a_bigint_rather_than_panicking" \
+	"a_field_wider_than_i128_records_as_a_bigint_rather_than_panicking" \
+	"must not panic" \
+	'old = "    if field.fits_in_i128() {"
+new = "    if true {"
+assert old in s, "the fits_in_i128 guard has moved"
 s = s.replace(old, new)'
 
 assert_true "the tree is restored after the mutation arms" \

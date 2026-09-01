@@ -17,6 +17,7 @@
 //! tool, or a browser-hosted debugger — can depend on this crate with
 //! `default-features = false` and use [`context::DebugContext`] directly.
 
+pub mod aztec_oracles;
 pub mod context;
 pub mod errors;
 pub mod foreign_calls;

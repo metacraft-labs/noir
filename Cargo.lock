@@ -3662,6 +3662,7 @@ dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.2",
  "nargo",
+ "noir_debugger",
  "noir_tracer",
  "noirc_abi",
  "noirc_artifacts",
@@ -3675,6 +3676,7 @@ dependencies = [
 name = "noir_wasm"
 version = "1.0.0-beta.26"
 dependencies = [
+ "acvm",
  "build-data",
  "codetracer_trace_types",
  "console_error_panic_hook",
@@ -3685,6 +3687,8 @@ dependencies = [
  "gloo-utils",
  "js-sys",
  "nargo",
+ "noir_debugger",
+ "noir_tracer",
  "noir_tracer_wasm",
  "noirc_abi",
  "noirc_artifacts",

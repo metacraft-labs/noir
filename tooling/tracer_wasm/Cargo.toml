@@ -15,6 +15,9 @@ crate-type = ["cdylib", "rlib"]
 acvm = { workspace = true, features = ["bn254"] }
 bn254_blackbox_solver.workspace = true
 noir_tracer.workspace = true
+# The AVM oracle host. `default-features = false` keeps the repl/dap front-ends (and their
+# HTTP resolver) out of a module that must build for `wasm32-unknown-unknown`.
+noir_debugger = { workspace = true, default-features = false }
 noirc_abi.workspace = true
 noirc_artifacts.workspace = true
 nargo.workspace = true

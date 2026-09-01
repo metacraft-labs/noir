@@ -98,17 +98,32 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         debug_artifact: &'a DebugArtifact,
         initial_witness: WitnessMap<FieldElement>,
         unconstrained_functions: &'a [BrilligBytecode<FieldElement>],
+        aztec_oracles: Option<noir_debugger::aztec_oracles::SharedAvmOracleHost>,
     ) -> Self {
         let print_output = Rc::new(RefCell::new(String::new()));
         let writer: StringWriter = StringWriter::new(Rc::clone(&print_output));
 
-        let foreign_call_executor = Box::new(DefaultDebugForeignCallExecutor::from_artifact(
-            writer,
-            None,
-            debug_artifact,
-            None,
-            String::new(),
-        ));
+        // Two chains rather than one with an always-present layer: without a host, an
+        // `aztec_*` call must stay unhandled exactly as before, so a plain Noir program's
+        // behaviour is untouched by this feature existing.
+        let foreign_call_executor: Box<dyn noir_debugger::foreign_calls::DebugForeignCallExecutor> =
+            match aztec_oracles {
+                Some(host) => Box::new(DefaultDebugForeignCallExecutor::from_artifact_with_layer(
+                    writer,
+                    None,
+                    debug_artifact,
+                    None,
+                    String::new(),
+                    host,
+                )),
+                None => Box::new(DefaultDebugForeignCallExecutor::from_artifact(
+                    writer,
+                    None,
+                    debug_artifact,
+                    None,
+                    String::new(),
+                )),
+            };
         let debug_context = DebugContext::new(
             blackbox_solver,
             circuit,
@@ -345,11 +360,32 @@ pub struct TraceOptions {
     /// The native CLI passes `std::env::current_dir().ok()`, reproducing the
     /// previous behaviour exactly.
     pub workdir: Option<PathBuf>,
+
+    /// A host for Aztec's **AVM public-execution** oracles, or `None` to leave every
+    /// `aztec_*` foreign call unhandled as before.
+    ///
+    /// Supplying one is what lets an Aztec contract's public entrypoint be stepped:
+    /// without it, execution stops at the first oracle having emitted only the tracer's
+    /// entry step, and — because `trace_circuit` logs an unhandled foreign call and
+    /// *breaks out of the loop returning `Ok`* — the caller receives a perfectly
+    /// successful trace containing one step. Handing the host back afterwards is
+    /// deliberate: see [`noir_debugger::aztec_oracles::Fidelity`], because some of these
+    /// answers are plausible rather than correct and a caller must be able to say which.
+    pub aztec_oracles: Option<noir_debugger::aztec_oracles::SharedAvmOracleHost>,
 }
 
 impl TraceOptions {
     pub fn with_workdir(workdir: Option<PathBuf>) -> Self {
-        Self { workdir }
+        Self { workdir, aztec_oracles: None }
+    }
+
+    /// Serve Aztec's AVM oracles from `host` during this trace.
+    pub fn with_aztec_oracles(
+        mut self,
+        host: noir_debugger::aztec_oracles::SharedAvmOracleHost,
+    ) -> Self {
+        self.aztec_oracles = Some(host);
+        self
     }
 
     /// Apply the workdir stripping this recorder has always applied.
@@ -380,6 +416,7 @@ pub fn trace_circuit<B: BlackBoxFunctionSolver<FieldElement>>(
         debug_artifact,
         initial_witness,
         unconstrained_functions,
+        options.aztec_oracles.clone(),
     );
 
     if tracing_context.debug_context.get_current_debug_location().is_none() {

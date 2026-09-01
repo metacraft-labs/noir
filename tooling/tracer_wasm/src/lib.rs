@@ -95,10 +95,44 @@ pub fn trace_compiled_program(
 ///
 /// `artifact_json` is a `ProgramArtifact` as `nargo compile` writes it.
 /// `inputs` is the text of a `Prover.toml` (or the equivalent JSON).
+/// Aztec's **AVM public-execution** oracles are served by default, because the alternative
+/// is worse than a fabricated value: with no host, an Aztec contract's entrypoint stops at
+/// its first oracle and `trace_circuit` logs the unhandled call, breaks, and returns
+/// **`Ok`** — so the caller gets a successful, one-step trace and no indication that
+/// anything went wrong. Serving the interface cannot regress a non-Aztec program, since an
+/// `aztec_*` foreign call was previously always an error.
+///
+/// What it CAN do is answer with a plausible value instead of a correct one, so every trace
+/// that used the host carries a `⚠ aztec oracle fidelity` event naming the counts and the
+/// oracles answered from the debug-local world-state stand-in. Use
+/// [`trace_artifact_with_options`] to supply a real transaction context.
 pub fn trace_artifact(
     artifact_json: &str,
     inputs: &str,
     inputs_are_json: bool,
+) -> Result<MemoryTrace, TraceError> {
+    let host = noir_debugger::aztec_oracles::SharedAvmOracleHost::default();
+    trace_artifact_with_options(
+        artifact_json,
+        inputs,
+        inputs_are_json,
+        TraceOptions::default().with_aztec_oracles(host),
+    )
+}
+
+/// As [`trace_artifact`], with the trace options supplied by the caller.
+///
+/// This is the entry point for tracing an **Aztec contract**: an Aztec entrypoint calls an
+/// oracle within a few opcodes of entry, and with no host for it the trace comes back
+/// `Ok` carrying a single step. Pass
+/// `TraceOptions::default().with_aztec_oracles(host)` to serve the AVM oracle interface,
+/// then read the host afterwards to see which answers were real — see
+/// [`noir_debugger::aztec_oracles::Fidelity`].
+pub fn trace_artifact_with_options(
+    artifact_json: &str,
+    inputs: &str,
+    inputs_are_json: bool,
+    options: TraceOptions,
 ) -> Result<MemoryTrace, TraceError> {
     let artifact: ProgramArtifact =
         serde_json::from_str(artifact_json).map_err(|e| TraceError::Artifact(e.to_string()))?;
@@ -111,10 +145,46 @@ pub fn trace_artifact(
     let mut sink = MemorySink::new();
     // No workdir: there is no process working directory to strip against, so
     // paths are registered exactly as the compiler recorded them.
-    let options = TraceOptions::default();
 
     noir_tracer::tracer_glue::begin_trace(&mut sink, "", "trace", None);
     trace_compiled_program(&program, &input_map, &options, &mut sink)?;
+
+    // Name the fabrication IN THE PRODUCT, not only in a report. A debugger that answers an
+    // oracle with a plausible value and says nothing teaches its user something false about
+    // their program; this puts the count and the specific oracles into the trace the user
+    // opens. Emitted before `finish_trace` so it lands inside the recorded event stream.
+    if let Some(host) = &options.aztec_oracles {
+        use noir_debugger::aztec_oracles::Fidelity;
+        let host = host.borrow();
+        if !host.answers.is_empty() {
+            let counts = host.fidelity_counts();
+            let debug_local: Vec<String> = host
+                .answered_names()
+                .into_iter()
+                .filter(|(_, f)| *f == Fidelity::DebugLocal)
+                .map(|(n, _)| n)
+                .collect();
+            let notice = format!(
+                "⚠ aztec oracle fidelity: {} answers — {} faithful, {} from the declared \
+                 transaction context, {} from the debug-local world-state stand-in. \
+                 Values derived from [{}] are PLAUSIBLE, NOT CORRECT: a real node would \
+                 answer them from the public data and nullifier trees, which this session \
+                 does not have.",
+                host.answers.len(),
+                counts.get(&Fidelity::Faithful).copied().unwrap_or(0),
+                counts.get(&Fidelity::Environment).copied().unwrap_or(0),
+                counts.get(&Fidelity::DebugLocal).copied().unwrap_or(0),
+                debug_local.join(", ")
+            );
+            noir_tracer::TraceSink::register_special_event(
+                &mut sink,
+                codetracer_trace_types::EventLogKind::Write,
+                "aztec-oracle-fidelity",
+                &notice,
+            );
+        }
+    }
+
     noir_tracer::tracer_glue::finish_trace(&mut sink)
         .map_err(|e| TraceError::Execution(e.to_string()))?;
 
