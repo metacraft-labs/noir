@@ -38,18 +38,70 @@ pub struct VfsRequest {
     /// The directory holding the entry package's `Nargo.toml`.
     #[serde(default)]
     pub package_dir: String,
-    /// `resolve`, `program`, `contract` or `debug`. Defaults to `program`.
+    /// `resolve`, `program`, `contract`, `debug` or `contract-debug`. Defaults to `program`.
     ///
-    /// `debug` is the debugging compile path — source-level instrumentation and
-    /// `force_brillig` — and it is the ONLY mode whose artifact a tracer can consume.
-    /// A `program` artifact traces to a single event and no steps, which is a green
-    /// answer to the wrong question; see `vfs::context_for`.
+    /// The two things a mode picks are INDEPENDENT: *which artifact* (a program via
+    /// `compile_main`, or a contract via `compile_contract`) and *whether it is
+    /// instrumented* (source-level instrumentation plus `force_brillig`). See [`Mode`],
+    /// which is that pair, and [`Mode::parse`], which is the whole of the mapping.
+    ///
+    /// Instrumentation is what makes an artifact traceable at all: an uninstrumented one
+    /// traces to a single event and no steps, which is a green answer to the wrong
+    /// question; see `vfs::context_for`. So `contract-debug` is the mode a host asks for
+    /// when it wants to STEP THROUGH a contract — and before it existed there was no such
+    /// mode, because `debug` meant `compile_main` and a contract crate has no `main`.
     #[serde(default = "default_mode")]
     pub mode: String,
 }
 
 fn default_mode() -> String {
     "program".to_string()
+}
+
+/// What a mode actually selects, which is a PAIR rather than a choice from a list.
+///
+/// `vfs::compile_resolved(plan, files, as_contract, for_debugging)` has always taken these
+/// two independently — `as_contract` picks `compile_contract` over `compile_main`, and
+/// `for_debugging` picks the instrumented path — and the four combinations are all
+/// meaningful. This type exists because the dispatcher used to derive them as
+/// `mode == "contract"` and `mode == "debug"`, two booleans read off one string, which
+/// made them mutually exclusive by construction: `as_contract && for_debugging` was
+/// unreachable, so a contract could not be compiled in a form a tracer can step. Not in
+/// one compile and not in two — `debug` was `compile_main`, and a contract crate has no
+/// `main`, so "compile it twice" was never a workaround either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Mode {
+    /// `compile_contract` rather than `compile_main`.
+    pub(crate) as_contract: bool,
+    /// The instrumented, `force_brillig` path — the one whose artifact a tracer can step.
+    pub(crate) for_debugging: bool,
+    /// Resolve only: produce the plan and stop before compiling.
+    pub(crate) resolve_only: bool,
+}
+
+/// Every mode this dispatcher accepts, in the order a host sees them in a refusal.
+pub(crate) const KNOWN_MODES: [&str; 5] = ["resolve", "program", "contract", "debug", "contract-debug"];
+
+impl Mode {
+    /// The whole mapping from mode string to the pair, and the only place it lives.
+    ///
+    /// `None` is an UNKNOWN mode, and the caller must refuse it. It must not fall back to
+    /// `program`: a host that asked for `contract-debug` before that mode existed got a
+    /// `program` compile of a contract crate, which fails deep in the frontend with
+    /// "cannot compile crate into a program as it does not contain a `main` function" and
+    /// a diagnostic positioned in `std/aes128.nr` — a confident answer to a question
+    /// nobody asked, and indistinguishable from a real attempt that happened to fail.
+    pub(crate) fn parse(mode: &str) -> Option<Mode> {
+        let (as_contract, for_debugging, resolve_only) = match mode {
+            "resolve" => (false, false, true),
+            "program" => (false, false, false),
+            "contract" => (true, false, false),
+            "debug" => (false, true, false),
+            "contract-debug" => (true, true, false),
+            _ => return None,
+        };
+        Some(Mode { as_contract, for_debugging, resolve_only })
+    }
 }
 
 /// What it gets back. One shape for both outcomes, so a host branches on `ok`.
@@ -109,6 +161,28 @@ fn to_tree(files: &BTreeMap<String, String>) -> BTreeMap<PathBuf, String> {
 
 /// Resolve and (optionally) compile. The one code path both hosts use.
 pub fn run_request(request: &VfsRequest) -> VfsResponse {
+    // The mode is decided BEFORE any work, so an unknown one costs a resolve rather than a
+    // whole compile, and is reported as what it is.
+    let Some(mode) = Mode::parse(&request.mode) else {
+        return VfsResponse {
+            ok: false,
+            stage: Some("request".to_string()),
+            kind: Some("unknown-mode".to_string()),
+            message: Some(format!(
+                "`{}` is not a mode. The modes are: {}.",
+                request.mode,
+                KNOWN_MODES.join(", ")
+            )),
+            manifest: None,
+            line: None,
+            column: None,
+            plan: None,
+            diagnostics: Vec::new(),
+            warnings: Vec::new(),
+            artifact: None,
+        };
+    };
+
     let tree = to_tree(&request.files);
 
     let plan = match resolve_vfs(&tree, &request.package_dir) {
@@ -116,7 +190,7 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
         Err(err) => return VfsResponse::refused("resolve", &err),
     };
 
-    if request.mode == "resolve" {
+    if mode.resolve_only {
         return VfsResponse {
             ok: true,
             stage: None,
@@ -132,14 +206,12 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
         };
     }
 
-    let as_contract = request.mode == "contract";
-    // `debug` is the mode a tracer host asks for. It is a separate mode rather than a
-    // flag on `program` because the instrumented program is a DIFFERENT program — the
-    // instrumenter rewrites the AST and `force_brillig` changes what is generated — and
-    // a host that got one when it asked for the other would be shipping a circuit it
-    // never meant to.
-    let for_debugging = request.mode == "debug";
-    match compile_resolved(&plan, &tree, as_contract, for_debugging) {
+    // Instrumentation stays a property a mode names explicitly rather than a flag applied
+    // on the way past: the instrumented program is a DIFFERENT program — the instrumenter
+    // rewrites the AST and `force_brillig` changes what is generated — and a host that got
+    // one when it asked for the other would be shipping a circuit it never meant to. What
+    // changed is only that it is now independent of WHICH artifact is being built.
+    match compile_resolved(&plan, &tree, mode.as_contract, mode.for_debugging) {
         Ok((compiled, warnings)) => {
             let artifact = match compiled {
                 CompiledFromVfs::Program(program) => serde_json::to_value(&*program).ok(),
@@ -437,5 +509,658 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["ok"], serde_json::Value::Bool(false));
         assert_eq!(parsed["kind"], "bad-request");
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The mode table, and the combination that used to be unreachable
+    // -----------------------------------------------------------------------------------
+
+    /// The pair each mode selects, spelled out. This is the regression test for the
+    /// defect itself: `as_contract` and `for_debugging` came from `mode == "contract"`
+    /// and `mode == "debug"`, so no input could set both.
+    #[test]
+    fn every_mode_maps_to_its_pair_and_contract_debug_sets_both() {
+        let expected: [(&str, bool, bool, bool); 5] = [
+            // mode,             as_contract, for_debugging, resolve_only
+            ("resolve", false, false, true),
+            ("program", false, false, false),
+            ("contract", true, false, false),
+            ("debug", false, true, false),
+            ("contract-debug", true, true, false),
+        ];
+        // The count is asserted, so a table that lost a row cannot pass vacuously, and a
+        // mode added without a row here is a failure rather than a silent gap.
+        assert_eq!(
+            expected.len(),
+            KNOWN_MODES.len(),
+            "every known mode needs a row in this table; KNOWN_MODES is {KNOWN_MODES:?}"
+        );
+
+        let mut checked = 0;
+        for (name, as_contract, for_debugging, resolve_only) in expected {
+            assert!(
+                KNOWN_MODES.contains(&name),
+                "`{name}` must be advertised in KNOWN_MODES, since a refusal lists them"
+            );
+            let mode = Mode::parse(name).unwrap_or_else(|| panic!("`{name}` must parse"));
+            assert_eq!(
+                (mode.as_contract, mode.for_debugging, mode.resolve_only),
+                (as_contract, for_debugging, resolve_only),
+                "`{name}` selects the wrong pair"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 5, "all five modes were checked");
+
+        // The point of the whole change, as a standalone claim: the two booleans are
+        // independently settable, so all four compile combinations are reachable.
+        let reachable: std::collections::BTreeSet<(bool, bool)> = KNOWN_MODES
+            .iter()
+            .filter_map(|m| Mode::parse(m))
+            .filter(|m| !m.resolve_only)
+            .map(|m| (m.as_contract, m.for_debugging))
+            .collect();
+        assert_eq!(
+            reachable.len(),
+            4,
+            "all four (as_contract, for_debugging) combinations must be reachable; \
+             reachable was {reachable:?}"
+        );
+        assert!(
+            reachable.contains(&(true, true)),
+            "…and the one that matters is a contract compiled for debugging"
+        );
+    }
+
+    /// An unknown mode is REFUSED and named, rather than quietly compiled as a `program`.
+    #[test]
+    fn an_unknown_mode_is_refused_and_named_rather_than_treated_as_a_program() {
+        let response = run_request(&request("contractdebug", &[]));
+        assert!(!response.ok, "an unknown mode is not a successful compile");
+        assert_eq!(response.stage.as_deref(), Some("request"));
+        assert_eq!(response.kind.as_deref(), Some("unknown-mode"));
+
+        let message = response.message.expect("a refusal says something");
+        assert!(
+            message.contains("`contractdebug`"),
+            "the refusal names the mode it was given; got {message:?}"
+        );
+        // Every known mode is offered, so a host that guessed wrong is told what to ask
+        // for. The count is asserted so "all of an empty list appear" cannot pass.
+        let offered = KNOWN_MODES.iter().filter(|m| message.contains(**m)).count();
+        assert_eq!(
+            offered,
+            KNOWN_MODES.len(),
+            "the refusal lists every mode; got {message:?}"
+        );
+
+        // The old behaviour, named so it cannot come back: it fell through to `program`,
+        // which failed inside the frontend and reported a diagnostic against a stdlib
+        // file the caller never wrote.
+        assert!(
+            response.diagnostics.is_empty(),
+            "an unknown mode is refused BEFORE compiling, so there is nothing to \
+             diagnose; got {:?}",
+            response.diagnostics.iter().map(|d| (&d.file, &d.message)).collect::<Vec<_>>()
+        );
+        assert!(response.artifact.is_none(), "and no artifact is produced");
+        assert!(
+            response.plan.is_none(),
+            "the mode is checked before any work, so not even a plan is built"
+        );
+    }
+
+    /// The empty mode is a mode nobody asked for, and gets the same treatment.
+    #[test]
+    fn the_empty_mode_is_also_refused() {
+        let response = run_request(&request("", &[]));
+        assert!(!response.ok);
+        assert_eq!(response.kind.as_deref(), Some("unknown-mode"));
+    }
+
+    /// An absent `mode` still defaults to `program`, which the default must keep doing.
+    #[test]
+    fn an_absent_mode_still_defaults_to_program() {
+        let json = serde_json::to_string(&serde_json::json!({
+            "files": request("program", &[]).files,
+            "package_dir": "app",
+        }))
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&run_request_json(&json)).unwrap();
+        assert_eq!(parsed["ok"], serde_json::Value::Bool(true), "{parsed}");
+        assert!(parsed["artifact"]["bytecode"].is_string(), "a program artifact came back");
+    }
+
+    // -----------------------------------------------------------------------------------
+    // A contract, compiled for debugging, and actually stepped
+    // -----------------------------------------------------------------------------------
+
+    const CONTRACT_MANIFEST: &str = "[package]\nname = \"counter\"\ntype = \"contract\"\n";
+
+    /// The contract source the trace below steps through. `bump` has real locals, so
+    /// "did the tracer see source-level steps" has something to be true of.
+    const CONTRACT_SOURCE: &str = "contract Counter {\n\
+         \x20   fn triple(x: Field) -> pub Field { x + x + x }\n\
+         \x20   fn bump(x: Field) -> pub Field {\n\
+         \x20       let a = x + 1;\n\
+         \x20       let b = a + a;\n\
+         \x20       let c = b * 2;\n\
+         \x20       let d = c - 3;\n\
+         \x20       d\n\
+         \x20   }\n\
+         }\n";
+
+    fn contract_request(mode: &str) -> VfsRequest {
+        let mut files: BTreeMap<String, String> = BTreeMap::new();
+        files.insert("ctr/Nargo.toml".into(), CONTRACT_MANIFEST.into());
+        files.insert("ctr/src/main.nr".into(), CONTRACT_SOURCE.into());
+        VfsRequest { files, package_dir: "ctr".into(), mode: mode.into() }
+    }
+
+    /// `contract-debug` reaches the compiler and comes back with a contract artifact.
+    #[test]
+    fn contract_debug_mode_produces_a_contract_artifact() {
+        let response = run_request(&contract_request("contract-debug"));
+        assert!(response.ok, "contract-debug must compile; got {:?}", response.message);
+        let artifact = response.artifact.expect("an artifact comes back");
+        assert_eq!(artifact["name"], "Counter", "it is a CONTRACT artifact, which names itself");
+        let functions = artifact["functions"].as_array().expect("a contract has functions");
+        assert_eq!(
+            functions.len(),
+            2,
+            "the fixture's two functions; got {:?}",
+            functions.iter().map(|f| &f["name"]).collect::<Vec<_>>()
+        );
+    }
+
+    /// The premise of everything above, asserted so it cannot quietly stop holding:
+    /// `debug` alone CANNOT compile a contract, because it is `compile_main`.
+    ///
+    /// This is why "compile it twice, once each way" was never a workaround.
+    #[test]
+    fn debug_mode_alone_still_cannot_compile_a_contract() {
+        let response = run_request(&contract_request("debug"));
+        assert!(!response.ok, "a contract crate has no `main`, so `debug` must fail");
+        assert_eq!(response.stage.as_deref(), Some("compile"));
+        assert!(
+            response.diagnostics.iter().any(|d| d.message.contains("main")),
+            "…and it fails for want of a `main`; got {:?}",
+            response.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// THE ACCEPTANCE, in miniature: compile a contract for debugging, hand one of its
+    /// functions to the real tracer, and assert the STEP COUNT.
+    ///
+    /// Reading the source is not enough to know this works. `instrument_debug` and
+    /// `force_brillig` are compile options whose effect is on the artifact, and the
+    /// failure this guards against is one that has already happened in this campaign: an
+    /// uninstrumented artifact traces to ONE event and ZERO steps while the compiler and
+    /// the tracer both report success. "A trace came back" is therefore not the
+    /// assertion; the number of source-level steps in it is.
+    #[test]
+    fn a_contract_compiled_for_debugging_traces_with_source_level_steps() {
+        use codetracer_trace_types::TraceLowLevelEvent;
+        use noirc_artifacts::contract::ContractArtifact;
+        use noirc_artifacts::program::ProgramArtifact;
+
+        let steps_for = |mode: &str| -> (usize, usize) {
+            let response = run_request(&contract_request(mode));
+            assert!(response.ok, "`{mode}` must compile; got {:?}", response.message);
+            let value = response.artifact.expect("an artifact comes back");
+            let contract: ContractArtifact =
+                serde_json::from_value(value).expect("it deserializes as a ContractArtifact");
+
+            // A contract is many programs; the tracer takes one. This conversion is
+            // upstream's own (`function_as_compiled_program`), not something invented
+            // here to make a number appear.
+            let compiled = contract
+                .function_as_compiled_program("bump")
+                .expect("the contract exposes `bump`");
+            let artifact_json = serde_json::to_string(&ProgramArtifact::from(compiled))
+                .expect("a ProgramArtifact serializes");
+
+            let trace = noir_tracer_wasm::trace_artifact(&artifact_json, "x = \"7\"\n", false)
+                .unwrap_or_else(|e| panic!("`{mode}` must trace: {e}"));
+
+            let steps = trace
+                .events
+                .iter()
+                .filter(|e| matches!(e, TraceLowLevelEvent::Step(_)))
+                .count();
+            (steps, trace.events.len())
+        };
+
+        let (debug_steps, debug_events) = steps_for("contract-debug");
+
+        // The count itself, asserted. The threshold is well above the "one event, no
+        // steps" signature of an uninstrumented artifact and above any incidental
+        // handful, so it cannot be met by an artifact that merely executed.
+        assert!(
+            debug_steps >= 8,
+            "a contract compiled for debugging must trace to a substantive number of \
+             source-level steps; got {debug_steps} steps in {debug_events} events. \
+             Zero or one here is the uninstrumented-artifact signature."
+        );
+        println!(
+            "contract-debug: {debug_steps} source-level steps in {debug_events} events"
+        );
+
+        // The control, and the reason the threshold means anything: the SAME contract,
+        // the SAME function, compiled without instrumentation, traces to essentially
+        // nothing. Without this arm a tracer that emitted a step per opcode would pass
+        // the assertion above while telling a user nothing about their source.
+        let (plain_steps, plain_events) = steps_for("contract");
+        assert!(
+            plain_steps <= 1,
+            "the uninstrumented contract must NOT produce source-level steps; got \
+             {plain_steps} steps in {plain_events} events"
+        );
+        assert!(
+            debug_steps > plain_steps * 4 + 4,
+            "instrumentation is what produces the steps: contract-debug gave \
+             {debug_steps} and contract gave {plain_steps}"
+        );
+        println!("contract (uninstrumented control): {plain_steps} steps in {plain_events} events");
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The same claim, over the real Aztec tree
+    //
+    // Both tests below are `#[ignore]` because they need a vendored `aztec-nr` closure
+    // that is 4.3 MB of sources and is generated rather than committed. They are NOT
+    // skipped quietly: `verification/aztec_contract_is_steppable.sh` runs them with
+    // `--ignored` and asserts the harness reported the expected number of PASSED tests,
+    // so "it was ignored" cannot be mistaken for "it passed".
+    //
+    // `AZTEC_VFS_JSON` is a `{path: contents}` object as `tools/vendor_noir_tree.py`
+    // writes it; `AZTEC_VFS_PACKAGE_DIR` is the entry package's directory in that tree.
+    // -----------------------------------------------------------------------------------
+
+    /// Load the vendored tree, asserting it is the real thing rather than a stub — a step
+    /// count over a two-file fixture calling itself "Aztec" would prove nothing.
+    #[cfg(test)]
+    fn vendored_aztec_tree() -> (BTreeMap<String, String>, String) {
+        let path = std::env::var("AZTEC_VFS_JSON").expect(
+            "AZTEC_VFS_JSON must point at a vendored VFS; these tests are driven by \
+             verification/aztec_contract_is_steppable.sh, not run bare",
+        );
+        let package_dir =
+            std::env::var("AZTEC_VFS_PACKAGE_DIR").unwrap_or_else(|_| "contract".to_string());
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("could not read the vendored VFS at {path}: {e}"));
+        let files: BTreeMap<String, String> =
+            serde_json::from_str(&raw).expect("the vendored VFS is a {path: contents} object");
+
+        assert!(
+            files.len() > 300,
+            "the vendored tree must be the real aztec-nr closure; got {} files",
+            files.len()
+        );
+        let manifests = files.keys().filter(|p| p.ends_with("Nargo.toml")).count();
+        assert!(manifests >= 8, "the closure spans the aztec-nr packages; got {manifests}");
+        assert!(
+            files.contains_key(&format!("{package_dir}/Nargo.toml")),
+            "the entry package's manifest must be in the tree"
+        );
+        assert!(
+            !raw.contains("git = \""),
+            "a vendored tree has no `git` dependencies left; the compiler refuses those"
+        );
+        (files, package_dir)
+    }
+
+    /// A real Aztec contract compiles in contract+debug form, and the artifact it produces
+    /// is genuinely instrumented.
+    ///
+    /// This is the half that was previously UNREACHABLE: `debug` meant `compile_main`, and
+    /// an Aztec contract crate has no `main`, so no mode could produce this artifact.
+    #[test]
+    #[ignore = "needs a vendored aztec-nr tree; see verification/aztec_contract_is_steppable.sh"]
+    fn a_real_aztec_contract_compiles_for_debugging_and_is_instrumented() {
+        use noirc_artifacts::contract::ContractArtifact;
+
+        let (files, package_dir) = vendored_aztec_tree();
+
+        // The premise, asserted so this cannot go vacuous: `debug` alone still cannot do
+        // this. If someone makes it work, this arm must be rewritten rather than quietly
+        // keep passing for a reason that no longer holds.
+        let as_program = run_request(&VfsRequest {
+            files: files.clone(),
+            package_dir: package_dir.clone(),
+            mode: "debug".into(),
+        });
+        assert!(!as_program.ok, "an Aztec contract has no `main`, so `debug` must still fail");
+        assert!(
+            as_program.diagnostics.iter().any(|d| d.message.contains("main")),
+            "…and for want of a `main`; got {:?}",
+            as_program.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+
+        let response =
+            run_request(&VfsRequest { files, package_dir, mode: "contract-debug".into() });
+        assert!(
+            response.ok,
+            "the Aztec contract must compile in contract+debug form; got {:?} / {:?}",
+            response.message,
+            response.diagnostics.iter().take(3).map(|d| (&d.file, &d.message)).collect::<Vec<_>>()
+        );
+
+        let contract: ContractArtifact =
+            serde_json::from_value(response.artifact.expect("an artifact comes back"))
+                .expect("it deserializes as a ContractArtifact");
+        assert_eq!(contract.name, "SimpleToken");
+        assert_eq!(
+            contract.functions.len(),
+            27,
+            "SimpleToken's full function set; got {:?}",
+            contract.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+
+        // Instrumentation, counted rather than sampled.
+        let instrumented = contract
+            .functions
+            .iter()
+            .filter(|f| f.debug_symbols.debug_infos.iter().any(|d| !d.variables.is_empty()))
+            .count();
+        assert!(
+            instrumented >= 25,
+            "the contract's functions carry source-level variables; {instrumented} of {} did",
+            contract.functions.len()
+        );
+
+        // `force_brillig` took effect on every function — the tracer steps unconstrained
+        // bytecode, so this is what makes the artifact steppable in principle.
+        let with_brillig =
+            contract.functions.iter().filter(|f| !f.bytecode.unconstrained_functions.is_empty()).count();
+        assert_eq!(
+            with_brillig,
+            contract.functions.len(),
+            "every function carries unconstrained bytecode under force_brillig"
+        );
+
+        // THE DIRECT ANSWER to "is this tracer-consumable?": the debug info maps brillig
+        // opcodes to source locations, in quantity. An uninstrumented artifact has none,
+        // which is why it traces to one event and no steps.
+        let located: usize = contract
+            .functions
+            .iter()
+            .flat_map(|f| f.debug_symbols.debug_infos.iter())
+            .flat_map(|d| d.brillig_locations.values())
+            .map(|inner| inner.len())
+            .sum();
+        println!(
+            "SimpleToken: {} functions, {instrumented} instrumented, {located} located brillig opcodes",
+            contract.functions.len()
+        );
+        assert!(
+            located > 10_000,
+            "the artifact must map brillig opcodes to source locations in quantity; \
+             got {located}. Near-zero here is the uninstrumented signature."
+        );
+    }
+
+    /// A contract compiled against the real vendored `aztec-nr` closure is STEPPED, and
+    /// the steps land in the contract's own source.
+    ///
+    /// Why this contract and not `SimpleToken`'s own entrypoints: every `#[aztec]`
+    /// entrypoint begins by calling an AVM oracle, and the tracer's
+    /// `DefaultDebugForeignCallExecutor` has no host for Aztec's oracles, so execution
+    /// halts at the first one having emitted only the entry step. That is a REAL and
+    /// separate limitation — an oracle host, not a compiler mode — and it is asserted as
+    /// such in `the_aztec_entrypoints_halt_at_the_first_oracle` below rather than left as
+    /// a disappointing number here.
+    ///
+    /// What this arm establishes is the thing the mode fix is responsible for: a
+    /// `type = "contract"` package, resolved across the same 420-file Aztec dependency
+    /// closure and compiled through `compile_contract` with instrumentation, executes and
+    /// produces source-level steps in the contract's own file.
+    #[test]
+    #[ignore = "needs a vendored aztec-nr tree; see verification/aztec_contract_is_steppable.sh"]
+    fn a_contract_on_the_real_aztec_tree_steps_through_its_own_source() {
+        use codetracer_trace_types::TraceLowLevelEvent;
+        use noirc_artifacts::contract::ContractArtifact;
+        use noirc_artifacts::program::ProgramArtifact;
+
+        let (mut files, _) = vendored_aztec_tree();
+
+        // A contract package added to the SAME tree, depending on two packages that are
+        // really in the vendored Aztec closure — `types` is aztec's `protocol_types` and
+        // `poseidon` is the git dependency the vendoring had to materialise. So the
+        // resolve walks the real graph, not a toy one.
+        assert!(
+            files.contains_key("vendor/types/Nargo.toml") && files.contains_key("vendor/poseidon/Nargo.toml"),
+            "this arm depends on the vendored `types` and `poseidon` packages being present"
+        );
+        files.insert(
+            "stepping/Nargo.toml".into(),
+            "[package]\nname = \"stepping\"\ntype = \"contract\"\n\n[dependencies]\n\
+             types = { path = \"../vendor/types\" }\n\
+             poseidon = { path = \"../vendor/poseidon\" }\n"
+                .into(),
+        );
+        files.insert(
+            "stepping/src/main.nr".into(),
+            "use dep::types::address::AztecAddress;\n\
+             use dep::types::traits::{FromField, ToField};\n\
+             \n\
+             contract Stepping {\n\
+             \x20   use crate::AztecAddress;\n\
+             \x20   use crate::{FromField, ToField};\n\
+             \n\
+             \x20   // Real `protocol_types` code, on values small enough that the tracer\n\
+             \x20   // can record them: `noir_tracer` panics recording a field element\n\
+             \x20   // wider than i128, which a Poseidon digest always is.\n\
+             \x20   fn digest(owner: Field, amount: Field) -> pub Field {\n\
+             \x20       let address = AztecAddress::from_field(owner);\n\
+             \x20       let base = address.to_field();\n\
+             \x20       let scaled = amount * 3;\n\
+             \x20       let mixed = base + scaled;\n\
+             \x20       let doubled = mixed + mixed;\n\
+             \x20       let shifted = doubled + 5;\n\
+             \x20       let folded = shifted - base;\n\
+             \x20       folded\n\
+             \x20   }\n\
+             }\n"
+                .into(),
+        );
+
+        let response = run_request(&VfsRequest {
+            files,
+            package_dir: "stepping".into(),
+            mode: "contract-debug".into(),
+        });
+        assert!(
+            response.ok,
+            "the contract must compile against the real aztec tree; got {:?} / {:?}",
+            response.message,
+            response.diagnostics.iter().take(5).map(|d| (&d.file, &d.message)).collect::<Vec<_>>()
+        );
+
+        // The resolve really did span the Aztec closure, asserted rather than assumed.
+        let plan = response.plan.as_ref().expect("a plan comes back");
+        assert!(
+            plan.packages.len() >= 5,
+            "the contract resolves across the vendored Aztec packages; got {}",
+            plan.packages.len()
+        );
+
+        let contract: ContractArtifact =
+            serde_json::from_value(response.artifact.expect("an artifact comes back"))
+                .expect("it deserializes as a ContractArtifact");
+        assert_eq!(contract.name, "Stepping");
+        assert_eq!(contract.functions.len(), 1, "the contract has one entrypoint");
+
+        let compiled = contract
+            .function_as_compiled_program("digest")
+            .expect("the contract exposes `digest`");
+        let artifact_json =
+            serde_json::to_string(&ProgramArtifact::from(compiled)).expect("serializes");
+        let trace = noir_tracer_wasm::trace_artifact(
+            &artifact_json,
+            "{\"owner\":\"11\",\"amount\":\"7\"}",
+            true,
+        )
+        .expect("the contract traces");
+
+        let steps: Vec<_> = trace
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                TraceLowLevelEvent::Step(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        println!(
+            "Stepping::digest on the real aztec tree: {} source-level steps in {} events \
+             across {} packages",
+            steps.len(),
+            trace.events.len(),
+            plan.packages.len()
+        );
+
+        // THE COUNT, ASSERTED. Well above the "one entry step and nothing else" signature
+        // of an artifact that did not execute or was not instrumented.
+        assert!(
+            steps.len() >= 8,
+            "a contract on the real Aztec tree must trace to a substantive number of \
+             source-level steps; got {} steps in {} events. One is the entry step alone.",
+            steps.len(),
+            trace.events.len()
+        );
+
+        // …and they are steps through the CONTRACT'S OWN source, not incidental steps in
+        // a dependency. The count of those is asserted too, so "some step was in the file"
+        // cannot be satisfied by the single entry step.
+        let own: Vec<i64> = steps
+            .iter()
+            .filter(|s| {
+                trace.paths.get(s.path_id.0).is_some_and(|p| {
+                    p.to_string_lossy().as_ref() == "stepping/src/main.nr"
+                })
+            })
+            .map(|s| s.line.0)
+            .collect();
+        assert!(
+            own.len() >= 6,
+            "most steps must be in the contract's own source; {} of {} were. Paths seen: {:?}",
+            own.len(),
+            steps.len(),
+            steps
+                .iter()
+                .filter_map(|s| trace.paths.get(s.path_id.0))
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+
+        // Distinct LINES, which is what "steppable" means to a user: a debugger that
+        // reports the same line eight times has not stepped through anything.
+        let distinct: std::collections::BTreeSet<i64> = own.iter().copied().collect();
+        println!("  {} steps in stepping/src/main.nr over {} distinct lines", own.len(), distinct.len());
+        assert!(
+            distinct.len() >= 5,
+            "the steps must advance through the source; {} distinct lines out of {} steps: {:?}",
+            distinct.len(),
+            own.len(),
+            own
+        );
+    }
+
+    /// The Aztec entrypoints halt at their first oracle, and this pins WHY so the number
+    /// above is not mistaken for a compiler defect.
+    ///
+    /// If an Aztec oracle host lands, this test fails — deliberately. It is a record of a
+    /// present boundary, not a claim that the boundary is correct.
+    #[test]
+    #[ignore = "needs a vendored aztec-nr tree; see verification/aztec_contract_is_steppable.sh"]
+    fn the_aztec_entrypoints_halt_at_the_first_oracle() {
+        use codetracer_trace_types::TraceLowLevelEvent;
+        use noirc_artifacts::contract::ContractArtifact;
+        use noirc_artifacts::program::ProgramArtifact;
+
+        let (files, package_dir) = vendored_aztec_tree();
+        let response =
+            run_request(&VfsRequest { files, package_dir, mode: "contract-debug".into() });
+        assert!(response.ok, "the contract compiles; got {:?}", response.message);
+        let contract: ContractArtifact =
+            serde_json::from_value(response.artifact.expect("an artifact")).expect("deserializes");
+
+        let mut attempted = 0;
+        let mut halted_in_oracle = 0;
+        let mut best = 0usize;
+        for function in &contract.functions {
+            attempted += 1;
+            let compiled = contract.function_as_compiled_program(&function.name).expect("present");
+            let json = serde_json::to_string(&ProgramArtifact::from(compiled)).expect("serializes");
+            let inputs = zeroed_inputs_json(&function.abi);
+            let Ok(trace) = noir_tracer_wasm::trace_artifact(&json, &inputs, true) else {
+                continue;
+            };
+            let steps: Vec<_> = trace
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    TraceLowLevelEvent::Step(s) => Some(s),
+                    _ => None,
+                })
+                .collect();
+            best = best.max(steps.len());
+            // The single step it does emit is the tracer's entry step, and it lands in
+            // aztec-nr's own oracle/dispatch machinery rather than in contract source.
+            if steps.len() == 1
+                && trace.paths.get(steps[0].path_id.0).is_some_and(|p| {
+                    let p = p.to_string_lossy();
+                    p.contains("oracle") || p.contains("dispatch")
+                })
+            {
+                halted_in_oracle += 1;
+            }
+        }
+
+        assert_eq!(attempted, 27, "every function of SimpleToken was attempted");
+        assert_eq!(
+            halted_in_oracle, attempted,
+            "all {attempted} Aztec entrypoints halt at their first oracle having emitted \
+             only the entry step; {halted_in_oracle} did. If this number has DROPPED, an \
+             oracle host has landed and this test should be replaced by a real step-count \
+             assertion over SimpleToken itself."
+        );
+        assert_eq!(
+            best, 1,
+            "…so the best step count over SimpleToken's own entrypoints is the entry step \
+             alone. This is an oracle-host gap, NOT a compilation or instrumentation gap: \
+             `a_real_aztec_contract_compiles_for_debugging_and_is_instrumented` asserts \
+             the artifact carries >10,000 located brillig opcodes."
+        );
+        println!(
+            "SimpleToken: {halted_in_oracle}/{attempted} entrypoints halt at the first \
+             oracle (best step count {best})"
+        );
+    }
+
+    /// An all-zero input map for an ABI, so a function can be executed without
+    /// knowing what its parameters mean.
+    #[cfg(test)]
+    fn zeroed_inputs_json(abi: &noirc_abi::Abi) -> String {
+        use noirc_abi::AbiType;
+        fn zero(t: &AbiType) -> serde_json::Value {
+            match t {
+                AbiType::Field | AbiType::Integer { .. } => serde_json::json!("0"),
+                AbiType::Boolean => serde_json::json!(false),
+                AbiType::String { length } => serde_json::json!("0".repeat(*length as usize)),
+                AbiType::Array { length, typ } => {
+                    serde_json::Value::Array((0..*length).map(|_| zero(typ)).collect())
+                }
+                AbiType::Tuple { fields } => {
+                    serde_json::Value::Array(fields.iter().map(zero).collect())
+                }
+                AbiType::Struct { fields, .. } => serde_json::Value::Object(
+                    fields.iter().map(|(n, t)| (n.clone(), zero(t))).collect(),
+                ),
+            }
+        }
+        let map: serde_json::Map<String, serde_json::Value> =
+            abi.parameters.iter().map(|p| (p.name.clone(), zero(&p.typ))).collect();
+        serde_json::to_string(&serde_json::Value::Object(map)).expect("a JSON input map")
     }
 }
