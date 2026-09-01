@@ -3676,6 +3676,7 @@ name = "noir_wasm"
 version = "1.0.0-beta.26"
 dependencies = [
  "build-data",
+ "codetracer_trace_types",
  "console_error_panic_hook",
  "fm",
  "getrandom 0.2.17",
@@ -3684,6 +3685,8 @@ dependencies = [
  "gloo-utils",
  "js-sys",
  "nargo",
+ "noir_tracer_wasm",
+ "noirc_abi",
  "noirc_artifacts",
  "noirc_driver",
  "noirc_errors",

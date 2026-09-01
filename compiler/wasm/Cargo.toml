@@ -56,3 +56,19 @@ rust-embed = { workspace = true, features = ["debug-embed"] }
 
 [build-dependencies]
 build-data.workspace = true
+
+# A DEV dependency, deliberately: it does not enter the `cdylib` this crate ships, so the
+# deployed module's bytes are unaffected by its presence. It is here because the question
+# "does a contract compiled with `instrument_debug` + `force_brillig` produce an artifact a
+# tracer can actually STEP?" cannot be answered by reading either crate — an uninstrumented
+# artifact traces to one event and zero steps while both modules report success, which is
+# the exact shape of a false pass. So `compile_vfs.rs`'s tests compile a contract here and
+# hand it to the real tracer, and assert the step COUNT.
+[dev-dependencies]
+noir_tracer_wasm.workspace = true
+# The event enum the trace is counted over, so the assertion matches a VARIANT rather
+# than grepping serialized JSON for a substring.
+codetracer_trace_types.workspace = true
+# The ABI is what an all-zero input map is built against, so a contract function can be
+# executed without this test knowing what its parameters mean.
+noirc_abi.workspace = true

@@ -1232,6 +1232,147 @@ mod tests {
         );
     }
 
+    /// A `type = "contract"` package, used by the contract-side debugging tests below.
+    ///
+    /// It is a contract rather than a program on purpose: `compile_main` refuses this
+    /// crate outright ("does not contain a `main` function"), which is precisely why
+    /// `for_debugging` had to become reachable alongside `as_contract` rather than
+    /// instead of it.
+    fn contract_tree() -> BTreeMap<PathBuf, String> {
+        tree(&[
+            ("ctr/Nargo.toml", "[package]\nname = \"counter\"\ntype = \"contract\"\n"),
+            (
+                "ctr/src/main.nr",
+                "contract Counter {\n\
+                 \x20   fn triple(x: Field) -> pub Field { x + x + x }\n\
+                 \x20   fn bump(x: Field) -> pub Field {\n\
+                 \x20       let t = x + x + x;\n\
+                 \x20       let u = t + 1;\n\
+                 \x20       u\n\
+                 \x20   }\n\
+                 }\n",
+            ),
+        ])
+    }
+
+    /// THE COMBINATION THAT DID NOT EXIST: a contract compiled for debugging.
+    ///
+    /// `compile_resolved` always took `as_contract` and `for_debugging` independently;
+    /// what was missing was any caller that set both. This asserts the pair is not merely
+    /// accepted but *effective* — the contract arm produces a contract, AND the
+    /// instrumentation that a tracer needs is actually present in it.
+    ///
+    /// The discriminators are the same pair the program-side test uses, and for the same
+    /// reason: the debug TABLES and the `__debug` crate link are separate switches, so
+    /// either half alone is satisfiable by a build that always instruments or never does.
+    #[test]
+    fn a_contract_compiles_for_debugging_and_an_ordinary_contract_does_not() {
+        let files = contract_tree();
+        let plan = resolve_vfs(&files, "ctr").expect("resolves");
+
+        // The premise, asserted rather than assumed: this crate has no `main`, so the
+        // program arm cannot compile it at all. If someone gives the fixture a `main`
+        // this arm stops testing what it says it tests, and says so.
+        let as_program = compile_resolved(&plan, &files, false, true);
+        let program_err = as_program
+            .err()
+            .expect("a contract crate has no `main`, so the debugging PROGRAM arm must fail");
+        assert!(
+            program_err.iter().any(|d| d.message.contains("main")),
+            "…and it must fail for the reason this whole fix exists — no `main`; got {:?}",
+            program_err.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+
+        let debugging = match compile_resolved(&plan, &files, true, true) {
+            Ok((CompiledFromVfs::Contract(contract), _)) => contract,
+            Ok((CompiledFromVfs::Program(_), _)) => {
+                panic!("as_contract must produce a contract, not a program")
+            }
+            Err(diagnostics) => panic!(
+                "the contract+debug compile must succeed; got {:?}",
+                diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+            ),
+        };
+        let ordinary = match compile_resolved(&plan, &files, true, false) {
+            Ok((CompiledFromVfs::Contract(contract), _)) => contract,
+            other => panic!("the ordinary contract compile must produce a contract: {:?}", other.is_ok()),
+        };
+
+        // The count itself is asserted: "every function is instrumented" over an empty
+        // function list is a vacuous pass, and this fixture has a known number.
+        assert_eq!(
+            debugging.functions.len(),
+            2,
+            "the fixture's contract has two functions; the artifact named {:?}",
+            debugging.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            ordinary.functions.len(),
+            debugging.functions.len(),
+            "instrumentation must not change WHICH functions a contract exposes"
+        );
+
+        let vars = |c: &noirc_artifacts::contract::ContractArtifact| -> usize {
+            c.functions
+                .iter()
+                .flat_map(|f| f.debug_symbols.debug_infos.iter())
+                .map(|d| d.variables.len())
+                .sum()
+        };
+        let fns = |c: &noirc_artifacts::contract::ContractArtifact| -> usize {
+            c.functions
+                .iter()
+                .flat_map(|f| f.debug_symbols.debug_infos.iter())
+                .map(|d| d.functions.len())
+                .sum()
+        };
+
+        let (debug_vars, debug_fns) = (vars(&debugging), fns(&debugging));
+        assert!(
+            debug_vars > 0 && debug_fns > 0,
+            "the contract's debugging compile records source-level variables and \
+             functions; got {debug_vars} variables and {debug_fns} functions. Without \
+             them a tracer consuming this artifact records no steps."
+        );
+        assert_eq!(
+            (vars(&ordinary), fns(&ordinary)),
+            (0, 0),
+            "the ordinary contract compile must NOT instrument"
+        );
+
+        // The independent discriminator: the `__debug` crate is linked into the program,
+        // which is an observation of "built for debugging" that does not depend on which
+        // debug tables were filled.
+        let paths = |c: &noirc_artifacts::contract::ContractArtifact| -> Vec<String> {
+            c.file_map.values().map(|f| f.path.display().to_string()).collect()
+        };
+        let debugging_paths = paths(&debugging);
+        assert!(
+            debugging_paths.iter().any(|p| p.contains("__debug")),
+            "the debugging contract links the __debug crate; file_map was {debugging_paths:?}"
+        );
+        assert!(
+            debugging_paths.iter().any(|p| p == "ctr/src/main.nr"),
+            "and it still names the caller's own VFS path; file_map was {debugging_paths:?}"
+        );
+        assert!(
+            !paths(&ordinary).iter().any(|p| p.contains("__debug")),
+            "the ordinary contract must not link the __debug crate"
+        );
+
+        // `force_brillig` is the other half of the debugging options, and it is what gives
+        // the tracer something to step: the tracer walks unconstrained bytecode. Asserted
+        // per function, with the count asserted beside it so an empty list cannot pass.
+        let unconstrained =
+            debugging.functions.iter().filter(|f| !f.bytecode.unconstrained_functions.is_empty()).count();
+        assert_eq!(
+            unconstrained, 2,
+            "under force_brillig every one of the contract's functions carries \
+             unconstrained bytecode; {unconstrained} of {} did",
+            debugging.functions.len()
+        );
+    }
+
     /// The control: a clean tree reports no diagnostics at all.
     #[test]
     fn a_clean_tree_reports_no_diagnostics() {
