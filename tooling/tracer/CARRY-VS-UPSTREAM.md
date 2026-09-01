@@ -4,6 +4,29 @@
 **Measured:** 2026-08-28, against `noir-lang/noir` `v1.0.0-beta.26` (`3d3a1ce788`), which is
 this branch's merge base with `upstream/master`.
 
+## WHAT IS FORK-LOCAL BY CONSTRUCTION, AND MUST NOT BE FILED UPSTREAM
+
+Recorded here because the natural instinct on finding a defect in this tree is to prepare it for
+upstream, and for two of M38's three changes that instinct is wrong for a reason that is structural
+rather than a judgement call: **the crate they are in does not exist upstream.**
+
+| change | where | upstreamable? |
+|---|---|---|
+| `trace_circuit_with_executor` / `TracingContext::with_executor` — the foreign-call executor seam | `tooling/tracer/src/lib.rs` | **NO.** `tooling/tracer` is 2,490 lines of additive fork code (see the split above). There is nothing upstream for this to be a seam in |
+| the step rule for a program compiled without debug instrumentation | `tooling/tracer/src/lib.rs`, `update_record` | **NO**, same reason: `update_record` is this crate's |
+| the panic on a Brillig function the debug info does not describe | `tooling/debugger/src/context.rs` | **YES, AND IT IS PREPARED.** That crate IS upstream's and the offending line is byte-identical at `noir-lang/noir` `3d3a1ce788` (`v1.0.0-beta.26`). Filed as `codetracer-specs/upstream-bugs/noir-debugger-brillig-locations-unwrap/`, with the reproduction executed in both directions against `3d3a1ce78` itself |
+
+The test that distinguishes them is one command, and it is worth running before preparing anything
+from this tree: `git show <upstream-base>:<path>` — if the file is not there, or the surrounding
+function is not, the change has no upstream to go to.
+
+**A second reason, narrower than the first and worth knowing.** Even where a file IS upstream's, its
+public surface may not be. `noir_debugger` upstream declares `context` and `foreign_calls` as
+PRIVATE modules; this fork makes both `pub` (that is part of the 209 lines above, and `lib.rs`'s own
+doc comment says why). So a reproduction written against this tree can compile here and fail
+upstream with `E0603` — which is exactly what the first draft of the prepared contribution did, and
+why its probe is now an in-crate test.
+
 ## The size of the thing
 
 ```
