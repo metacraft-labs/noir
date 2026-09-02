@@ -38,6 +38,13 @@ gloo-utils.workspace = true
 tracing-subscriber.workspace = true
 tracing-web.workspace = true
 
+# `src/test_vfs.rs` EXECUTES the tests it discovers, and execution needs a blackbox
+# solver. This is the one `nargo test`, the LSP and `stdlib-tests` all pass to
+# `nargo::ops::run_test`, so the pedersen/keccak/ecdsa opcodes a test may reach resolve to
+# the same implementations they do natively — a different solver would be a different
+# verdict for the same program.
+bn254_blackbox_solver.workspace = true
+
 # Cannot use the `rpc` feature because the HTTP dependency wouldn't compile to Wasm.
 # We could use `path` if `rpc` was a default feature, but we made it opt-in so we don't get any problems when publishing the workspace.
 nargo.workspace = true

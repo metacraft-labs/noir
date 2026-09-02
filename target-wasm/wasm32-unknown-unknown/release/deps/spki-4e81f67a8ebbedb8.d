@@ -1,0 +1,12 @@
+/Users/zahary/m/dev/noir-nstest/target-wasm/wasm32-unknown-unknown/release/deps/spki-4e81f67a8ebbedb8.d: /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/lib.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/algorithm.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/error.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/spki.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/traits.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/../README.md
+
+/Users/zahary/m/dev/noir-nstest/target-wasm/wasm32-unknown-unknown/release/deps/libspki-4e81f67a8ebbedb8.rlib: /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/lib.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/algorithm.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/error.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/spki.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/traits.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/../README.md
+
+/Users/zahary/m/dev/noir-nstest/target-wasm/wasm32-unknown-unknown/release/deps/libspki-4e81f67a8ebbedb8.rmeta: /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/lib.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/algorithm.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/error.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/spki.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/traits.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/../README.md
+
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/lib.rs:
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/algorithm.rs:
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/error.rs:
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/spki.rs:
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/traits.rs:
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spki-0.8.0/src/../README.md:

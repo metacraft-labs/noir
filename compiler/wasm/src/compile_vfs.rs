@@ -407,6 +407,42 @@ pub mod abi {
         std::mem::forget(boxed);
         ptr
     }
+
+    /// Run the `#[test]` functions of a virtual filesystem. `(ptr, len)` is a JSON
+    /// [`crate::test_vfs::TestVfsRequest`]; the answer is a JSON
+    /// [`crate::test_vfs::TestVfsResponse`].
+    ///
+    /// IT LIVES IN THIS MODULE, beside `nv_compile_vfs`, on purpose: it shares
+    /// `nv_alloc`, `nv_free` and — the load-bearing one — `nv_result_len`. A second
+    /// allocator or a second length cell would be two ways to read one module's
+    /// memory, and a host that mixed them would read a correct pointer for the
+    /// wrong number of bytes. That is a truncation, which decodes as a JSON syntax
+    /// error and gets reported as "the worker answered something that is not a
+    /// response" — a fault naming the wrong file entirely.
+    ///
+    /// `ok: false` here means the suite could not be RUN. A suite in which every
+    /// test failed answers `ok: true`; see `test_vfs`'s header.
+    ///
+    /// # Safety
+    /// `(ptr, len)` must describe an initialized UTF-8 buffer that stays valid for the
+    /// duration of the call.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn nv_test_vfs(request_ptr: *const u8, request_len: usize) -> *mut u8 {
+        let request = unsafe { std::slice::from_raw_parts(request_ptr, request_len) };
+        let json = match std::str::from_utf8(request) {
+            Ok(json) => crate::test_vfs::run_tests_json(json),
+            Err(_) => "{\"ok\":false,\"stage\":\"request\",\"kind\":\"bad-request\",\
+                 \"message\":\"the request is not valid UTF-8\"}"
+                .to_string(),
+        };
+
+        let bytes = json.into_bytes();
+        RESULT_LEN.with(|c| c.set(bytes.len()));
+        let mut boxed = bytes.into_boxed_slice();
+        let ptr = boxed.as_mut_ptr();
+        std::mem::forget(boxed);
+        ptr
+    }
 }
 
 #[cfg(test)]

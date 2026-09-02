@@ -3675,6 +3675,7 @@ dependencies = [
 name = "noir_wasm"
 version = "1.0.0-beta.26"
 dependencies = [
+ "bn254_blackbox_solver",
  "build-data",
  "codetracer_trace_types",
  "console_error_panic_hook",

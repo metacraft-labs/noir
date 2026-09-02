@@ -1,0 +1,11 @@
+/Users/zahary/m/dev/noir-nstest/target-wasm/wasm32-unknown-unknown/release/deps/codespan-670fe18ab089012b.d: /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/lib.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/file.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/index.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/location.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/span.rs
+
+/Users/zahary/m/dev/noir-nstest/target-wasm/wasm32-unknown-unknown/release/deps/libcodespan-670fe18ab089012b.rlib: /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/lib.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/file.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/index.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/location.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/span.rs
+
+/Users/zahary/m/dev/noir-nstest/target-wasm/wasm32-unknown-unknown/release/deps/libcodespan-670fe18ab089012b.rmeta: /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/lib.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/file.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/index.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/location.rs /Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/span.rs
+
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/lib.rs:
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/file.rs:
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/index.rs:
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/location.rs:
+/Users/zahary/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-0.13.1/src/span.rs:

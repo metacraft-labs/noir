@@ -17,6 +17,7 @@ use tracing_web::MakeWebConsoleWriter;
 mod compile;
 mod compile_new;
 mod compile_vfs;
+mod test_vfs;
 mod errors;
 pub mod vfs;
 
@@ -32,6 +33,11 @@ pub use compile_vfs::{
     VfsRequest, VfsResponse, compile_contract_from_vfs, compile_program_from_vfs, resolve_vfs_plan,
     run_request, run_request_json,
 };
+
+// Running that same package tree's `#[test]` functions, with `nargo`'s own verdicts.
+// See `src/test_vfs.rs` — in particular for why `TestVfsResponse::ok` means "the suite
+// ran" and not "everything passed".
+pub use test_vfs::{TestOutcome, TestVfsRequest, TestVfsResponse, run_tests, run_tests_json};
 
 // The bare `nv_*` C ABI. Re-exported rather than left inside a private module so that
 // `unreachable_pub` is satisfied by the entry points being genuinely reachable, which is
