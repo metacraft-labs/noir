@@ -1,0 +1,5 @@
+cargo:rustc-env=GIT_COMMIT=9c2dfc249c4e0a240642dd6230be0cfd88783df7
+cargo:rustc-env=GIT_DIRTY=true
+cargo:rerun-if-changed=tests
+cargo:rerun-if-changed=ignored-tests.txt
+cargo:rerun-if-changed=/Users/zahary/m/dev/noir-nstest/test_programs

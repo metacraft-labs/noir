@@ -58,13 +58,16 @@ use bn254_blackbox_solver::Bn254BlackBoxSolver;
 use fm::codespan_files::Files;
 use nargo::foreign_calls::DefaultForeignCallBuilder;
 use nargo::ops::{TestStatus, run_test};
-use noirc_driver::{CompileOptions, check_crate};
+use noirc_driver::{CompileOptions, check_crate, compile_no_check};
 use noirc_errors::CustomDiagnostic;
 use noirc_frontend::hir::FunctionNameMatch;
 use noirc_frontend::hir::def_map::TestFunction;
 use serde::{Deserialize, Serialize};
 
-use crate::vfs::{PositionedDiagnostic, VfsError, context_for, position_diagnostics, resolve_vfs};
+use crate::vfs::{
+    PositionedDiagnostic, VfsError, context_for, debugging_compile_options, position_diagnostics,
+    resolve_vfs,
+};
 
 /// What a host asks for.
 ///
@@ -83,6 +86,28 @@ pub struct TestVfsRequest {
     /// is `nargo test` with no arguments.
     #[serde(default)]
     pub tests: Vec<String>,
+    /// One fully-qualified test name to compile as a TRACEABLE entry point.
+    ///
+    /// This is the recording half, and it is a different request from running:
+    /// running answers a verdict, this answers an ARTIFACT — a
+    /// `ProgramArtifact` with the named test as its `main`, compiled through
+    /// the instrumented `force_brillig` path, which is the only shape
+    /// `tooling/tracer_wasm`'s `ct_trace` can step.
+    ///
+    /// WHY IT IS A SEPARATE FIELD AND NOT A MODE ON `tests`. A run and a
+    /// recording want opposite compile options — `nargo test` uses
+    /// `CompileOptions::default()` and a recording needs `instrument_debug` +
+    /// `force_brillig` — so one request that did both would have to pick one,
+    /// and either choice makes the other answer wrong. `vfs::context_for`'s own
+    /// header records what happens when the instrumented path is skipped: the
+    /// trace has one event and no steps, and both wasm modules report `ok` over
+    /// it.
+    ///
+    /// When set, NO TESTS ARE RUN. The caller asks for the verdict and the
+    /// artifact as two dispatches, exactly as Build-then-Run asks for a compile
+    /// and a trace.
+    #[serde(default)]
+    pub record: Option<String>,
 }
 
 /// What one test did.
@@ -164,6 +189,12 @@ pub struct TestVfsResponse {
     pub passed: usize,
     pub failed: usize,
     pub skipped: usize,
+    /// The traceable artifact for `TestVfsRequest.record`, when one was asked
+    /// for. `nargo compile`'s own `ProgramArtifact` shape, so the tracer takes
+    /// it unchanged — it is the same value `nv_compile_vfs` answers in
+    /// `VfsResponse.artifact`, and a host hands it to `ct_trace` the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<serde_json::Value>,
 }
 
 impl TestVfsResponse {
@@ -182,6 +213,7 @@ impl TestVfsResponse {
             passed: 0,
             failed: 0,
             skipped: 0,
+            artifact: None,
         }
     }
 
@@ -226,6 +258,10 @@ fn status_diagnostic(status: &TestStatus) -> Option<CustomDiagnostic> {
 
 /// Resolve, elaborate, discover and run. The one code path every host uses.
 pub fn run_tests(request: &TestVfsRequest) -> TestVfsResponse {
+    if let Some(name) = request.record.as_deref() {
+        return record_test(request, name);
+    }
+
     let tree: BTreeMap<PathBuf, String> =
         request.files.iter().map(|(p, s)| (PathBuf::from(p), s.clone())).collect();
 
@@ -355,6 +391,111 @@ pub fn run_tests(request: &TestVfsRequest) -> TestVfsResponse {
         passed,
         failed,
         skipped,
+        artifact: None,
+    }
+}
+
+/// Compile ONE test function as a traceable entry point.
+///
+/// The recording half of "run this test". `nargo` has no command that does
+/// this — `nargo test` runs and reports, `nargo trace` traces `main` — so this
+/// is the one place in this module that is not a call into `nargo::ops`. It is
+/// still not an invention: it is `vfs::compile_resolved`'s body with
+/// `compile_no_check(test_function.id)` where that has `compile_main(root_id)`,
+/// which is exactly the substitution `nargo::ops::run_test` itself makes one
+/// line before it executes.
+///
+/// `for_debugging: true` and `debugging_compile_options()`, and neither is
+/// optional. `vfs::context_for` records the measurement: an uninstrumented
+/// artifact traces to ONE EVENT AND ZERO STEPS while every module reports `ok`,
+/// which is a green answer to the wrong question and the exact shape a
+/// click-to-replay flow must not produce.
+fn record_test(request: &TestVfsRequest, name: &str) -> TestVfsResponse {
+    let tree: BTreeMap<PathBuf, String> =
+        request.files.iter().map(|(p, s)| (PathBuf::from(p), s.clone())).collect();
+
+    let plan = match resolve_vfs(&tree, &request.package_dir) {
+        Ok(plan) => plan,
+        Err(err) => return TestVfsResponse::resolve_refused(&err),
+    };
+
+    let (mut context, crate_id) = context_for(&plan, &tree, true);
+    let options = debugging_compile_options();
+
+    let warnings = match check_crate(&mut context, crate_id, &options) {
+        Ok(((), warnings)) => position_diagnostics(&warnings, &context.file_manager),
+        Err(errors) => {
+            let diagnostics = position_diagnostics(&errors, &context.file_manager);
+            return TestVfsResponse {
+                diagnostics,
+                ..TestVfsResponse::refused(
+                    "check",
+                    "check-error",
+                    format!("the project did not compile: {} diagnostic(s)", errors.len()),
+                )
+            };
+        }
+    };
+
+    let pattern = FunctionNameMatch::Exact(vec![name.to_string()]);
+    let discovered = context.get_all_test_functions_in_crate_matching(&crate_id, &pattern);
+    let Some((_, test_function)) = discovered.first() else {
+        // NAMED, not "0 tests". A recording asked for one specific test, and
+        // "there is no such test" is a different thing to fix from "the test
+        // failed" or "the project is broken".
+        return TestVfsResponse::refused(
+            "request",
+            "no-such-test",
+            format!("`{name}` is not a test in this package"),
+        );
+    };
+    if test_function.has_arguments {
+        // A fuzzing harness has no single execution to record. `nargo test`
+        // would fuzz it; there is nothing here to hand a tracer, and inventing
+        // an input map would record a run the user never asked for.
+        return TestVfsResponse::refused(
+            "request",
+            "test-takes-arguments",
+            format!(
+                "`{name}` takes arguments, so `nargo test` fuzzes it rather than \
+                 running it once. There is no single execution to record."
+            ),
+        );
+    }
+
+    match compile_no_check(&mut context, &options, test_function.id, None, false) {
+        Ok(program) => {
+            let artifact: noirc_artifacts::program::ProgramArtifact = program.into();
+            TestVfsResponse {
+                ok: true,
+                stage: None,
+                kind: None,
+                message: None,
+                manifest: None,
+                line: None,
+                column: None,
+                diagnostics: Vec::new(),
+                warnings,
+                tests: Vec::new(),
+                passed: 0,
+                failed: 0,
+                skipped: 0,
+                artifact: serde_json::to_value(&artifact).ok(),
+            }
+        }
+        Err(err) => {
+            let diagnostic: CustomDiagnostic = err.into();
+            let diagnostics =
+                position_diagnostics(std::slice::from_ref(&diagnostic), &context.file_manager);
+            TestVfsResponse {
+                diagnostics,
+                ..TestVfsResponse::refused(
+                    "compile",
+                    "compile-error",
+                    format!("`{name}` did not compile for recording"),
+                )
+            }
+        }
     }
 }
 
@@ -413,6 +554,7 @@ mod tests {
             files,
             package_dir: "app".into(),
             tests: Vec::new(),
+            record: None,
         })
     }
 
@@ -582,6 +724,7 @@ mod tests {
             files,
             package_dir: "app".into(),
             tests: vec!["passes".to_string()],
+            record: None,
         });
         assert_eq!(names(&response), vec!["passes".to_string()]);
         assert_eq!(response.passed, 1);
@@ -643,7 +786,12 @@ fn talks() {
         let mut files: BTreeMap<String, String> = BTreeMap::new();
         files.insert("app/src/main.nr".into(), "fn main() {}\n".into());
         let response =
-            run_tests(&TestVfsRequest { files, package_dir: "app".into(), tests: Vec::new() });
+            run_tests(&TestVfsRequest {
+                files,
+                package_dir: "app".into(),
+                tests: Vec::new(),
+                record: None,
+            });
         assert!(!response.ok);
         assert_eq!(response.stage.as_deref(), Some("resolve"));
         assert_eq!(response.kind.as_deref(), Some("missing-manifest"));
@@ -692,6 +840,123 @@ fn takes_an_argument(x: Field) {
         let passes = tests.iter().find(|t| t["name"] == "passes").unwrap();
         assert!(passes.get("message").is_none());
         assert_eq!(passes["should_fail"], serde_json::json!(false));
+    }
+
+    fn record(sources: &[(&str, &str)], name: &str) -> TestVfsResponse {
+        let mut files: BTreeMap<String, String> = BTreeMap::new();
+        files.insert("app/Nargo.toml".into(), MANIFEST.into());
+        for (path, source) in sources {
+            files.insert((*path).into(), (*source).into());
+        }
+        run_tests(&TestVfsRequest {
+            files,
+            package_dir: "app".into(),
+            tests: Vec::new(),
+            record: Some(name.to_string()),
+        })
+    }
+
+    /// A recording is an ARTIFACT and not a verdict, and the artifact has to be
+    /// the INSTRUMENTED one.
+    ///
+    /// The step count is what this asserts on, not the artifact's existence.
+    /// `vfs::context_for`'s header records why: an uninstrumented compile of
+    /// the same test produces an artifact that is present, well-formed, carries
+    /// `debug_symbols`, and traces to one event and zero steps — with every
+    /// module reporting `ok`. A test asserting "we got an artifact" passes on
+    /// exactly that, which is the failure this whole path exists to avoid.
+    #[test]
+    fn a_recorded_test_produces_an_artifact_a_tracer_can_step() {
+        let source = r#"
+fn main() {}
+
+fn double(x: Field) -> Field {
+    x + x
+}
+
+#[test]
+fn records() {
+    let a = double(3);
+    assert(a == 6);
+}
+"#;
+        let response = record(&[("app/src/main.nr", source)], "records");
+        assert!(response.ok, "recording refused: {:?}", response.message);
+        assert!(response.tests.is_empty(), "a recording runs no tests");
+        let artifact = response.artifact.expect("an artifact");
+
+        // THROUGH THE REAL TRACER, in this process. `noir_tracer_wasm` is a dev
+        // dependency of this crate for exactly this — `compile_vfs.rs`'s own
+        // contract test does the same thing for a contract, and its comment
+        // gives the reason: the question "can a tracer actually STEP this?"
+        // cannot be answered by reading either crate.
+        let trace = noir_tracer_wasm::trace_artifact(&artifact.to_string(), "", false)
+            .expect("the tracer accepted the recorded artifact");
+        let steps = trace
+            .events
+            .iter()
+            .filter(|e| matches!(e, codetracer_trace_types::TraceLowLevelEvent::Step(_)))
+            .count();
+        let calls = trace
+            .events
+            .iter()
+            .filter(|e| matches!(e, codetracer_trace_types::TraceLowLevelEvent::Call(_)))
+            .count();
+        assert!(
+            trace.events.len() > 1 && steps > 0 && calls > 0,
+            "ONE-EVENT-ZERO-STEPS: {} events, {steps} steps, {calls} calls — an \
+             uninstrumented compile produces exactly this and reports ok",
+            trace.events.len()
+        );
+    }
+
+    /// A name that is not a test is refused BY NAME, not reported as "no tests".
+    #[test]
+    fn recording_a_test_that_does_not_exist_says_so() {
+        let response = record(&[("app/src/main.nr", FOUR_WAYS)], "no_such_test");
+        assert!(!response.ok);
+        assert_eq!(response.kind.as_deref(), Some("no-such-test"));
+        assert!(response.message.as_deref().unwrap_or("").contains("no_such_test"));
+        assert!(response.artifact.is_none());
+        // CONTROL: a name that IS a test records, so the refusal above is about
+        // the name and not about recording being broken.
+        assert!(record(&[("app/src/main.nr", FOUR_WAYS)], "passes").ok);
+    }
+
+    /// A fuzzing harness has no single execution to record, and says that
+    /// rather than recording an input map nobody asked for.
+    #[test]
+    fn recording_a_fuzzing_harness_is_refused_with_a_reason() {
+        let source = "fn main() {}\n\n#[test]\nfn takes(x: Field) { assert(x == x); }\n";
+        let response = record(&[("app/src/main.nr", source)], "takes");
+        assert!(!response.ok);
+        assert_eq!(response.kind.as_deref(), Some("test-takes-arguments"));
+        assert!(response.artifact.is_none());
+    }
+
+    /// Recording and running are DIFFERENT requests over the same tree, and
+    /// asking for one must not silently do the other.
+    #[test]
+    fn recording_runs_no_tests_and_running_records_nothing() {
+        let recorded = record(&[("app/src/main.nr", FOUR_WAYS)], "passes");
+        assert!(recorded.artifact.is_some());
+        assert_eq!(recorded.passed, 0);
+        assert_eq!(recorded.failed, 0);
+
+        let ran = run(&[("app/src/main.nr", FOUR_WAYS)]);
+        assert!(ran.artifact.is_none());
+        assert_eq!(ran.tests.len(), 4);
+    }
+
+    /// A test THAT FAILS still records. The recording is the point — a red test
+    /// is the one a developer most wants to step through — so a compile that
+    /// refused to produce an artifact for it would break the flow exactly where
+    /// it matters most.
+    #[test]
+    fn a_failing_test_records_too() {
+        let response = record(&[("app/src/main.nr", FOUR_WAYS)], "fails");
+        assert!(response.ok, "recording a failing test was refused: {:?}", response.message);
+        assert!(response.artifact.is_some());
     }
 
     #[test]

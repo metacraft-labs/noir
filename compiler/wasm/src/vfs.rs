@@ -825,7 +825,7 @@ pub enum CompiledFromVfs {
 /// with nothing to step through. `silence_warnings` is nargo's own comment: the
 /// instrumenter imports `__debug` functions the program may not call, which would
 /// otherwise be reported to a user who did not write them.
-fn debugging_compile_options() -> CompileOptions {
+pub fn debugging_compile_options() -> CompileOptions {
     CompileOptions {
         silence_warnings: true,
         deny_warnings: false,
