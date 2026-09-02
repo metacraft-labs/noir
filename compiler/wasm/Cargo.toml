@@ -72,3 +72,8 @@ codetracer_trace_types.workspace = true
 # The ABI is what an all-zero input map is built against, so a contract function can be
 # executed without this test knowing what its parameters mean.
 noirc_abi.workspace = true
+# The debug-symbol envelope is base64 of RAW deflate, and the listing test asserts the
+# row count against what is inside it. Decoding it in the test — rather than trusting a
+# comment about the shape — is the only way that assertion means anything.
+base64.workspace = true
+flate2.workspace = true

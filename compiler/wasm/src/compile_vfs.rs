@@ -134,6 +134,26 @@ pub struct VfsResponse {
     /// The compiled artifact, as `nargo compile` writes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact: Option<serde_json::Value>,
+    /// The ACIR listing, as `nargo compile --print-acir` prints it.
+    ///
+    /// WHY THIS IS NOT DERIVABLE BY THE CALLER. `artifact.bytecode` is base64 of
+    /// GZIP of a tagged binary encoding of `Program` — not JSON, and not text. A
+    /// browser holding the artifact can decode `debug_symbols` (base64 + raw
+    /// deflate + JSON) and therefore knows where every opcode CAME FROM, and
+    /// still has no way to say what any opcode IS. The two halves of a
+    /// generated-code listing are `debug_symbols` and this, and only one of them
+    /// crossed the wasm boundary.
+    ///
+    /// It is emitted through the compiler's own `Display`, so what a user reads
+    /// in the browser is byte-for-byte what `--print-acir` prints locally.
+    /// Producing it here rather than reimplementing an opcode formatter in the
+    /// host is the whole point: a second formatter would drift, and drift in
+    /// this pane means a listing that disagrees with the toolchain.
+    ///
+    /// `None` for a contract compile — a contract has many functions and no
+    /// single listing — and `None` when the compile did not produce a program.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acir_listing: Option<String>,
 }
 
 impl VfsResponse {
@@ -151,6 +171,7 @@ impl VfsResponse {
             diagnostics: Vec::new(),
             warnings: Vec::new(),
             artifact: None,
+            acir_listing: None,
         }
     }
 }
@@ -180,6 +201,7 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
             diagnostics: Vec::new(),
             warnings: Vec::new(),
             artifact: None,
+            acir_listing: None,
         };
     };
 
@@ -203,6 +225,7 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
             diagnostics: Vec::new(),
             warnings: Vec::new(),
             artifact: None,
+            acir_listing: None,
         };
     }
 
@@ -213,9 +236,24 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
     // changed is only that it is now independent of WHICH artifact is being built.
     match compile_resolved(&plan, &tree, mode.as_contract, mode.for_debugging) {
         Ok((compiled, warnings)) => {
-            let artifact = match compiled {
-                CompiledFromVfs::Program(program) => serde_json::to_value(&*program).ok(),
-                CompiledFromVfs::Contract(contract) => serde_json::to_value(&*contract).ok(),
+            // THE LISTING IS TAKEN BEFORE THE ARTIFACT IS SERIALISED, from the same
+            // compiled program, so the two cannot describe different compiles. Row `i`
+            // of this text is opcode `i` of `artifact.debug_symbols.acir_locations` —
+            // an identity the consuming pane relies on and nothing else establishes.
+            let (artifact, acir_listing) = match compiled {
+                CompiledFromVfs::Program(program) => {
+                    let listing = {
+                        let compiled_program: noirc_artifacts::program::CompiledProgram =
+                            (*program.clone()).into();
+                        noirc_driver::display_compiled_program(&compiled_program)
+                    };
+                    (serde_json::to_value(&*program).ok(), Some(listing))
+                }
+                // A contract has one listing per function and no single `Program`, so
+                // there is nothing honest to put here. Absent beats an arbitrary pick.
+                CompiledFromVfs::Contract(contract) => {
+                    (serde_json::to_value(&*contract).ok(), None)
+                }
             };
             VfsResponse {
                 ok: true,
@@ -229,6 +267,7 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
                 diagnostics: Vec::new(),
                 warnings,
                 artifact,
+                acir_listing,
             }
         }
         Err(diagnostics) => VfsResponse {
@@ -246,6 +285,7 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
             diagnostics,
             warnings: Vec::new(),
             artifact: None,
+            acir_listing: None,
         },
     }
 }
@@ -269,6 +309,7 @@ pub fn run_request_json(request_json: &str) -> String {
             diagnostics: Vec::new(),
             warnings: Vec::new(),
             artifact: None,
+            acir_listing: None,
         },
     };
     serde_json::to_string(&response)
@@ -432,6 +473,79 @@ mod tests {
             files.insert((*path).to_string(), (*source).to_string());
         }
         VfsRequest { files, package_dir: "app".into(), mode: mode.into() }
+    }
+
+    /// The ACIR listing crosses the wasm boundary, and it is the compiler's own text.
+    ///
+    /// WHY THIS TEST IS NOT "A STRING CAME BACK". `artifact.bytecode` is base64 of gzip of
+    /// a tagged binary encoding, so a host can already tell where each opcode CAME FROM
+    /// (`debug_symbols` is base64 + raw deflate + JSON) and has no way at all to say what
+    /// any opcode IS. A listing that came back empty, or truncated, or in some
+    /// reimplemented format would satisfy `is_some()` and be useless for the pane that
+    /// consumes it. So this asserts the SHAPE `--print-acir` produces.
+    #[test]
+    fn the_envelope_carries_the_acir_listing_the_compiler_prints() {
+        let response = run_request(&request("program", &[]));
+        assert!(response.ok, "the fixture compiles");
+        let listing = response.acir_listing.expect("a program compile carries its listing");
+
+        // `display_program`'s own header lines, which is how a reader knows this is the
+        // compiler's formatter and not something written here.
+        assert!(listing.contains("func 0"), "the listing names the function: {listing}");
+        assert!(
+            listing.contains("private parameters:"),
+            "the listing carries the parameter header: {listing}"
+        );
+        assert!(
+            listing.contains("return values:"),
+            "the listing carries the return header: {listing}"
+        );
+
+        // THE IDENTITY THE CONSUMING PANE RELIES ON: one opcode row per
+        // `acir_locations` entry, so row `i` of the text is opcode `i` of the debug
+        // info. If these ever disagree, every anchor in the pane is off by the
+        // difference — and it would still LOOK like a mapping.
+        let artifact = response.artifact.as_ref().expect("an artifact comes back");
+        let debug_symbols = artifact["debug_symbols"].as_str().expect("base64 debug symbols");
+        let decoded = {
+            use base64::Engine;
+            use std::io::Read;
+            let bytes = base64::prelude::BASE64_STANDARD
+                .decode(debug_symbols)
+                .expect("debug_symbols is base64");
+            let mut out = String::new();
+            flate2::read::DeflateDecoder::new(&bytes[..])
+                .read_to_string(&mut out)
+                .expect("debug_symbols is raw deflate");
+            out
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&decoded).expect("debug_symbols is JSON");
+        let acir_locations = parsed["debug_infos"][0]["acir_locations"]
+            .as_object()
+            .expect("the envelope is debug_infos[0].acir_locations");
+
+        // Header lines are not opcodes. Count only the rows after `return values:`.
+        let opcode_rows = listing
+            .lines()
+            .skip_while(|l| !l.starts_with("return values:"))
+            .skip(1)
+            .filter(|l| !l.trim().is_empty() && !l.starts_with("unconstrained func"))
+            .take_while(|l| !l.starts_with("unconstrained func"))
+            .count();
+        assert_eq!(
+            opcode_rows,
+            acir_locations.len(),
+            "one listing row per located opcode; listing was:\n{listing}"
+        );
+    }
+
+    /// A contract has many functions and no single `Program`, so there is no honest
+    /// listing to give. Absent, not an arbitrary pick of one function's.
+    #[test]
+    fn a_contract_compile_carries_no_single_listing() {
+        let response = run_request(&request("program", &[]));
+        assert!(response.acir_listing.is_some(), "control: a program HAS a listing");
     }
 
     #[test]
