@@ -1,1 +1,0 @@
-{"rustc":17575471286409424799,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[15086734940726671143,"build_script_build",false,15439098320208258021]],"local":[{"Precalculated":"1788355791.621961867s (src/test_vfs.rs)"}],"rustflags":["--cfg","getrandom_backend=\"wasm_js\""],"config":0,"compile_kind":0}

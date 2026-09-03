@@ -1,4 +1,11 @@
 /target
+# A cargo target dir named anything other than `target` is not covered by the
+# rules above or by `**/target` below. `target-wasm` reached a commit that way
+# — 3,134 files and 875 MB of build cache, including a `noir_wasm.wasm` with
+# the same name as the artifact CI builds. `ci/deploy/build-noir-wasm.sh` in
+# codetracer clones this repo with `git fetch --depth 1`, which pays for the
+# whole tree at one commit, so the cache was billed to every deploy.
+/target-wasm
 .DS_Store
 examples/**/target/
 examples/9
