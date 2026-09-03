@@ -162,15 +162,46 @@ noirc_artifacts_info = { path = "tooling/noirc_artifacts_info" }
 noir_artifact_cli = { path = "tooling/artifact_cli" }
 noir_ssa_executor = { path = "tooling/ssa_executor" }
 noir_ast_fuzzer = { path = "tooling/ast_fuzzer" }
-# Use the sibling `codetracer-trace-format` workspace via path dependencies
-# rather than the older 0.17.0 release on crates.io.  The local crate
-# (>= 0.17.3) contains `CtfsTraceWriter`, which is required to emit the
-# single-file `.ct` CTFS container that the codetracer db-backend now
-# accepts as its only materialized-trace bundle.  The legacy
-# trace.json + trace_metadata.json + trace_paths.json triplet was
-# retired in the 2026-05 convention pass — see
+# The `codetracer-trace-format` workspace, reached by GIT REVISION rather than
+# by a `../codetracer-trace-format` path.
+#
+# WHY NOT A PATH.  A path dependency names a SIBLING CHECKOUT that a bare clone
+# of this repository does not have, and because the declaration is here at the
+# workspace root the breakage is not confined to `tooling/tracer`: nothing in
+# the workspace resolves, not even `cargo metadata`, which fails with
+#
+#   failed to load manifest for workspace member `.../compiler/wasm`
+#     failed to load manifest for dependency `codetracer_trace_types`
+#     failed to read `.../codetracer-trace-format/codetracer_trace_types/Cargo.toml`
+#
+# before compiling a single crate.  That is every Rust job on this fork, and
+# it is why `ci/deploy/noir-wasm.pin` in the codetracer repository clones this
+# repository's siblings from a shell script instead of consuming this
+# workspace the way a Rust project is normally consumed.  See
+# `tooling/tracer/CARRY-VS-UPSTREAM.md` §5.
+#
+# WHY NOT THE REGISTRY.  crates.io stops at `codetracer_trace_types` 0.16.3
+# (published 2026-02-24) and has NO `codetracer_trace_writer_nim` at all.  The
+# `CtfsTraceWriter` this fork requires landed in 0.17.3, so the registry cannot
+# supply either half.  Checked against the crates.io API on 2026-09-03.
+#
+# WHY THIS REVISION.  235e377e is the revision `ci/deploy/noir-wasm.pin` names
+# as `TRACE_FORMAT_REV` — the one the web deploy already builds this
+# repository against, so pinning it here makes the two consumers agree instead
+# of adding a third opinion.  Bump it in both places together.
+#
+# A LOCAL CHECKOUT STILL WINS when you want one: add a `[patch]` section or a
+# `paths` override to `.cargo/config.toml`, or set the `CARGO_NET_*` offline
+# knobs.  The point of the change is that the sibling is now OPTIONAL rather
+# than mandatory.
+#
+# `codetracer_trace_types` carries the CTFS types.  `CtfsTraceWriter` emits the
+# single-file `.ct` container that the codetracer db-backend now accepts as its
+# only materialized-trace bundle; the legacy
+# trace.json + trace_metadata.json + trace_paths.json triplet was retired in the
+# 2026-05 convention pass — see
 # `codetracer-specs/Trace-Files/CTFS-Migration-Guide.md`.
-codetracer_trace_types = { path = "../codetracer-trace-format/codetracer_trace_types" }
+codetracer_trace_types = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "235e377ec66b7d140e9c75828e805d53945824e3" }
 # Use the Nim-FFI-backed writer so the produced .ct container uses the v4
 # multi-stream layout that `ct-print --full` understands.  The pure-Rust
 # writer (`codetracer_trace_writer`) emits a SplitBinary single-shard
@@ -178,7 +209,15 @@ codetracer_trace_types = { path = "../codetracer-trace-format/codetracer_trace_t
 # `_via_ct_print_full` testing impossible.  All sibling recorders
 # (Cairo, Leo, Circom, ...) use this dependency too — see
 # `codetracer-specs/Planned-Features/Smart-Contract-Languages/Noir-Aztec.status.org`.
-codetracer_trace_writer = { path = "../codetracer-trace-format/codetracer_trace_writer_nim", package = "codetracer_trace_writer_nim" }
+#
+# NOTE FOR BUILDERS: this crate's own `build.rs` compiles a Nim static library
+# and looks for the `codetracer-trace-format-nim` repository as a sibling of
+# the trace-format checkout.  Inside a cargo git checkout there is no such
+# sibling, so a consumer that actually LINKS this crate (as opposed to merely
+# resolving the workspace) must point `CODETRACER_TRACE_FORMAT_NIM_DIR` at a
+# checkout of it.  Resolution — `cargo metadata`, `cargo tree`, and any build
+# that does not reach this crate — needs nothing.
+codetracer_trace_writer = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "235e377ec66b7d140e9c75828e805d53945824e3", package = "codetracer_trace_writer_nim" }
 
 # Arkworks
 ark-bn254 = { version = "^0.6.0", default-features = false, features = [

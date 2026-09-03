@@ -12,13 +12,26 @@ name: Upstream drift
 # Three constraints shaped this file, all of them measured on the fork rather
 # than assumed:
 #
-#   1. **Nothing here can run `cargo`.** The workspace member `tooling/tracer`
-#      depends on `../codetracer-trace-format/{codetracer_trace_types,
-#      codetracer_trace_writer_nim}` by *path*, i.e. on sibling repositories
-#      that do not exist in a bare checkout. Every scheduled Rust job inherited
-#      from upstream currently dies before compiling anything, with
+#   1. **This job is pure git, so it needs no toolchain at all.** It was
+#      originally written that way because it *could* not use cargo: the
+#      workspace root declared `codetracer_trace_types` and
+#      `codetracer_trace_writer_nim` as `../codetracer-trace-format/...` *path*
+#      dependencies, i.e. on a sibling repository that does not exist in a bare
+#      checkout, and because the declaration sat at the workspace root nothing
+#      resolved — not even `cargo metadata` — so every scheduled Rust job
+#      inherited from upstream died before compiling anything with
 #      `failed to load manifest for workspace member .../tooling/tracer`.
-#      This job is pure git, so it works in a plain checkout.
+#
+#      **That is no longer true.** Those two are git dependencies pinned by
+#      revision (root `Cargo.toml`), and `cargo metadata --locked` now succeeds
+#      in a checkout with no siblings present — measured 2026-09-03 on
+#      cargo 1.89.0, the version this repository's `rust-toolchain.toml`
+#      selects. The inherited Rust jobs are therefore unblocked; whether they
+#      are also *correct* for this fork is a separate question this comment
+#      does not answer.
+#
+#      This job stays pure git because git is all it needs, not because cargo
+#      is unavailable.
 #
 #   2. **`push` is not a usable trigger on this fork.** Every inherited
 #      workflow is gated on `push: branches: [master]`, and this fork's

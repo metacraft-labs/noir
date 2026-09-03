@@ -147,14 +147,13 @@ readily because it is opt-out, not behavioural.
 ~4 000 lines. CTFS containers, the Nim writer FFI, CodeTracer's capability flags. There is no
 upstream constituency for it and it should not be offered.
 
-**But it is what makes this repository untestable in CI**, which is a bigger problem than
-anything above. The workspace root `Cargo.toml` declares
-`codetracer_trace_types` and `codetracer_trace_writer` as `path =
-"../codetracer-trace-format/…"` dependencies, which `tooling/tracer` then inherits with
-`workspace = true`. Those are *sibling repositories* that do not exist in a bare checkout, and
-because the declaration is at the workspace root the breakage is not confined to
-`tooling/tracer`: nothing in the workspace resolves, not even `cargo metadata`. Every
-scheduled Rust job on this fork currently dies before compiling a single crate:
+**It used to be what made this repository untestable in CI** — the biggest problem on this
+page. The workspace root `Cargo.toml` declared `codetracer_trace_types` and
+`codetracer_trace_writer` as `path = "../codetracer-trace-format/…"` dependencies, which
+`tooling/tracer` inherited with `workspace = true`. Those are *sibling repositories* that do
+not exist in a bare checkout, and because the declaration sat at the workspace root the
+breakage was not confined to `tooling/tracer`: nothing in the workspace resolved, not even
+`cargo metadata`. Every scheduled Rust job on this fork died before compiling a single crate:
 
 ```
 error: failed to load manifest for workspace member `/Users/runner/work/noir/noir/tooling/tracer`
@@ -163,9 +162,36 @@ referenced by workspace at `/Users/runner/work/noir/noir/Cargo.toml`
   failed to read `/Users/runner/work/noir/codetracer-trace-format/codetracer_trace_types/Cargo.toml`
 ```
 
-Fixing that — a git or registry dependency instead of a path one, or making `tooling/tracer` a
-non-default workspace member — is worth more than any single upstreaming above, because it is
-the precondition for the fork having any working CI at all.
+**FIXED, 2026-09-03.** Both are now **git dependencies pinned by revision** —
+`metacraft-labs/codetracer-trace-format` at `235e377e`, the revision
+`ci/deploy/noir-wasm.pin` in the codetracer repository already builds this workspace against,
+so the two consumers name one revision instead of two.
+
+The registry was checked first and cannot serve: crates.io stops at
+`codetracer_trace_types` **0.16.3** (published 2026-02-24) and has **no
+`codetracer_trace_writer_nim` at all**, while the `CtfsTraceWriter` this fork requires landed
+in 0.17.3. So "git or registry" had exactly one usable half.
+
+Measured, not assumed, on cargo 1.89.0 (the version `rust-toolchain.toml` selects):
+
+* in a checkout with **no sibling present**, `cargo metadata --locked` now **succeeds** — the
+  same command reproduced the error above on the same tree before the change;
+* `cargo check -p noir_tracer` and `-p noir_tracer --features nim-writer` both succeed, the
+  latter compiling `codetracer_trace_writer_nim` **from the cargo git checkout**;
+* `Cargo.lock` moved by **two lines** — a `source =` on each of the two packages. The resolved
+  dependency graph is byte-for-byte what the path dependencies produced, so this is a change of
+  *where the source comes from* and of nothing else.
+
+One consumer obligation is new and is documented at the declaration: a build that actually
+**links** `codetracer_trace_writer_nim` (i.e. anything with `nim-writer`, which `nargo_cli`
+turns on) must point `CODETRACER_TRACE_FORMAT_NIM_DIR` at a `codetracer-trace-format-nim`
+checkout, because that crate's `build.rs` looks for it as a sibling of the trace-format
+checkout and a cargo git checkout has no siblings. *Resolution* — `cargo metadata`,
+`cargo tree`, `cargo check` of anything short of that crate — needs nothing.
+
+The remaining `../codetracer-trace-format-nim` references in `tooling/tracer/tests` are
+**test-time** lookups of the `ct-print` decoder, not build-time manifest resolution, and are
+unaffected by this change.
 
 ### 6. `justfile` and the wasm32 CI job — **carry**
 
