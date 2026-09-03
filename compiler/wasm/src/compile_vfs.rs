@@ -134,6 +134,26 @@ pub struct VfsResponse {
     /// The compiled artifact, as `nargo compile` writes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact: Option<serde_json::Value>,
+    /// The ACIR listing, as `nargo compile --print-acir` prints it.
+    ///
+    /// WHY THIS IS NOT DERIVABLE BY THE CALLER. `artifact.bytecode` is base64 of
+    /// GZIP of a tagged binary encoding of `Program` — not JSON, and not text. A
+    /// browser holding the artifact can decode `debug_symbols` (base64 + raw
+    /// deflate + JSON) and therefore knows where every opcode CAME FROM, and
+    /// still has no way to say what any opcode IS. The two halves of a
+    /// generated-code listing are `debug_symbols` and this, and only one of them
+    /// crossed the wasm boundary.
+    ///
+    /// It is emitted through the compiler's own `Display`, so what a user reads
+    /// in the browser is byte-for-byte what `--print-acir` prints locally.
+    /// Producing it here rather than reimplementing an opcode formatter in the
+    /// host is the whole point: a second formatter would drift, and drift in
+    /// this pane means a listing that disagrees with the toolchain.
+    ///
+    /// `None` for a contract compile — a contract has many functions and no
+    /// single listing — and `None` when the compile did not produce a program.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acir_listing: Option<String>,
 }
 
 impl VfsResponse {
@@ -151,6 +171,7 @@ impl VfsResponse {
             diagnostics: Vec::new(),
             warnings: Vec::new(),
             artifact: None,
+            acir_listing: None,
         }
     }
 }
@@ -180,6 +201,7 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
             diagnostics: Vec::new(),
             warnings: Vec::new(),
             artifact: None,
+            acir_listing: None,
         };
     };
 
@@ -203,6 +225,7 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
             diagnostics: Vec::new(),
             warnings: Vec::new(),
             artifact: None,
+            acir_listing: None,
         };
     }
 
@@ -213,9 +236,24 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
     // changed is only that it is now independent of WHICH artifact is being built.
     match compile_resolved(&plan, &tree, mode.as_contract, mode.for_debugging) {
         Ok((compiled, warnings)) => {
-            let artifact = match compiled {
-                CompiledFromVfs::Program(program) => serde_json::to_value(&*program).ok(),
-                CompiledFromVfs::Contract(contract) => serde_json::to_value(&*contract).ok(),
+            // THE LISTING IS TAKEN BEFORE THE ARTIFACT IS SERIALISED, from the same
+            // compiled program, so the two cannot describe different compiles. Row `i`
+            // of this text is opcode `i` of `artifact.debug_symbols.acir_locations` —
+            // an identity the consuming pane relies on and nothing else establishes.
+            let (artifact, acir_listing) = match compiled {
+                CompiledFromVfs::Program(program) => {
+                    let listing = {
+                        let compiled_program: noirc_artifacts::program::CompiledProgram =
+                            (*program.clone()).into();
+                        noirc_driver::display_compiled_program(&compiled_program)
+                    };
+                    (serde_json::to_value(&*program).ok(), Some(listing))
+                }
+                // A contract has one listing per function and no single `Program`, so
+                // there is nothing honest to put here. Absent beats an arbitrary pick.
+                CompiledFromVfs::Contract(contract) => {
+                    (serde_json::to_value(&*contract).ok(), None)
+                }
             };
             VfsResponse {
                 ok: true,
@@ -229,6 +267,7 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
                 diagnostics: Vec::new(),
                 warnings,
                 artifact,
+                acir_listing,
             }
         }
         Err(diagnostics) => VfsResponse {
@@ -246,6 +285,7 @@ pub fn run_request(request: &VfsRequest) -> VfsResponse {
             diagnostics,
             warnings: Vec::new(),
             artifact: None,
+            acir_listing: None,
         },
     }
 }
@@ -269,6 +309,7 @@ pub fn run_request_json(request_json: &str) -> String {
             diagnostics: Vec::new(),
             warnings: Vec::new(),
             artifact: None,
+            acir_listing: None,
         },
     };
     serde_json::to_string(&response)
@@ -468,6 +509,136 @@ mod tests {
             files.insert((*path).to_string(), (*source).to_string());
         }
         VfsRequest { files, package_dir: "app".into(), mode: mode.into() }
+    }
+
+    /// A program with real work in it, so the listing has rows to be identified with.
+    ///
+    /// The default `request()` fixture is `x + x` — ONE opcode, and the compiler locates
+    /// none of it. A test written against that would have asserted `0 == 0` and passed
+    /// over any implementation, including one that returned an empty listing.
+    fn template_request(mode: &str) -> VfsRequest {
+        let mut files: BTreeMap<String, String> = BTreeMap::new();
+        files.insert(
+            "app/Nargo.toml".into(),
+            "[package]\nname = \"hello_noir\"\ntype = \"bin\"\n\n[dependencies]\n".into(),
+        );
+        files.insert(
+            "app/src/main.nr".into(),
+            "mod utils;\n\nfn main(x: Field, y: pub Field) {\n    assert(x != y);\n                 utils::assert_in_range(x);\n}\n"
+                .into(),
+        );
+        files.insert(
+            "app/src/utils.nr".into(),
+            "global MAX: Field = 128;\n\npub fn assert_in_range(value: Field) {\n                 assert(value as u32 < MAX as u32);\n}\n"
+                .into(),
+        );
+        VfsRequest { files, package_dir: "app".into(), mode: mode.into() }
+    }
+
+    fn inflate_debug_symbols(artifact: &serde_json::Value) -> serde_json::Value {
+        use base64::Engine;
+        use std::io::Read;
+        let encoded = artifact["debug_symbols"].as_str().expect("base64 debug symbols");
+        let bytes =
+            base64::prelude::BASE64_STANDARD.decode(encoded).expect("debug_symbols is base64");
+        let mut json = String::new();
+        flate2::read::DeflateDecoder::new(&bytes[..])
+            .read_to_string(&mut json)
+            .expect("debug_symbols is RAW deflate, not zlib");
+        serde_json::from_str(&json).expect("debug_symbols is JSON")
+    }
+
+    /// Count the ACIR opcode rows: everything after the header block, stopping at the
+    /// first `unconstrained func`.
+    fn acir_rows(listing: &str) -> usize {
+        listing
+            .lines()
+            .skip_while(|l| !l.starts_with("return values:"))
+            .skip(1)
+            .take_while(|l| !l.starts_with("unconstrained func"))
+            .filter(|l| !l.trim().is_empty())
+            .count()
+    }
+
+    /// The ACIR listing crosses the wasm boundary, and it is the compiler's own text.
+    ///
+    /// WHY THIS IS NOT "A STRING CAME BACK". `artifact.bytecode` is base64 of gzip of a
+    /// tagged binary encoding, so a host can already tell where each opcode CAME FROM
+    /// (`debug_symbols` is base64 + raw deflate + JSON) and has no way at all to say what
+    /// any opcode IS. A listing that came back empty, truncated, or in some reimplemented
+    /// format would satisfy `is_some()` and be useless to the pane that consumes it.
+    #[test]
+    fn the_envelope_carries_the_acir_listing_the_compiler_prints() {
+        let response = run_request(&template_request("program"));
+        assert!(response.ok, "the template compiles: {:?}", response.message);
+        let listing = response.acir_listing.expect("a program compile carries its listing");
+
+        // `display_program`'s own header lines — how a reader knows this is the
+        // compiler's formatter and not something written here.
+        assert!(listing.contains("func 0"), "names the function: {listing}");
+        assert!(listing.contains("private parameters:"), "parameter header: {listing}");
+        assert!(listing.contains("return values:"), "return header: {listing}");
+        assert!(listing.contains("ASSERT"), "real opcodes: {listing}");
+
+        // THE IDENTITY THE CONSUMING PANE RELIES ON ABSOLUTELY: one listing row per
+        // located opcode, so row `i` of the text is opcode `i` of the debug info. If
+        // these ever disagree, every anchor in the pane is off by the difference — and
+        // it would still LOOK like a mapping.
+        let artifact = response.artifact.as_ref().expect("an artifact comes back");
+        let debug = inflate_debug_symbols(artifact);
+        let acir_locations = debug["debug_infos"][0]["acir_locations"]
+            .as_object()
+            .expect("the envelope is debug_infos[0].acir_locations");
+
+        assert_eq!(acir_locations.len(), 17, "the template is 17 located opcodes");
+        assert_eq!(
+            acir_rows(&listing),
+            acir_locations.len(),
+            "one listing row per located opcode; listing was:\n{listing}"
+        );
+    }
+
+    /// `debug` MODE IS THE WRONG COMPILE FOR THIS PANE, and the numbers say why.
+    ///
+    /// `debug` sets `force_brillig`, which is what makes an artifact steppable — and it
+    /// collapses the whole circuit to a SINGLE `BRILLIG CALL` opcode with every
+    /// instruction moved into an unconstrained function. Measured on the same template:
+    /// `program` gives 17 located ACIR opcodes, `debug` gives 0.
+    ///
+    /// So the artifact you STEP is not the artifact whose constraints you READ. A host
+    /// that reused its debug compile for the constraints pane would show a one-row
+    /// listing and call it the circuit.
+    #[test]
+    fn debug_mode_has_no_acir_to_list_and_that_is_the_point() {
+        let debug_response = run_request(&template_request("debug"));
+        assert!(debug_response.ok, "the debug compile succeeds");
+        let debug_artifact = debug_response.artifact.as_ref().expect("an artifact");
+        let debug_symbols = inflate_debug_symbols(debug_artifact);
+        let debug_acir = debug_symbols["debug_infos"][0]["acir_locations"]
+            .as_object()
+            .map(|o| o.len())
+            .unwrap_or(0);
+        assert_eq!(debug_acir, 0, "force_brillig leaves no located ACIR opcode");
+        assert_eq!(
+            acir_rows(&debug_response.acir_listing.expect("still carries a listing")),
+            1,
+            "the whole circuit is one BRILLIG CALL"
+        );
+
+        // The control, through the same path: the SAME sources in `program` mode do
+        // have a circuit. Without this, the assertion above is satisfied by a compile
+        // that simply failed to produce anything.
+        let program_response = run_request(&template_request("program"));
+        let program_symbols =
+            inflate_debug_symbols(program_response.artifact.as_ref().expect("an artifact"));
+        assert_eq!(
+            program_symbols["debug_infos"][0]["acir_locations"]
+                .as_object()
+                .map(|o| o.len())
+                .unwrap_or(0),
+            17,
+            "the same sources in `program` mode are 17 located opcodes"
+        );
     }
 
     #[test]
