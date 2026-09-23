@@ -80,7 +80,8 @@ pub(crate) struct Mode {
 }
 
 /// Every mode this dispatcher accepts, in the order a host sees them in a refusal.
-pub(crate) const KNOWN_MODES: [&str; 5] = ["resolve", "program", "contract", "debug", "contract-debug"];
+pub(crate) const KNOWN_MODES: [&str; 5] =
+    ["resolve", "program", "contract", "debug", "contract-debug"];
 
 impl Mode {
     /// The whole mapping from mode string to the pair, and the only place it lives.
@@ -588,11 +589,7 @@ mod tests {
         // Every known mode is offered, so a host that guessed wrong is told what to ask
         // for. The count is asserted so "all of an empty list appear" cannot pass.
         let offered = KNOWN_MODES.iter().filter(|m| message.contains(**m)).count();
-        assert_eq!(
-            offered,
-            KNOWN_MODES.len(),
-            "the refusal lists every mode; got {message:?}"
-        );
+        assert_eq!(offered, KNOWN_MODES.len(), "the refusal lists every mode; got {message:?}");
 
         // The old behaviour, named so it cannot come back: it fell through to `program`,
         // which failed inside the frontend and reported a diagnostic against a stdlib
@@ -714,20 +711,16 @@ mod tests {
             // A contract is many programs; the tracer takes one. This conversion is
             // upstream's own (`function_as_compiled_program`), not something invented
             // here to make a number appear.
-            let compiled = contract
-                .function_as_compiled_program("bump")
-                .expect("the contract exposes `bump`");
+            let compiled =
+                contract.function_as_compiled_program("bump").expect("the contract exposes `bump`");
             let artifact_json = serde_json::to_string(&ProgramArtifact::from(compiled))
                 .expect("a ProgramArtifact serializes");
 
             let trace = noir_tracer_wasm::trace_artifact(&artifact_json, "x = \"7\"\n", false)
                 .unwrap_or_else(|e| panic!("`{mode}` must trace: {e}"));
 
-            let steps = trace
-                .events
-                .iter()
-                .filter(|e| matches!(e, TraceLowLevelEvent::Step(_)))
-                .count();
+            let steps =
+                trace.events.iter().filter(|e| matches!(e, TraceLowLevelEvent::Step(_))).count();
             (steps, trace.events.len())
         };
 
@@ -742,9 +735,7 @@ mod tests {
              source-level steps; got {debug_steps} steps in {debug_events} events. \
              Zero or one here is the uninstrumented-artifact signature."
         );
-        println!(
-            "contract-debug: {debug_steps} source-level steps in {debug_events} events"
-        );
+        println!("contract-debug: {debug_steps} source-level steps in {debug_events} events");
 
         // The control, and the reason the threshold means anything: the SAME contract,
         // the SAME function, compiled without instrumentation, traces to essentially
@@ -871,8 +862,11 @@ mod tests {
 
         // `force_brillig` took effect on every function — the tracer steps unconstrained
         // bytecode, so this is what makes the artifact steppable in principle.
-        let with_brillig =
-            contract.functions.iter().filter(|f| !f.bytecode.unconstrained_functions.is_empty()).count();
+        let with_brillig = contract
+            .functions
+            .iter()
+            .filter(|f| !f.bytecode.unconstrained_functions.is_empty())
+            .count();
         assert_eq!(
             with_brillig,
             contract.functions.len(),
@@ -929,7 +923,8 @@ mod tests {
         // `poseidon` is the git dependency the vendoring had to materialise. So the
         // resolve walks the real graph, not a toy one.
         assert!(
-            files.contains_key("vendor/types/Nargo.toml") && files.contains_key("vendor/poseidon/Nargo.toml"),
+            files.contains_key("vendor/types/Nargo.toml")
+                && files.contains_key("vendor/poseidon/Nargo.toml"),
             "this arm depends on the vendored `types` and `poseidon` packages being present"
         );
         files.insert(
@@ -962,7 +957,7 @@ mod tests {
              \x20       folded\n\
              \x20   }\n\
              }\n"
-                .into(),
+            .into(),
         );
 
         let response = run_request(&VfsRequest {
@@ -991,9 +986,8 @@ mod tests {
         assert_eq!(contract.name, "Stepping");
         assert_eq!(contract.functions.len(), 1, "the contract has one entrypoint");
 
-        let compiled = contract
-            .function_as_compiled_program("digest")
-            .expect("the contract exposes `digest`");
+        let compiled =
+            contract.function_as_compiled_program("digest").expect("the contract exposes `digest`");
         let artifact_json =
             serde_json::to_string(&ProgramArtifact::from(compiled)).expect("serializes");
         let trace = noir_tracer_wasm::trace_artifact(
@@ -1035,9 +1029,10 @@ mod tests {
         let own: Vec<i64> = steps
             .iter()
             .filter(|s| {
-                trace.paths.get(s.path_id.0).is_some_and(|p| {
-                    p.to_string_lossy().as_ref() == "stepping/src/main.nr"
-                })
+                trace
+                    .paths
+                    .get(s.path_id.0)
+                    .is_some_and(|p| p.to_string_lossy().as_ref() == "stepping/src/main.nr")
             })
             .map(|s| s.line.0)
             .collect();
@@ -1056,7 +1051,11 @@ mod tests {
         // Distinct LINES, which is what "steppable" means to a user: a debugger that
         // reports the same line eight times has not stepped through anything.
         let distinct: std::collections::BTreeSet<i64> = own.iter().copied().collect();
-        println!("  {} steps in stepping/src/main.nr over {} distinct lines", own.len(), distinct.len());
+        println!(
+            "  {} steps in stepping/src/main.nr over {} distinct lines",
+            own.len(),
+            distinct.len()
+        );
         assert!(
             distinct.len() >= 5,
             "the steps must advance through the source; {} distinct lines out of {} steps: {:?}",

@@ -1295,7 +1295,9 @@ mod tests {
         };
         let ordinary = match compile_resolved(&plan, &files, true, false) {
             Ok((CompiledFromVfs::Contract(contract), _)) => contract,
-            other => panic!("the ordinary contract compile must produce a contract: {:?}", other.is_ok()),
+            other => {
+                panic!("the ordinary contract compile must produce a contract: {:?}", other.is_ok())
+            }
         };
 
         // The count itself is asserted: "every function is instrumented" over an empty
@@ -1363,10 +1365,14 @@ mod tests {
         // `force_brillig` is the other half of the debugging options, and it is what gives
         // the tracer something to step: the tracer walks unconstrained bytecode. Asserted
         // per function, with the count asserted beside it so an empty list cannot pass.
-        let unconstrained =
-            debugging.functions.iter().filter(|f| !f.bytecode.unconstrained_functions.is_empty()).count();
+        let unconstrained = debugging
+            .functions
+            .iter()
+            .filter(|f| !f.bytecode.unconstrained_functions.is_empty())
+            .count();
         assert_eq!(
-            unconstrained, 2,
+            unconstrained,
+            2,
             "under force_brillig every one of the contract's functions carries \
              unconstrained bytecode; {unconstrained} of {} did",
             debugging.functions.len()
