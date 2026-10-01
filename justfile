@@ -76,6 +76,14 @@ check-wasm:
     # cargo only discovers those from the invocation directory.
     cd tooling/tracer_wasm && cargo check --no-default-features
 
+# Checks out the Nim sources the native `nargo`'s CTFS trace writer is compiled
+# from (`codetracer-trace-format-nim`, plus its `stew` and `results`
+# requirements) at pinned revisions into `.codetracer-deps/`, where
+# `.cargo/config.toml` points `codetracer_trace_writer_nim`'s build script.
+# Needed once before building `nargo`, and again after the pins move.
+trace-format-nim:
+    ./scripts/fetch-trace-format-nim.sh
+
 cargo := if use-cross != "" { "cross" } else { "cargo" }
 
 [private]
@@ -247,7 +255,7 @@ check-design-links:
 
 # Build the tracer's wasm module and run a fixture through it, checking the
 # result against the `.ct` container the native `nargo trace` produces.
-trace-wasm fixture="a_1_mul":
+trace-wasm fixture="a_1_mul": trace-format-nim
   #!/usr/bin/env bash
   set -euo pipefail
   cargo build -p nargo_cli --bin nargo

@@ -51,21 +51,20 @@
 //! rather than in the recorder. The account is at the bottom of this block; do
 //! not read the six greens as six answers.
 //!
-//! HOW TO BUILD AND RUN THEM. The only obstacle is that
-//! `codetracer_trace_writer_nim`'s `build.rs` compiles a Nim static library at
-//! build time and therefore needs the Nim toolchain on `PATH`. `noir` has no
-//! `.envrc` of its own, so borrow the writer's:
+//! HOW TO BUILD AND RUN THEM. `codetracer_trace_writer_nim`'s `build.rs`
+//! compiles a Nim static library at build time, so `nim` must be on `PATH`, and
+//! the Nim sources it compiles must be provisioned once (they are pinned to the
+//! trace-format revision `Cargo.toml` names; `.cargo/config.toml` points the
+//! build script at them):
 //!
-//!     direnv exec ../codetracer-trace-format \
-//!         cargo test -p noir_tracer --test test_tracer
+//!     just trace-format-nim
+//!     cargo build -p nargo_cli --bin nargo
+//!     cargo test -p noir_tracer --features nim-writer --test test_tracer
 //!
-//! or, without a dev shell, skip the `nimble install --depsOnly` step the
-//! build script runs (its own doc comment names the variable):
-//!
-//!     CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL=1 \
-//!         cargo build -p nargo_cli --bin nargo
-//!     CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL=1 \
-//!         cargo test -p noir_tracer --test test_tracer
+//! `ct-print` must come from the same `codetracer-trace-format-nim` revision
+//! (an older one refuses the container); build it from
+//! `.codetracer-deps/codetracer-trace-format-nim` and name it with
+//! `CODETRACER_CT_PRINT_BIN`.
 //!
 //! **Rebuild `nargo` before you trust a result.** These tests SPAWN the
 //! workspace `nargo` binary; `cargo test -p noir_tracer` does not rebuild it.
@@ -610,6 +609,24 @@ fn observed_call_sequence(doc: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+/// The one `call_entry` / `call_exit` event of `function` in `events`.
+///
+/// Every trace opens with the writer's `<toplevel>` frame (function id 0),
+/// which carries the entry step `TraceSink::start` registers before `main`
+/// is called, and closes with its exit after `main`'s. So the program's
+/// own frame is neither the first nor the last event; it is looked up by
+/// name, and a second frame of the same name fails here.
+fn the_event<'a>(
+    events: &'a [serde_json::Value],
+    kind: &str,
+    function: &str,
+) -> &'a serde_json::Value {
+    let found: Vec<&serde_json::Value> =
+        events.iter().filter(|e| e["kind"] == kind && e["function"] == function).collect();
+    assert_eq!(found.len(), 1, "expected exactly one {kind} of {function}; got {found:?}");
+    found[0]
+}
+
 fn observed_event_kinds(doc: &serde_json::Value) -> Vec<String> {
     // Filter out `sekDeltaColumn` aux cursor-nudges (FU-Column-Aware-
     // Nav-Noir) so fixture assertions that pre-date column-aware mode
@@ -680,12 +697,17 @@ fn field_small_int(v: &serde_json::Value) -> i64 {
 
 /// `a_1_mul.nr` — basic `u32` multiplication chain (12^8 = 429981696).
 ///
-/// Pins: 1 call (main), 7 step events, 0 io_events, the function
-/// table contains only `main`, the type table contains exactly the
-/// three Noir types the recorder ensures (`None`, `u32`, and the
-/// `mut u32`-derived `type_1` synthetic), the varname table is
-/// `[x, y, z]`, and the per-step value of `x` mutates through the
+/// Pins: 2 calls (`<toplevel>`, then main), 14 step events, 0 io_events,
+/// the function table is `[<toplevel>, main]`, the type table is exactly
+/// `[None, u32]` (each type once, under its own name), the varname table
+/// is `[x, y, z]`, and the per-step value of `x` mutates through the
 /// expected sequence 3 → 12 → 144 → 20736 → 429981696.
+///
+/// THE FRAME SHAPE every fixture below shares: the writer's `<toplevel>`
+/// frame opens first and holds exactly one step — the line-1 entry step
+/// `TraceSink::start` registers before `main` is called — and `main`'s own
+/// `call_entry` follows it, so `main` begins at its first real step. On
+/// the way out `main` exits and then `<toplevel>` does.
 #[test]
 fn test_a_1_mul_via_ct_print_full() {
     let Some(doc) = record_and_dump_full("test_a_1_mul_via_ct_print_full", "a_1_mul") else {
@@ -699,9 +721,9 @@ fn test_a_1_mul_via_ct_print_full() {
     // ---- counts ------------------------------------------------------------
     let counts = &doc["counts"];
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
-    assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
+    assert_eq!(counts["functions"].as_u64(), Some(2), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(3), "varnames; counts={counts}");
-    assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
+    assert_eq!(counts["types"].as_u64(), Some(2), "types; counts={counts}");
     // Re-pinned after the 2026-08 upstream reconciliation (upstream/master
     // 3d3a1ce78). Two independent shifts:
     //   * the trace writer no longer emits an auxiliary `sekDeltaColumn`
@@ -713,24 +735,26 @@ fn test_a_1_mul_via_ct_print_full() {
     // pre-merge trace for all 21 `test_programs/trace` fixtures and are
     // unchanged; only step granularity and some columns moved.
     assert_eq!(counts["steps"].as_u64(), Some(14), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
     assert_eq!(counts["values"].as_u64(), Some(14), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
     // ---- tables ------------------------------------------------------------
-    assert_eq!(string_array(&doc, "functions"), vec!["main"]);
+    assert_eq!(string_array(&doc, "functions"), vec!["<toplevel>", "main"]);
     assert_eq!(string_array(&doc, "varnames"), vec!["x", "y", "z"]);
-    assert_eq!(string_array(&doc, "types"), vec!["None", "u32", "type_1"]);
+    assert_eq!(string_array(&doc, "types"), vec!["None", "u32"]);
     assert_path_strip_normalised(&doc, "a_1_mul");
 
     // ---- event shape -------------------------------------------------------
     let events = doc["events"].as_array().unwrap();
-    // 1 call_entry + 14 step events + 1 call_exit = 16 wire-level events.
-    assert_eq!(events.len(), 16, "1 call_entry + 14 steps + 1 call_exit");
-    assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
+    // 2 call_entry + 14 step events + 2 call_exit = 18 wire-level events.
+    assert_eq!(events.len(), 18, "2 call_entry + 14 steps + 2 call_exit");
+    assert_eq!(observed_call_sequence(&doc), vec!["<toplevel>".to_string(), "main".to_string()]);
     assert_eq!(
         observed_event_kinds(&doc),
         vec![
+            "call_entry",
+            "step",
             "call_entry",
             "step",
             "step",
@@ -745,14 +769,14 @@ fn test_a_1_mul_via_ct_print_full() {
             "step",
             "step",
             "step",
-            "step",
+            "call_exit",
             "call_exit",
         ]
     );
 
     // Column-aware `register_call` fires before params are bound, so
     // `call_entry.args` is empty (deferred-bind: see FU notes).
-    let entry = &events[0];
+    let entry = the_event(events, "call_entry", "main");
     let args = entry["args"].as_array().unwrap();
     assert!(args.is_empty(), "expected empty call_entry.args; got {args:?}");
 
@@ -816,10 +840,10 @@ fn test_a_1_mul_via_ct_print_full() {
     );
 
     // ---- call_exit ---------------------------------------------------------
-    let exit = events.last().unwrap();
-    assert_eq!(exit["kind"], "call_exit");
-    assert_eq!(exit["function"].as_str(), Some("main"));
+    let exit = the_event(events, "call_exit", "main");
     assert_eq!(exit["return_value"]["kind"].as_str(), Some("Void"));
+    assert_eq!(events[events.len() - 2], *exit, "main exits just before <toplevel>");
+    assert_eq!(events.last().unwrap()["function"].as_str(), Some("<toplevel>"));
 }
 
 /// THE TWO LEADING `None`s IN `a_1_mul`'s VALUE SEQUENCE, ESTABLISHED.
@@ -1030,10 +1054,16 @@ fn test_multi_stmt_line_3_assert_is_constant_folded_not_dropped() {
 
 /// `a_2_function_calls.nr` — main → foo → bar twice.
 ///
-/// Pins: 5 calls (1 main + 2 foo + 2 bar), 11 step events, 0
-/// io_events, function table = [main, foo, bar] in ensure order,
-/// type table = [None, Field, type_1, "()"], call-entry sequence
-/// = [main, foo, bar, foo, bar], and Field-typed argument values.
+/// Pins: 6 calls (`<toplevel>` + 1 main + 2 foo + 2 bar), 20 step
+/// events, 0 io_events, function table = [<toplevel>, main, foo, bar]
+/// in ensure order, type table = [None, Field, "()", "()"], call-entry
+/// sequence = [<toplevel>, main, foo, bar, foo, bar], and Field-typed
+/// argument values.
+///
+/// The two `"()"` entries are two types: types are interned by
+/// `(kind, name)`, and the recorder registers the unit type under two
+/// kinds — `TypeKind::None` for a return with no value (`bar`'s), and
+/// `TypeKind::Raw` for a unit VALUE (`foo`'s tail expression `bar(x)`).
 #[test]
 fn test_a_2_function_calls_via_ct_print_full() {
     let Some(doc) =
@@ -1046,26 +1076,27 @@ fn test_a_2_function_calls_via_ct_print_full() {
 
     let counts = &doc["counts"];
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
-    assert_eq!(counts["functions"].as_u64(), Some(3), "functions; counts={counts}");
+    assert_eq!(counts["functions"].as_u64(), Some(4), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(2), "varnames; counts={counts}");
-    assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
+    assert_eq!(counts["types"].as_u64(), Some(4), "types; counts={counts}");
     // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
     assert_eq!(counts["steps"].as_u64(), Some(20), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
     assert_eq!(counts["values"].as_u64(), Some(20), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
-    assert_eq!(string_array(&doc, "functions"), vec!["main", "foo", "bar"]);
+    assert_eq!(string_array(&doc, "functions"), vec!["<toplevel>", "main", "foo", "bar"]);
     assert_eq!(string_array(&doc, "varnames"), vec!["x", "y"]);
-    assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "()"]);
+    assert_eq!(string_array(&doc, "types"), vec!["None", "Field", "()", "()"]);
     assert_path_strip_normalised(&doc, "a_2_function_calls");
 
-    // 5 call_entry + 20 step events + 5 call_exit = 30 wire-level events.
+    // 6 call_entry + 20 step events + 6 call_exit = 32 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 30);
+    assert_eq!(events.len(), 32);
     assert_eq!(
         observed_call_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "foo".to_string(),
             "bar".to_string(),
@@ -1091,7 +1122,7 @@ fn test_a_2_function_calls_via_ct_print_full() {
     assert_eq!(
         observed_steps,
         vec![
-            ("main", 1),
+            ("<toplevel>", 1),
             ("main", 9),
             ("main", 9),
             ("main", 10),
@@ -1292,8 +1323,8 @@ fn test_last_main_step_is_in_range_in_every_fixture() {
 
 /// `if_then_else_reduced.nr` — `for i in 1..11 { if i % 2 == 0 { ... } }`.
 ///
-/// Pins: 1 call (main), 45 step events (10-iteration loop with
-/// branching body), 0 io_events.  The varname table reflects the
+/// Pins: 2 calls (`<toplevel>`, main), 68 step events (10-iteration
+/// loop with branching body), 0 io_events.  The varname table reflects the
 /// `let mut result = x; for i in 1..11 { ... }` declaration order
 /// (`result` introduced in line 2, `i` introduced as the loop
 /// induction variable).  The final `result` value is 600 (the
@@ -1310,27 +1341,27 @@ fn test_if_then_else_reduced_via_ct_print_full() {
 
     let counts = &doc["counts"];
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
-    assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
+    assert_eq!(counts["functions"].as_u64(), Some(2), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(5), "varnames; counts={counts}");
-    assert_eq!(counts["types"].as_u64(), Some(3), "types; counts={counts}");
+    assert_eq!(counts["types"].as_u64(), Some(2), "types; counts={counts}");
     // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
     assert_eq!(counts["steps"].as_u64(), Some(68), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
     assert_eq!(counts["values"].as_u64(), Some(68), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
-    assert_eq!(string_array(&doc, "functions"), vec!["main"]);
+    assert_eq!(string_array(&doc, "functions"), vec!["<toplevel>", "main"]);
     assert_eq!(string_array(&doc, "varnames"), vec!["x", "y", "z", "result", "i"]);
-    assert_eq!(string_array(&doc, "types"), vec!["None", "u32", "type_1"]);
+    assert_eq!(string_array(&doc, "types"), vec!["None", "u32"]);
     assert_path_strip_normalised(&doc, "if_then_else_reduced");
 
-    // 1 call_entry + 68 step events + 1 call_exit = 70 wire-level events.
+    // 2 call_entry + 68 step events + 2 call_exit = 72 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 70);
-    assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
+    assert_eq!(events.len(), 72);
+    assert_eq!(observed_call_sequence(&doc), vec!["<toplevel>".to_string(), "main".to_string()]);
 
     // Column-aware call_entry has empty args (see a_1_mul).
-    let entry = &events[0];
+    let entry = the_event(events, "call_entry", "main");
     assert!(
         entry["args"].as_array().unwrap().is_empty(),
         "call_entry.args should be empty under column-aware mode",
@@ -1353,15 +1384,15 @@ fn test_if_then_else_reduced_via_ct_print_full() {
     assert_eq!(final_result, 600);
 
     // call_exit returns Void (main has no `-> T` annotation).
-    let exit = events.last().unwrap();
-    assert_eq!(exit["kind"], "call_exit");
+    let exit = the_event(events, "call_exit", "main");
     assert_eq!(exit["return_value"]["kind"].as_str(), Some("Void"));
 }
 
 /// `assert.nr` — `assert(a != b)` where a == b == 12 (assertion fails).
 ///
-/// Pins: 1 call (main), 5 step events, EXACTLY 1 io_event tagged
-/// `ioError` carrying the Brillig failure string.  The variables
+/// Pins: 2 calls (`<toplevel>`, main), 12 step events, EXACTLY 1 io_event tagged
+/// `Error` (the exact `EventLogKind` `register_error` records) carrying
+/// the Brillig failure string.  The variables
 /// `a` (=12), `b` (=15 → 12 after the `b = y + 2` reassignment), `x`,
 /// `y` all surface as Field-typed Int values.
 #[test]
@@ -1374,32 +1405,33 @@ fn test_assert_via_ct_print_full() {
 
     let counts = &doc["counts"];
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
-    assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
+    assert_eq!(counts["functions"].as_u64(), Some(2), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(4), "varnames; counts={counts}");
     assert_eq!(counts["types"].as_u64(), Some(2), "types; counts={counts}");
     // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
     assert_eq!(counts["steps"].as_u64(), Some(12), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
     assert_eq!(counts["values"].as_u64(), Some(12), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(1), "io_events; counts={counts}");
 
-    assert_eq!(string_array(&doc, "functions"), vec!["main"]);
+    assert_eq!(string_array(&doc, "functions"), vec!["<toplevel>", "main"]);
     assert_eq!(string_array(&doc, "varnames"), vec!["x", "y", "a", "b"]);
     assert_eq!(string_array(&doc, "types"), vec!["None", "Field"]);
     assert_path_strip_normalised(&doc, "assert");
 
-    // 1 call_entry + 12 step events + 1 io + 1 call_exit = 15 wire-level events.
+    // 2 call_entry + 12 step events + 1 io + 2 call_exit = 17 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 15);
-    assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
+    assert_eq!(events.len(), 17);
+    assert_eq!(observed_call_sequence(&doc), vec!["<toplevel>".to_string(), "main".to_string()]);
 
-    // The single io_event must be tagged ioError and the text must match
+    // The single io_event must carry `EventLogKind::Error` — events.dat
+    // records the exact kind, and ct-print names it — and the text must match
     // the recorder's assertion-failure stringification (no payload in
     // this fixture, so the bare Nargo error string surfaces).
     let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
     assert_eq!(io_events.len(), 1);
     let io = io_events[0];
-    assert_eq!(io["io_kind"].as_str(), Some("ioError"));
+    assert_eq!(io["io_kind"].as_str(), Some("Error"));
     assert_eq!(
         io["text"].as_str(),
         Some("Failed to solve program: 'Failed to solve brillig function'")
@@ -1436,11 +1468,11 @@ fn test_assert_via_ct_print_full() {
 /// `Point` struct.  (The Nargo package name in this fixture is
 /// `zk_dungeon`, hence the trace file basename.)
 ///
-/// Pins: 1 call (main), 15 step events, 0 io_events, the
-/// function table is exactly `[main]`, the type table contains
-/// every distinct type the recorder ensures (in ensure order:
-/// None, Field, type_1, u32, type_3, Point, i8, type_6, Bool,
-/// String, Array<2, ..>), the varname table is the parameter list
+/// Pins: 2 calls (`<toplevel>`, main), 24 step events, 0 io_events, the
+/// function table is exactly `[<toplevel>, main]`, the type table contains
+/// every distinct type the recorder ensures, once each (in ensure order:
+/// None, Field, u32, Point, i8, Bool, String, Array<2, ..>), the varname
+/// table is the parameter list
 /// plus `result`, and the `Point` argument decodes as
 /// `ValueRecord::Struct` with two `Field`-typed children.
 #[test]
@@ -1456,48 +1488,37 @@ fn test_types_test_via_ct_print_full() {
 
     let counts = &doc["counts"];
     assert_eq!(counts["paths"].as_u64(), Some(1), "paths; counts={counts}");
-    assert_eq!(counts["functions"].as_u64(), Some(1), "functions; counts={counts}");
+    assert_eq!(counts["functions"].as_u64(), Some(2), "functions; counts={counts}");
     assert_eq!(counts["varnames"].as_u64(), Some(9), "varnames; counts={counts}");
-    assert_eq!(counts["types"].as_u64(), Some(10), "types; counts={counts}");
+    assert_eq!(counts["types"].as_u64(), Some(8), "types; counts={counts}");
     // See `test_a_1_mul_via_ct_print_full` for the re-pinning rationale.
     assert_eq!(counts["steps"].as_u64(), Some(24), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
     assert_eq!(counts["values"].as_u64(), Some(24), "values; counts={counts}");
     assert_eq!(counts["io_events"].as_u64(), Some(0), "io_events; counts={counts}");
 
-    assert_eq!(string_array(&doc, "functions"), vec!["main"]);
+    assert_eq!(string_array(&doc, "functions"), vec!["<toplevel>", "main"]);
     assert_eq!(
         string_array(&doc, "varnames"),
         vec!["a", "b", "c", "d", "e", "f", "g", "h", "result"]
     );
     assert_eq!(
         string_array(&doc, "types"),
-        vec![
-            "None",
-            "Field",
-            "u32",
-            "type_2",
-            "Point",
-            "i8",
-            "type_5",
-            "Bool",
-            "String",
-            "Array<2, ..>",
-        ]
+        vec!["None", "Field", "u32", "Point", "i8", "Bool", "String", "Array<2, ..>"]
     );
     assert_path_strip_normalised(&doc, "types_test");
 
-    // 1 call_entry + 24 step events + 1 call_exit = 26 wire-level events.
+    // 2 call_entry + 24 step events + 2 call_exit = 28 wire-level events.
     let events = doc["events"].as_array().unwrap();
-    assert_eq!(events.len(), 26);
-    assert_eq!(observed_call_sequence(&doc), vec!["main".to_string()]);
+    assert_eq!(events.len(), 28);
+    assert_eq!(observed_call_sequence(&doc), vec!["<toplevel>".to_string(), "main".to_string()]);
 
     // ---- call_entry args ------------------------------------------------
     // Column-aware register_call fires before params are bound, so the
     // `args` array is empty under the new mode (see a_1_mul).  When the
     // follow-up patch lands the deferred `register_call`, the original
     // per-param assertions can be restored here.
-    let entry = &events[0];
+    let entry = the_event(events, "call_entry", "main");
     let args = entry["args"].as_array().unwrap();
     assert!(args.is_empty(), "call_entry.args should be empty; got {args:?}");
     // The first user-visible step should surface every param the
@@ -1547,8 +1568,7 @@ fn test_types_test_via_ct_print_full() {
     assert_eq!(field_small_int(&h_elems[1]), 8);
 
     // call_exit returns Void
-    let exit = events.last().unwrap();
-    assert_eq!(exit["kind"], "call_exit");
+    let exit = the_event(events, "call_exit", "main");
     assert_eq!(exit["return_value"]["kind"].as_str(), Some("Void"));
 }
 
@@ -1793,13 +1813,11 @@ fn test_source_views_embed_the_compiled_source() {
         "{FIXTURE}: `source_views` is empty — the container steps through code \
          it cannot display. paths={paths:?}"
     );
-    assert_eq!(
-        doc["metadata"]["flags"]["has_alternate_source_views"].as_bool(),
-        Some(true),
-        "meta.dat capability flag bit 5 (FlagHasAlternateSourceViews) must be \
-         set once source views exist; flags={}",
-        doc["metadata"]["flags"]
-    );
+    // `meta.dat` is written by the trace's first record, before any view
+    // exists, so its bit 5 (`FlagHasAlternateSourceViews`) is never set: a
+    // reader finds `source_views.dat` by its presence in the container's root
+    // directory (`internal-files.md`, "Stream-presence flags are a hint, not a
+    // gate"). The non-empty `views` above is that presence.
     assert_eq!(
         doc["counts"]["source_views"].as_u64(),
         Some(paths.len() as u64),

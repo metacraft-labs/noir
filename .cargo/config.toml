@@ -1,0 +1,20 @@
+# Where `codetracer_trace_writer_nim`'s build script finds the Nim sources it
+# compiles into the native `nargo`'s CTFS writer. Populate the directory with
+#
+#     just trace-format-nim        # = scripts/fetch-trace-format-nim.sh
+#
+# which checks out `codetracer-trace-format-nim` (and its `stew` / `results`
+# requirements) at the revisions pinned in that script, matching the
+# `codetracer-trace-format` revision `Cargo.toml` pins.
+#
+# None of these is forced: a value already in the environment wins, so a
+# packager (the codetracer Nix build sets all three from its flake inputs) or a
+# developer pointing at a local checkout overrides them by exporting the
+# variable. Builds that never link the Nim writer (wasm, `cargo metadata`,
+# crates outside `nargo_cli`'s graph) do not read them.
+[env]
+CODETRACER_TRACE_FORMAT_NIM_DIR = { value = ".codetracer-deps/codetracer-trace-format-nim", relative = true }
+# The pinned checkouts above already carry the Nim package requirements, so
+# the build script's `nimble install --depsOnly` (network, and `nimble` on
+# PATH) is not needed.
+CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL = "1"

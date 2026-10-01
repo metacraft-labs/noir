@@ -77,3 +77,6 @@ mutants.out.old
 # Accepted snapshots (*.snap) are tracked and intentionally not ignored.
 *.snap.new
 *.pending-snap
+
+# Pinned Nim sources for the CTFS trace writer (scripts/fetch-trace-format-nim.sh)
+/.codetracer-deps

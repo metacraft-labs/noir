@@ -184,10 +184,15 @@ Measured, not assumed, on cargo 1.89.0 (the version `rust-toolchain.toml` select
 
 One consumer obligation is new and is documented at the declaration: a build that actually
 **links** `codetracer_trace_writer_nim` (i.e. anything with `nim-writer`, which `nargo_cli`
-turns on) must point `CODETRACER_TRACE_FORMAT_NIM_DIR` at a `codetracer-trace-format-nim`
-checkout, because that crate's `build.rs` looks for it as a sibling of the trace-format
-checkout and a cargo git checkout has no siblings. *Resolution* — `cargo metadata`,
-`cargo tree`, `cargo check` of anything short of that crate — needs nothing.
+turns on) needs the `codetracer-trace-format-nim` sources, because that crate's `build.rs`
+looks for them as a sibling of the trace-format checkout and a cargo git checkout has no
+siblings. This repository discharges it itself: `scripts/fetch-trace-format-nim.sh`
+(`just trace-format-nim`) checks out the pinned Nim revision, with the `stew` and `results`
+packages it requires, into `.codetracer-deps/`, and `.cargo/config.toml` points
+`CODETRACER_TRACE_FORMAT_NIM_DIR` there and skips the build script's `nimble install`. Neither
+variable is forced, so a packager that sets them (the codetracer Nix build does, from its
+flake inputs) overrides them. *Resolution* — `cargo metadata`, `cargo tree`, `cargo check` of
+anything short of that crate, and the wasm builds — needs nothing.
 
 The remaining `../codetracer-trace-format-nim` references in `tooling/tracer/tests` are
 **test-time** lookups of the `ct-print` decoder, not build-time manifest resolution, and are

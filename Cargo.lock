@@ -792,6 +792,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cbor4ii"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0948fe1a10668d439d5fd476904223ab08a6783945d451fb996728e952ebcc7"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.61"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -992,7 +1001,7 @@ dependencies = [
 [[package]]
 name = "codetracer_trace_types"
 version = "0.19.0"
-source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=235e377ec66b7d140e9c75828e805d53945824e3#235e377ec66b7d140e9c75828e805d53945824e3"
+source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=1eae5894ce97001f4b013e50767cc2243a1ed47f#1eae5894ce97001f4b013e50767cc2243a1ed47f"
 dependencies = [
  "base64 0.22.1",
  "num-derive",
@@ -1008,8 +1017,9 @@ dependencies = [
 [[package]]
 name = "codetracer_trace_writer_nim"
 version = "0.1.0"
-source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=235e377ec66b7d140e9c75828e805d53945824e3#235e377ec66b7d140e9c75828e805d53945824e3"
+source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=1eae5894ce97001f4b013e50767cc2243a1ed47f#1eae5894ce97001f4b013e50767cc2243a1ed47f"
 dependencies = [
+ "cbor4ii",
  "ciborium",
  "codetracer_trace_types",
  "serde_json",
