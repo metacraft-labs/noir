@@ -19,8 +19,15 @@ noirc_abi.workspace = true
 noirc_artifacts.workspace = true
 nargo.workspace = true
 codetracer_trace_types.workspace = true
+codetracer_trace_writer_rs.workspace = true
+base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# Reads the produced container back the way any CTFS consumer does.
+codetracer_trace_reader.workspace = true
+tempfile.workspace = true
 
 [features]
 # The `wasm-bindgen` binding, for a JS host. On by default.

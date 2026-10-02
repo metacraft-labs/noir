@@ -1,27 +1,18 @@
 //! An in-memory [`TraceSink`] that accumulates the CodeTracer low-level event
-//! stream instead of writing a container.
+//! stream, from which [`crate::container`] then builds the `.ct` container.
 //!
-//! ## Why this exists rather than a dependency on `codetracer_trace_writer`
+//! ## Why the recording goes through an event stream first
 //!
-//! There is, as of `codetracer-trace-format` v0.19.0, **no writer that can
-//! produce a `.ct` CTFS container from a wasm target**:
-//!
-//! * `codetracer_trace_writer_nim` links a Nim static library and `zstd-sys`.
-//! * the pure-Rust `codetracer_trace_writer` gates `ctfs_writer` behind
-//!   `#[cfg(not(target_arch = "wasm32"))]`, and `create_trace_writer(.., Ctfs)`
-//!   is a `panic!("CTFS format is not supported on wasm32")` there. It also
-//!   pulls `codetracer_ctfs` -> `zstd` (C, unconditional) and
-//!   `codetracer_trace_format_capnp`, whose build script requires the `capnp`
-//!   compiler on the host, and its wasm `ruzstd` dependency has a higher MSRV
-//!   than noir's pinned toolchain.
-//!
-//! So the wasm side stops at the event stream and hands it to the host, which
-//! can serialize it or feed it to a native container writer. The event
-//! semantics -- interning order, the implicit `Step` before a non-toplevel
-//! `Call`, `<toplevel>` being function 0 and `None` being type 0 -- mirror
-//! `codetracer_trace_writer::abstract_trace_writer::AbstractTraceWriter`
-//! exactly, so the produced stream is the same one that writer would have
-//! buffered.
+//! The pure-Rust `CtfsTraceWriter` that builds the container in a browser
+//! cannot carry two things the recording has: the source text of each file
+//! (it has no source-view stream), and the per-path line-length tables before
+//! the path is first mentioned. Collecting the whole recording here first
+//! lets the encoder register every path with its final table, and lets the
+//! source text travel beside the container instead of being lost. The event
+//! semantics -- interning order, `<toplevel>` being function 0 and `None`
+//! being type 0 -- mirror
+//! `codetracer_trace_writer::abstract_trace_writer::AbstractTraceWriter`, so
+//! replaying the stream into that writer reproduces its ids exactly.
 //!
 //! Columns: the `StepRecord` in `codetracer_trace_types` carries only
 //! `(path_id, line)`, so a column cannot travel inside the event stream. The
@@ -30,7 +21,7 @@
 //! **alongside** the stream, in [`MemoryTrace::step_columns`] — one entry per
 //! `Step` event, in step order — for exactly the reason `line_lengths` already
 //! travels alongside it: nothing in the low-level event stream can carry it,
-//! and a host that later encodes a container needs it. Dropping it here would
+//! and the container encoder needs it. Dropping it here would
 //! make a wasm-side recording strictly weaker than the native one over the same
 //! execution, and the column is not decoration: it is what distinguishes two
 //! steps on one source line. The capability latches are recorded on the sink so

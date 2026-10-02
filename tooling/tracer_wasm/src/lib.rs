@@ -3,7 +3,7 @@
 //! The whole point of this crate is that [`trace_artifact`] below contains **no
 //! reachable `std::fs`, `std::env`, `std::process` or networking**: a compiled
 //! Noir program arrives as JSON, its inputs arrive as a string, and the
-//! execution trace leaves as an in-memory event stream. It builds for
+//! execution trace leaves as an in-memory `.ct` container. It builds for
 //! `wasm32-unknown-unknown`, and the identical code path is exercised natively
 //! by this crate's tests.
 //!
@@ -15,7 +15,9 @@
 //! cd tooling/tracer_wasm && cargo build --release
 //! ```
 
+pub mod container;
 pub mod memory_sink;
+pub use container::encode_container;
 pub use memory_sink::{Capabilities, MemorySink, MemoryTrace, SourceView};
 
 use acvm::FieldElement;
@@ -121,18 +123,77 @@ pub fn trace_artifact(
     Ok(sink.into_trace())
 }
 
-/// Serialize a trace of `artifact_json` / `inputs` to JSON.
+/// What `ct_trace` answers on success: the recording as a `.ct` CTFS
+/// container, and what a browser host needs beside it.
+///
+/// `codetracer-specs/Recording-Backends/Browser-Recording-Container.md` §5.
+/// The source text travels here rather than in the container because the
+/// pure-Rust writer has no source-view stream; a tab's own source is the only
+/// copy of it anywhere, so dropping it would leave every position unreadable.
+#[derive(Debug, serde::Serialize)]
+pub struct TraceResult {
+    /// The `.ct` container, base64.
+    pub container: String,
+    /// The recorded source paths, in registration order: `source_views[].path_id`
+    /// indexes them.
+    pub paths: Vec<std::path::PathBuf>,
+    pub source_views: Vec<SourceView>,
+    /// The workdir the container records ("" when the recording has none,
+    /// as in a browser, where paths are the compiler's virtual package keys).
+    pub workdir: String,
+    pub capabilities: Capabilities,
+    /// Step and call counts, so a host can refuse an empty recording without
+    /// decoding the container. `calls` is the call tree below the
+    /// `<toplevel>` root, as `ct-print`'s `counts.calls` reports it.
+    pub steps: usize,
+    pub calls: usize,
+}
+
+/// Trace `artifact_json` / `inputs` and package the recording as a
+/// [`TraceResult`].
+pub fn trace_to_result(
+    artifact_json: &str,
+    inputs: &str,
+    inputs_are_json: bool,
+) -> Result<TraceResult, String> {
+    use base64::Engine as _;
+    use codetracer_trace_types::TraceLowLevelEvent;
+
+    let mut trace =
+        trace_artifact(artifact_json, inputs, inputs_are_json).map_err(|e| e.to_string())?;
+    let workdir = trace.workdir.get_or_insert_with(Default::default).to_string_lossy().into_owned();
+    let container = encode_container(&trace, "trace", None).map_err(|e| e.to_string())?;
+    let steps = trace.events.iter().filter(|e| matches!(e, TraceLowLevelEvent::Step(_))).count();
+    let calls = trace
+        .events
+        .iter()
+        .filter(|e| {
+            matches!(e, TraceLowLevelEvent::Call(c) if c.function_id != codetracer_trace_types::TOP_LEVEL_FUNCTION_ID)
+        })
+        .count();
+    Ok(TraceResult {
+        container: base64::engine::general_purpose::STANDARD.encode(container),
+        paths: trace.paths,
+        source_views: trace.source_views,
+        workdir,
+        capabilities: trace.capabilities,
+        steps,
+        calls,
+    })
+}
+
+/// Serialize the [`TraceResult`] of `artifact_json` / `inputs` to JSON.
 fn trace_to_json(
     artifact_json: &str,
     inputs: &str,
     inputs_are_json: bool,
 ) -> Result<String, String> {
-    let trace =
-        trace_artifact(artifact_json, inputs, inputs_are_json).map_err(|e| e.to_string())?;
-    serde_json::to_string(&trace).map_err(|e| e.to_string())
+    let result = trace_to_result(artifact_json, inputs, inputs_are_json)?;
+    serde_json::to_string(&result).map_err(|e| e.to_string())
 }
 
-/// JS entry point (the `js` feature). Returns the trace as a JSON string.
+/// JS entry point (the `js` feature). Returns the [`TraceResult`] as a JSON
+/// string.
 #[cfg(all(target_arch = "wasm32", feature = "js"))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn trace(artifact_json: &str, inputs: &str, inputs_are_json: bool) -> Result<String, String> {
@@ -201,7 +262,7 @@ pub mod abi {
 
     /// Trace a program. Returns a pointer to UTF-8 bytes; the length is
     /// [`ct_result_len`] and [`ct_result_is_error`] says which of the two shapes
-    /// (trace JSON / error message) it holds.
+    /// (a [`super::TraceResult`] JSON document / an error message) it holds.
     ///
     /// # Safety
     /// Both `(ptr, len)` pairs must describe initialized UTF-8 buffers that stay

@@ -222,6 +222,13 @@ codetracer_trace_types = { git = "https://github.com/metacraft-labs/codetracer-t
 # `nargo_cli`, or `noir_tracer` with `nim-writer`.  Resolution (`cargo
 # metadata`, `cargo tree`) and the wasm builds need nothing.
 codetracer_trace_writer = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "1eae5894ce97001f4b013e50767cc2243a1ed47f", package = "codetracer_trace_writer_nim" }
+# The pure-Rust CTFS writer, which the in-browser tracer (`noir_tracer_wasm`)
+# builds its `.ct` with: unlike the Nim-backed writer above it needs no C or
+# Nim toolchain and writes into memory on `wasm32-unknown-unknown`. Same
+# revision as the two crates above, so a browser recording and a native one
+# are the same container format.
+codetracer_trace_writer_rs = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "1eae5894ce97001f4b013e50767cc2243a1ed47f", package = "codetracer_trace_writer", default-features = false, features = ["pure-rust-zstd"] }
+codetracer_trace_reader = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "1eae5894ce97001f4b013e50767cc2243a1ed47f" }
 
 # Arkworks
 ark-bn254 = { version = "^0.6.0", default-features = false, features = [

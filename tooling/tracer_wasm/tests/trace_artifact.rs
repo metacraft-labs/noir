@@ -452,3 +452,43 @@ fn every_fixture_traces_without_panicking() {
         assert!(!t.paths.is_empty(), "{name}: registered no paths");
     }
 }
+
+/// What `ct_trace` answers is a `.ct` CTFS container, and it carries the
+/// recording: decoded by the trace-format reader it has the step and call
+/// counts the native container reports for the same fixture, and the result
+/// document carries the source text beside it and no event list.
+#[test]
+fn the_result_is_a_ct_container_carrying_the_recording() {
+    use base64::Engine as _;
+    for &(fixture, want_steps, want_calls, _want_paths, _want_io) in NATIVE_COUNTS {
+        let Some((artifact, inputs)) =
+            debug_artifact_for("the_result_is_a_ct_container_carrying_the_recording", fixture)
+        else {
+            return;
+        };
+        let result = noir_tracer_wasm::trace_to_result(&artifact, &inputs, false)
+            .unwrap_or_else(|e| panic!("tracing {fixture}: {e}"));
+        assert_eq!(result.steps, want_steps, "{fixture}: steps");
+        assert_eq!(result.calls, want_calls, "{fixture}: calls");
+        assert_eq!(result.source_views.len(), result.paths.len(), "{fixture}: sources");
+
+        let document = serde_json::to_value(&result).unwrap();
+        assert!(document.get("events").is_none(), "{fixture}: no event list in the result");
+
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&result.container)
+            .expect("the container is base64");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("{fixture}.ct"));
+        std::fs::write(&path, &bytes).unwrap();
+        let events = codetracer_trace_reader::ctfs_reader::read_trace_from_ctfs(&path)
+            .unwrap_or_else(|e| panic!("{fixture}: the container does not read back: {e}"));
+        let decoded_steps =
+            events.iter().filter(|e| matches!(e, TraceLowLevelEvent::Step(_))).count();
+        let decoded_calls =
+            events.iter().filter(|e| matches!(e, TraceLowLevelEvent::Call(_))).count();
+        assert_eq!(decoded_steps, want_steps, "{fixture}: steps in the container");
+        // The decoded stream includes the `<toplevel>` root call.
+        assert_eq!(decoded_calls, want_calls + 1, "{fixture}: calls in the container");
+    }
+}
