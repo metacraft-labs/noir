@@ -1019,7 +1019,7 @@ dependencies = [
 [[package]]
 name = "codetracer_ctfs"
 version = "0.1.0"
-source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=1eae5894ce97001f4b013e50767cc2243a1ed47f#1eae5894ce97001f4b013e50767cc2243a1ed47f"
+source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=3fada0b03c3d1a0cbc7c35f278aa639028d702c5#3fada0b03c3d1a0cbc7c35f278aa639028d702c5"
 dependencies = [
  "ruzstd",
  "serde",
@@ -1033,7 +1033,7 @@ dependencies = [
 [[package]]
 name = "codetracer_trace_format_capnp"
 version = "0.19.0"
-source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=1eae5894ce97001f4b013e50767cc2243a1ed47f#1eae5894ce97001f4b013e50767cc2243a1ed47f"
+source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=3fada0b03c3d1a0cbc7c35f278aa639028d702c5#3fada0b03c3d1a0cbc7c35f278aa639028d702c5"
 dependencies = [
  "capnp",
  "capnpc",
@@ -1043,12 +1043,12 @@ dependencies = [
 [[package]]
 name = "codetracer_trace_format_cbor_zstd"
 version = "0.19.0"
-source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=1eae5894ce97001f4b013e50767cc2243a1ed47f#1eae5894ce97001f4b013e50767cc2243a1ed47f"
+source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=3fada0b03c3d1a0cbc7c35f278aa639028d702c5#3fada0b03c3d1a0cbc7c35f278aa639028d702c5"
 
 [[package]]
 name = "codetracer_trace_reader"
 version = "0.19.0"
-source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=1eae5894ce97001f4b013e50767cc2243a1ed47f#1eae5894ce97001f4b013e50767cc2243a1ed47f"
+source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=3fada0b03c3d1a0cbc7c35f278aa639028d702c5#3fada0b03c3d1a0cbc7c35f278aa639028d702c5"
 dependencies = [
  "cbor4ii",
  "codetracer_ctfs",
@@ -1069,7 +1069,7 @@ dependencies = [
 [[package]]
 name = "codetracer_trace_types"
 version = "0.19.0"
-source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=1eae5894ce97001f4b013e50767cc2243a1ed47f#1eae5894ce97001f4b013e50767cc2243a1ed47f"
+source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=3fada0b03c3d1a0cbc7c35f278aa639028d702c5#3fada0b03c3d1a0cbc7c35f278aa639028d702c5"
 dependencies = [
  "base64 0.22.1",
  "num-derive",
@@ -1085,7 +1085,7 @@ dependencies = [
 [[package]]
 name = "codetracer_trace_writer"
 version = "0.19.0"
-source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=1eae5894ce97001f4b013e50767cc2243a1ed47f#1eae5894ce97001f4b013e50767cc2243a1ed47f"
+source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=3fada0b03c3d1a0cbc7c35f278aa639028d702c5#3fada0b03c3d1a0cbc7c35f278aa639028d702c5"
 dependencies = [
  "cbor4ii",
  "codetracer_ctfs",
@@ -1103,7 +1103,7 @@ dependencies = [
 [[package]]
 name = "codetracer_trace_writer_nim"
 version = "0.1.0"
-source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=1eae5894ce97001f4b013e50767cc2243a1ed47f#1eae5894ce97001f4b013e50767cc2243a1ed47f"
+source = "git+https://github.com/metacraft-labs/codetracer-trace-format?rev=3fada0b03c3d1a0cbc7c35f278aa639028d702c5#3fada0b03c3d1a0cbc7c35f278aa639028d702c5"
 dependencies = [
  "cbor4ii",
  "ciborium",

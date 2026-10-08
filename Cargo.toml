@@ -185,9 +185,9 @@ noir_ast_fuzzer = { path = "tooling/ast_fuzzer" }
 # `CtfsTraceWriter` this fork requires landed in 0.17.3, so the registry cannot
 # supply either half.  Checked against the crates.io API on 2026-09-03.
 #
-# WHY THIS REVISION.  1eae5894 writes the 2026-10 CTFS layout: container
-# version 5 and `meta.dat` version 6, which the matching readers require and
-# older ones refuse.  It moves together with two other pins: the Nim sources
+# WHY THIS REVISION.  3fada0b0 writes the 2026-10 CTFS layout (container
+# version 5, `meta.dat` version 6) in the order the Nim writer writes it, and
+# its readers refuse a container that carries `events.log` or `events.fmt`.  It moves together with two other pins: the Nim sources
 # its writer is compiled from (`TRACE_FORMAT_NIM_REV` in
 # `scripts/fetch-trace-format-nim.sh`), and `TRACE_FORMAT_REV` in the
 # codetracer repository's `ci/deploy/noir-wasm.pin`.
@@ -203,7 +203,7 @@ noir_ast_fuzzer = { path = "tooling/ast_fuzzer" }
 # trace.json + trace_metadata.json + trace_paths.json triplet was retired in the
 # 2026-05 convention pass — see
 # `codetracer-specs/Trace-Files/CTFS-Migration-Guide.md`.
-codetracer_trace_types = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "1eae5894ce97001f4b013e50767cc2243a1ed47f" }
+codetracer_trace_types = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "3fada0b03c3d1a0cbc7c35f278aa639028d702c5" }
 # Use the Nim-FFI-backed writer so the produced .ct container uses the
 # multi-stream layout that `ct-print --full` understands.  The pure-Rust
 # writer (`codetracer_trace_writer`) emits a SplitBinary single-shard
@@ -221,14 +221,14 @@ codetracer_trace_types = { git = "https://github.com/metacraft-labs/codetracer-t
 # requires).  Run it once before building anything that LINKS this crate —
 # `nargo_cli`, or `noir_tracer` with `nim-writer`.  Resolution (`cargo
 # metadata`, `cargo tree`) and the wasm builds need nothing.
-codetracer_trace_writer = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "1eae5894ce97001f4b013e50767cc2243a1ed47f", package = "codetracer_trace_writer_nim" }
+codetracer_trace_writer = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "3fada0b03c3d1a0cbc7c35f278aa639028d702c5", package = "codetracer_trace_writer_nim" }
 # The pure-Rust CTFS writer, which the in-browser tracer (`noir_tracer_wasm`)
 # builds its `.ct` with: unlike the Nim-backed writer above it needs no C or
 # Nim toolchain and writes into memory on `wasm32-unknown-unknown`. Same
 # revision as the two crates above, so a browser recording and a native one
 # are the same container format.
-codetracer_trace_writer_rs = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "1eae5894ce97001f4b013e50767cc2243a1ed47f", package = "codetracer_trace_writer", default-features = false, features = ["pure-rust-zstd"] }
-codetracer_trace_reader = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "1eae5894ce97001f4b013e50767cc2243a1ed47f" }
+codetracer_trace_writer_rs = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "3fada0b03c3d1a0cbc7c35f278aa639028d702c5", package = "codetracer_trace_writer", default-features = false, features = ["pure-rust-zstd"] }
+codetracer_trace_reader = { git = "https://github.com/metacraft-labs/codetracer-trace-format", rev = "3fada0b03c3d1a0cbc7c35f278aa639028d702c5" }
 
 # Arkworks
 ark-bn254 = { version = "^0.6.0", default-features = false, features = [
