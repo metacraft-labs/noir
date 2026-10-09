@@ -109,19 +109,11 @@ fn debug_artifact_for(test_name: &str, fixture: &str) -> Option<(String, String)
     let root = workspace_root();
     let dir = root.join("test_programs/trace").join(fixture);
 
+    // A fixture without a `Prover.toml` is traced with empty inputs, which is
+    // what `nargo trace` does for a `main` without parameters. A fixture that
+    // has parameters and lost its inputs file then fails in `trace_artifact`
+    // with the ABI error naming the missing parameter, not here.
     let inputs_path = dir.join("Prover.toml");
-    if !inputs_path.exists() {
-        // A fixture without inputs is a fact about the corpus rather than about
-        // the environment, so `every_fixture_traces_without_panicking` — which
-        // enumerates the whole of `test_programs/trace` — passes over it. A
-        // NAMED fixture that has lost its `Prover.toml` is a different thing and
-        // must not read as a smaller test.
-        if test_name == "every_fixture_traces_without_panicking" {
-            eprintln!("SKIP: {test_name}: fixture {fixture} has no Prover.toml");
-            return None;
-        }
-        panic!("{test_name} names fixture {fixture}, which has no Prover.toml at {inputs_path:?}");
-    }
 
     // Per-*test* scratch dir, not per-fixture: three tests here compile
     // `a_1_mul`, cargo runs them in parallel by default, and they were all
@@ -149,7 +141,11 @@ fn debug_artifact_for(test_name: &str, fixture: &str) -> Option<(String, String)
     );
 
     let artifact = std::fs::read_to_string(&artifact_path).expect("debug artifact");
-    let inputs = std::fs::read_to_string(&inputs_path).expect("Prover.toml");
+    let inputs = if inputs_path.exists() {
+        std::fs::read_to_string(&inputs_path).expect("Prover.toml")
+    } else {
+        String::new()
+    };
     Some((artifact, inputs))
 }
 
@@ -208,6 +204,9 @@ const NATIVE_COUNTS: &[(&str, usize, usize, usize, usize)] = &[
     ("a_3_two_files", 15, 3, 3, 0),
     ("assert", 12, 1, 1, 1),
     ("a_7_looper", 92, 2, 2, 11),
+    // The one fixture whose `main` takes no parameters, and so ships no
+    // `Prover.toml`: it is traced with empty inputs, as `nargo trace` does.
+    ("double_loops", 28, 1, 2, 4),
 ];
 
 #[test]
@@ -226,6 +225,44 @@ fn in_memory_trace_matches_the_native_container() {
         assert_eq!(t.paths.len(), want_paths, "{fixture}: paths ({:?})", t.paths);
         assert_eq!(io_events(&t), want_io, "{fixture}: io_events");
     }
+}
+
+/// A program whose `main` takes no parameters needs no inputs file, and is
+/// traced with empty inputs exactly as `nargo trace` traces it
+/// (`noir_artifact_cli::fs::inputs::read_inputs_from_file` returns an empty
+/// map when the ABI has no parameters and there is no file).
+#[test]
+fn a_parameterless_program_traces_without_an_inputs_file() {
+    let Some((artifact, inputs)) =
+        debug_artifact_for("a_parameterless_program_traces_without_an_inputs_file", "double_loops")
+    else {
+        return;
+    };
+    assert!(inputs.is_empty(), "double_loops ships no Prover.toml: {inputs:?}");
+    let t = trace_artifact(&artifact, &inputs, false).expect("tracing double_loops");
+    let printed: Vec<&str> = t
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            TraceLowLevelEvent::Event(r) => Some(r.content.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(printed, vec!["---Test\n"; 4], "two loops of two iterations each print once");
+}
+
+/// Empty inputs are only enough for a parameterless `main`: a program with
+/// parameters is refused, naming the parameter it was not given.
+#[test]
+fn empty_inputs_are_refused_for_a_program_with_parameters() {
+    let Some((artifact, _)) =
+        debug_artifact_for("empty_inputs_are_refused_for_a_program_with_parameters", "a_1_mul")
+    else {
+        return;
+    };
+    let err = trace_artifact(&artifact, "", false).expect_err("a_1_mul takes x, y and z");
+    let message = err.to_string();
+    assert!(message.contains("`x`"), "the refusal names the missing parameter: {message}");
 }
 
 #[test]
