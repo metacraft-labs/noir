@@ -45,7 +45,7 @@
 set -euo pipefail
 
 TRACE_FORMAT_NIM_REPO="${TRACE_FORMAT_NIM_REPO:-https://github.com/metacraft-labs/codetracer-trace-format-nim}"
-TRACE_FORMAT_NIM_REV="${TRACE_FORMAT_NIM_REV:-051efd22b00ec3b88676fb07755a65c5a4ca8fde}"
+TRACE_FORMAT_NIM_REV="${TRACE_FORMAT_NIM_REV:-808ffdb4507634c3aba0661d96cbc353420ed856}"
 
 NIM_STEW_REPO="${NIM_STEW_REPO:-https://github.com/status-im/nim-stew}"
 NIM_STEW_REV="${NIM_STEW_REV:-1a5d0b99209f50ff055d9b5216849ba0365f8cf5}"
