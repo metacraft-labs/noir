@@ -57,13 +57,15 @@ impl DebugInstrumenter {
             match &mut item.kind {
                 // Instrument top-level functions of a module
                 ItemKind::Function(f) => self.walk_fn(&mut f.def),
-                // Instrument contract module
-                ItemKind::Submodules(ParsedSubModule {
-                    is_contract: true,
-                    contents: contract_module,
-                    ..
-                }) => {
-                    self.instrument_module(contract_module);
+                // Instrument every inline submodule (`mod tests { .. }`, a contract
+                // module, ..). Out-of-line modules are separate parsed files and are
+                // instrumented as files; an inline one exists only here, so without
+                // this its functions — most often the package's `#[test]` functions —
+                // would run uninstrumented and be invisible to the debugger and the
+                // tracer. The calls the instrumenter inserts use the absolute path
+                // `::__debug::..`, so they resolve from any module depth.
+                ItemKind::Submodules(ParsedSubModule { contents: submodule, .. }) => {
+                    self.instrument_module(submodule);
                 }
                 _ => (),
             }
@@ -1179,5 +1181,41 @@ mod tests {
             1 + 1,
             "expected the parameter binding plus the assignment in the loop body, got:\n{bare_loop}"
         );
+    }
+
+    /// A function in an INLINE submodule is instrumented like a top-level one.
+    ///
+    /// `mod tests { #[test] fn .. }` is where a Noir package keeps its tests, so
+    /// a submodule the instrumenter skipped is a test the debugger and the
+    /// tracer (`nargo trace --test-name`) see no frame and no locals for. The
+    /// outer function is instrumented in the same run as the control: the
+    /// difference between the two is the submodule, not the instrumenter.
+    #[test]
+    fn functions_in_inline_submodules_are_instrumented() {
+        let src = "fn outer() { let a = 1; }
+                   mod tests {
+                       fn inner() { let b = 2; }
+                       mod deeper { fn deepest() { let c = 3; } }
+                   }";
+        let (mut module, errors) = parse_program_with_dummy_file(src);
+        assert!(errors.is_empty(), "fixture failed to parse: {errors:?}");
+        DebugInstrumenter::default().instrument_module(&mut module);
+
+        fn rendered(module: &crate::parser::ParsedModule, out: &mut Vec<String>) {
+            for item in &module.items {
+                match &item.kind {
+                    crate::parser::ItemKind::Function(f) => out.push(f.to_string()),
+                    crate::parser::ItemKind::Submodules(sub) => rendered(&sub.contents, out),
+                    _ => (),
+                }
+            }
+        }
+        let mut functions = Vec::new();
+        rendered(&module, &mut functions);
+        assert_eq!(functions.len(), 3, "{functions:?}");
+        for f in &functions {
+            assert_eq!(count(f, "__debug_fn_enter"), 1, "not instrumented:\n{f}");
+            assert_eq!(count(f, "__debug_var_assign"), 1, "local not recorded:\n{f}");
+        }
     }
 }

@@ -1,8 +1,13 @@
 use bn254_blackbox_solver::Bn254BlackBoxSolver;
 use clap::Args;
 
-use nargo::ops::debug::compile_options_for_debugging;
+use nargo::ops::debug::{
+    compile_options_for_debugging, compile_test_fn_for_debugging, get_test_function_for_debug,
+    load_workspace_files, prepare_package_for_debug,
+};
+use nargo::ops::{check_crate_and_report_errors, report_errors};
 use nargo::package::Package;
+use nargo::workspace::Workspace;
 use nargo::{constants::PROVER_INPUT_FILE, ops::debug::compile_bin_package_for_debugging};
 use nargo_toml::{PackageSelection, get_package_manifest, resolve_workspace_from_toml};
 use noir_tracer::TraceOptions;
@@ -57,6 +62,18 @@ pub(crate) struct TraceCommand {
     /// the source-level instrumenter only runs on the debugging compile path.
     #[clap(long)]
     emit_debug_artifact: Option<PathBuf>,
+
+    /// Trace this `#[test]` function instead of `main`.
+    ///
+    /// Matched the way `nargo debug --test-name` matches: a substring of the
+    /// test's fully-qualified name, narrowed to the exact last `::` segment when
+    /// several tests contain it, so `tests::test_x` and `test_x` both select
+    /// `tests::test_x`. Only a test without parameters can be traced (one with
+    /// parameters is a fuzz test, refused as `nargo debug` refuses it), so no
+    /// prover inputs are read. A test that fails is traced up to its failure,
+    /// recorded as an error event, as a failing `main` is.
+    #[clap(long)]
+    test_name: Option<String>,
 }
 
 pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliError> {
@@ -70,6 +87,16 @@ pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliErro
         selection,
         Some(NOIR_ARTIFACT_VERSION_STRING.to_string()),
     )?;
+
+    if let Some(test_name) = &args.test_name {
+        return trace_test(
+            test_name,
+            &workspace,
+            args.compile_options.clone(),
+            args.emit_debug_artifact.as_deref(),
+            &args.out_dir,
+        );
+    }
 
     let Some(package) = workspace.into_iter().find(|p| p.is_binary()) else {
         println!(
@@ -88,15 +115,72 @@ pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliErro
         compile_bin_package_for_debugging(&workspace, package, &compile_options)?;
 
     if let Some(path) = &args.emit_debug_artifact {
-        let artifact: ProgramArtifact = compiled_program.clone().into();
-        let json = serde_json::to_string(&artifact)
-            .map_err(|err| CliError::Generic(format!("serializing the debug artifact: {err}")))?;
-        std::fs::write(path, json).map_err(|err| {
-            CliError::Generic(format!("writing the debug artifact to {}: {err}", path.display()))
-        })?;
+        write_debug_artifact(&compiled_program, path)?;
     }
 
     trace_program_and_decode(compiled_program, package, &args.prover_name, &args.out_dir)
+}
+
+fn write_debug_artifact(program: &CompiledProgram, path: &std::path::Path) -> Result<(), CliError> {
+    let artifact: ProgramArtifact = program.clone().into();
+    let json = serde_json::to_string(&artifact)
+        .map_err(|err| CliError::Generic(format!("serializing the debug artifact: {err}")))?;
+    std::fs::write(path, json).map_err(|err| {
+        CliError::Generic(format!("writing the debug artifact to {}: {err}", path.display()))
+    })
+}
+
+/// Trace the `#[test]` function `test_name` names, compiled with the same
+/// debug instrumentation `main` gets, into the same `<package>.ct`.
+///
+/// The test is found and compiled the way `nargo debug --test-name` finds and
+/// compiles it (`get_test_function_for_debug`, `compile_test_fn_for_debugging`).
+/// Tests live in libraries as often as in binaries, so any package kind is
+/// accepted. A test with parameters is refused by
+/// `get_test_function_for_debug`, so the witness of a traced test is empty.
+fn trace_test(
+    test_name: &str,
+    workspace: &Workspace,
+    compile_options: CompileOptions,
+    emit_debug_artifact: Option<&std::path::Path>,
+    out_dir: &str,
+) -> Result<(), CliError> {
+    let Some(package) = workspace.into_iter().next() else {
+        return Err(CliError::Generic(
+            "No packages found in workspace, so there is no test to trace.".to_string(),
+        ));
+    };
+
+    let compile_options = compile_options_for_debugging(false, false, compile_options);
+
+    let (file_manager, mut parsed_files) = load_workspace_files(workspace);
+    let (mut context, crate_id) =
+        prepare_package_for_debug(&file_manager, &mut parsed_files, package, workspace);
+    check_crate_and_report_errors(&mut context, crate_id, &compile_options)?;
+
+    let test =
+        get_test_function_for_debug(crate_id, &context, test_name).map_err(CliError::Generic)?;
+
+    let compiled_program =
+        match compile_test_fn_for_debugging(&test, &mut context, compile_options.clone()) {
+            Ok(program) => program,
+            Err(error) => {
+                report_errors::<()>(
+                    Err(vec![error.into()]),
+                    &file_manager,
+                    &parsed_files,
+                    compile_options.deny_warnings,
+                    compile_options.silence_warnings,
+                )?;
+                return Err(CliError::Generic(format!("test `{}` failed to compile", test.name)));
+            }
+        };
+
+    if let Some(path) = emit_debug_artifact {
+        write_debug_artifact(&compiled_program, path)?;
+    }
+
+    trace_program(&compiled_program, &package.name, &InputMap::new(), out_dir)
 }
 
 fn trace_program_and_decode(

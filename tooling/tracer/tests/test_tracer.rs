@@ -1892,3 +1892,190 @@ fn test_source_views_embed_the_compiled_source() {
          against their on-disk bytes"
     );
 }
+
+// -- `nargo trace --test-name` ------------------------------------------------
+//
+// `nargo trace --test-name <name>` traces ONE `#[test]` function of the package
+// instead of `main`, with the same instrumentation and the same `.ct` output.
+// The name is matched the way `nargo debug --test-name` matches it: a
+// substring of the test's fully-qualified name, narrowed to the exact last
+// `::` segment when several tests contain it. So both `tests::test_nested`
+// and the bare `test_nested` select the nested test, which is what lets a
+// caller holding either form (a test catalog's selector, or a function name
+// scanned out of the source) trace the test without rewriting it.
+//
+// The fixture is `test_programs/trace/test_functions`: a passing test, a test
+// whose `assert` fails, a `#[test(should_fail)]` test, and a test nested in
+// `mod tests`. Its `main` is traced by the generated `trace_test_functions`
+// case in `nargo_cli`, like every other fixture here.
+//
+// A FAILING TEST STILL PRODUCES A TRACE. Tracing records an execution; it does
+// not adjudicate one. A test whose `assert` fails is traced up to the failure,
+// which is recorded as an `Error` io event — exactly how a failing `main` is
+// recorded (`test_assert_via_ct_print_full`) — and `nargo trace` exits 0
+// because the trace was written. A `#[test(should_fail)]` test is the same
+// execution: it fails, so its trace ends in the same `Error` event. The
+// expectation inversion that makes it a PASSING test is `nargo test`'s verdict,
+// and is deliberately not re-applied here: the trace says what ran.
+
+/// Run `nargo trace --test-name <test>` on `fixture`; return the process
+/// output and, when exactly one `.ct` was written, its `ct-print --full`
+/// JSON. `None` only under the explicit skip opt-out.
+fn trace_test_and_dump(
+    test_name: &str,
+    fixture: &str,
+    test: &str,
+) -> Option<(std::process::Output, Option<serde_json::Value>)> {
+    let nargo = locate_nargo(test_name)?;
+    let ct_print = locate_ct_print(test_name)?;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out_dir = tmp.path().join("traces");
+
+    let fixture_dir = trace_fixture(fixture);
+    assert!(fixture_dir.exists(), "fixture not found: {}", fixture_dir.display());
+
+    let output = Command::new(&nargo)
+        .arg("--program-dir")
+        .arg(&fixture_dir)
+        .arg("trace")
+        .arg("--test-name")
+        .arg(test)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .output()
+        .expect("nargo trace --test-name invocation");
+
+    let ct_files: Vec<PathBuf> = std::fs::read_dir(&out_dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().map(|e| e == "ct").unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default();
+    if ct_files.len() != 1 {
+        return Some((output, None));
+    }
+
+    let dump = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("ct-print invocation");
+    assert!(
+        dump.status.success(),
+        "ct-print --full failed for {fixture} --test-name {test}: stderr={}",
+        String::from_utf8_lossy(&dump.stderr)
+    );
+    let doc: serde_json::Value =
+        serde_json::from_slice(&dump.stdout).expect("ct-print --full should emit valid JSON");
+    drop(tmp);
+    Some((output, Some(doc)))
+}
+
+fn io_event_kinds(doc: &serde_json::Value) -> Vec<String> {
+    doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "io")
+        .map(|e| e["io_kind"].as_str().unwrap_or("").to_string())
+        .collect()
+}
+
+/// Asserts the run succeeded and produced a trace, and returns it.
+fn expect_test_trace(
+    result: (std::process::Output, Option<serde_json::Value>),
+    test: &str,
+) -> serde_json::Value {
+    let (output, doc) = result;
+    assert!(
+        output.status.success(),
+        "nargo trace --test-name {test} failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    doc.unwrap_or_else(|| panic!("nargo trace --test-name {test} wrote no single .ct"))
+}
+
+#[test]
+fn test_trace_test_name_traces_the_named_test_instead_of_main() {
+    let name = "test_trace_test_name_traces_the_named_test_instead_of_main";
+    let Some(result) = trace_test_and_dump(name, "test_functions", "test_passes") else {
+        return;
+    };
+    let doc = expect_test_trace(result, "test_passes");
+
+    // The traced entry point is the test, and `main` never ran.
+    let functions = string_array(&doc, "functions");
+    assert!(functions.contains(&"test_passes"), "functions={functions:?}");
+    assert!(functions.contains(&"add_one"), "functions={functions:?}");
+    assert!(!functions.contains(&"main"), "main must not be traced; functions={functions:?}");
+    let calls = observed_call_sequence(&doc);
+    assert_eq!(
+        calls,
+        vec!["<toplevel>".to_string(), "test_passes".to_string(), "add_one".to_string()]
+    );
+    // Instrumented like `main` is: the test's locals are recorded.
+    let varnames = string_array(&doc, "varnames");
+    assert!(varnames.contains(&"r"), "varnames={varnames:?}");
+    // A passing test reports no error.
+    assert_eq!(io_event_kinds(&doc), Vec::<String>::new());
+}
+
+#[test]
+fn test_trace_test_name_records_a_failing_test_up_to_its_failure() {
+    let name = "test_trace_test_name_records_a_failing_test_up_to_its_failure";
+    let Some(result) = trace_test_and_dump(name, "test_functions", "test_fails") else {
+        return;
+    };
+    let doc = expect_test_trace(result, "test_fails");
+    let calls = observed_call_sequence(&doc);
+    assert_eq!(calls[1], "test_fails", "calls={calls:?}");
+    // The failed `assert` is recorded as the run's one Error event, exactly as
+    // a failing `main` is.
+    assert_eq!(io_event_kinds(&doc), vec!["Error".to_string()]);
+}
+
+#[test]
+fn test_trace_test_name_records_a_should_fail_test_as_the_failure_it_is() {
+    let name = "test_trace_test_name_records_a_should_fail_test_as_the_failure_it_is";
+    let Some(result) = trace_test_and_dump(name, "test_functions", "test_should_fail") else {
+        return;
+    };
+    let doc = expect_test_trace(result, "test_should_fail");
+    assert_eq!(observed_call_sequence(&doc)[1], "test_should_fail");
+    // The execution failed — which is what makes it a passing should_fail test
+    // under `nargo test`, and what the trace records.
+    assert_eq!(io_event_kinds(&doc), vec!["Error".to_string()]);
+}
+
+#[test]
+fn test_trace_test_name_accepts_the_qualified_and_the_bare_name() {
+    let name = "test_trace_test_name_accepts_the_qualified_and_the_bare_name";
+    for test in ["tests::test_nested", "test_nested"] {
+        let Some(result) = trace_test_and_dump(name, "test_functions", test) else {
+            return;
+        };
+        let doc = expect_test_trace(result, test);
+        assert_eq!(observed_call_sequence(&doc)[1], "test_nested", "via {test}");
+        assert_eq!(io_event_kinds(&doc), Vec::<String>::new(), "via {test}");
+    }
+}
+
+#[test]
+fn test_trace_test_name_refuses_a_name_that_matches_no_test() {
+    let name = "test_trace_test_name_refuses_a_name_that_matches_no_test";
+    let Some((output, doc)) = trace_test_and_dump(name, "test_functions", "no_such_test") else {
+        return;
+    };
+    assert!(!output.status.success(), "an unknown test must not succeed");
+    assert!(doc.is_none(), "an unknown test must not write a trace");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("`no_such_test` does not match with any test function"),
+        "stderr={stderr}"
+    );
+}
