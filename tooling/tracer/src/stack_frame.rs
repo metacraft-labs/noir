@@ -8,8 +8,33 @@ pub(crate) struct StackFrame {
     /// The param indexes are used to address the `variables` vector; they indicate which of the
     /// variables in the stack frame are parameters.
     pub(crate) function_param_indexes: Vec<usize>,
+    /// How many of the function's declared parameters the instrumenter binds under the name the
+    /// frame declares, bound yet or not.
+    ///
+    /// `function_param_indexes` lists only the parameters that already have a value in
+    /// `variables`, and under column-aware stepping a frame appears before any of its parameters
+    /// is bound: the instrumenter binds them one step per parameter, at each parameter's own
+    /// column in the signature. Comparing the two lengths is what tells the recorder whether a
+    /// call record written now would carry every argument it will ever have; see
+    /// [`StackFrame::all_params_bound`].
+    ///
+    /// A `_` or destructuring parameter is not counted: it is never bound under its declared
+    /// name (see `debugger_glue::is_bindable_param_name`), so counting it would make the recorder
+    /// wait for it until the function returns, and then record the parameters' values at the
+    /// return instead of at the call.
+    pub(crate) bindable_param_count: usize,
     /// A sorted vector of the frame variables. Not enforced, so beware of bugs.
     pub(crate) variables: Vec<Variable>,
+}
+
+impl StackFrame {
+    /// Whether every parameter the instrumenter binds has a value in this frame.
+    ///
+    /// Always true for a function that declares no parameter, or only `_` and destructuring
+    /// ones.
+    pub(crate) fn all_params_bound(&self) -> bool {
+        self.function_param_indexes.len() == self.bindable_param_count
+    }
 }
 
 // Implement PartialEq for StackFrame manually, because it only needs to use the function_name as an

@@ -529,3 +529,129 @@ fn the_result_is_a_ct_container_carrying_the_recording() {
         assert_eq!(decoded_calls, want_calls + 1, "{fixture}: calls in the container");
     }
 }
+
+/// One decoded event of a container, with every id resolved to its name, so two
+/// containers can be compared even if they numbered things differently.
+#[derive(Debug, PartialEq)]
+enum Resolved {
+    /// A call: the function and its arguments as `(name, value)`.
+    Call(String, Vec<(String, String)>),
+    /// A step: its line and the variables it carries as `(name, value)`.
+    Step(i64, Vec<(String, String)>),
+}
+
+/// The calls and steps of the container at `path`, ids resolved. A `Value`
+/// belongs to the `Step` it follows, which is how the reader hands them back.
+fn resolved_calls_and_steps(path: &std::path::Path) -> Vec<Resolved> {
+    let events = codetracer_trace_reader::ctfs_reader::read_trace_from_ctfs(path)
+        .unwrap_or_else(|e| panic!("{} does not read back: {e}", path.display()));
+    let functions: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            TraceLowLevelEvent::Function(f) => Some(f.name.clone()),
+            _ => None,
+        })
+        .collect();
+    let variables: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            TraceLowLevelEvent::VariableName(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    let named = |v: &codetracer_trace_types::FullValueRecord| {
+        (variables[v.variable_id.0].clone(), format!("{:?}", v.value))
+    };
+    let mut out = Vec::new();
+    for event in &events {
+        match event {
+            TraceLowLevelEvent::Call(call) => out.push(Resolved::Call(
+                functions[call.function_id.0].clone(),
+                call.args.iter().map(named).collect(),
+            )),
+            TraceLowLevelEvent::Step(step) => out.push(Resolved::Step(step.line.0, Vec::new())),
+            TraceLowLevelEvent::Value(value) => match out.last_mut() {
+                Some(Resolved::Step(_, vars)) => vars.push(named(value)),
+                other => panic!("a Value that follows no step, after {other:?}"),
+            },
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Each call argument lands on the call record AND on the callee's first step —
+/// never on the caller's step — in the container the in-memory path produces,
+/// exactly as in the native one.
+///
+/// The format registers every call argument twice: on the call record, and as a
+/// variable of the callee's next step (`codetracer-trace-format-spec/
+/// trace-events.md` §"Recorder Integration — Staging Values"; the Nim writer's
+/// `TraceWriter::arg` does both). A `Value` belongs to the step that is open when
+/// it arrives, so where `MemorySink::register_call` puts the argument values
+/// relative to the `Call` decides which step they decode under. In front of the
+/// `Call` they decode under the caller's last step: `<toplevel>`'s entry step
+/// then carries `main`'s parameters, and `main`'s step a second `x`, which is
+/// `foo`'s.
+///
+/// `a_2_function_calls` is the fixture because its calls nest (`main` -> `foo`
+/// -> `bar`, twice) with parameter names that collide with the caller's. The
+/// comparison is against the native container `nargo trace` wrote for the same
+/// fixture, both read back by the same reader with every id resolved to its
+/// name: the container is what a viewer is given, and the native one is the
+/// reference this crate's other tests already measure against.
+#[test]
+fn call_arguments_land_on_the_call_and_the_callees_first_step() {
+    use base64::Engine as _;
+    let test_name = "call_arguments_land_on_the_call_and_the_callees_first_step";
+    let fixture = "a_2_function_calls";
+    let Some((artifact, inputs)) = debug_artifact_for(test_name, fixture) else {
+        return;
+    };
+    // `debug_artifact_for` ran `nargo trace --out-dir` into this directory.
+    let native = std::env::temp_dir()
+        .join(format!("noir_tracer_wasm_{test_name}_{fixture}"))
+        .join(format!("{fixture}.ct"));
+
+    let result =
+        noir_tracer_wasm::trace_to_result(&artifact, &inputs, false).expect("tracing the fixture");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&result.container)
+        .expect("the container is base64");
+    let dir = tempfile::tempdir().unwrap();
+    let in_memory = dir.path().join(format!("{fixture}.ct"));
+    std::fs::write(&in_memory, &bytes).unwrap();
+
+    let want = resolved_calls_and_steps(&native);
+    let got = resolved_calls_and_steps(&in_memory);
+
+    // Not vacuous: the reference itself carries the arguments, on the calls and
+    // on the callees' first steps, and nothing on `<toplevel>`'s entry step.
+    let calls: Vec<(&str, Vec<&str>)> = want
+        .iter()
+        .filter_map(|r| match r {
+            Resolved::Call(f, args) => {
+                Some((f.as_str(), args.iter().map(|(n, _)| n.as_str()).collect()))
+            }
+            Resolved::Step(..) => None,
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        vec![
+            ("<toplevel>", vec![]),
+            ("main", vec!["x", "y"]),
+            ("foo", vec!["x"]),
+            ("bar", vec!["y"]),
+            ("foo", vec!["x"]),
+            ("bar", vec!["y"]),
+        ]
+    );
+    assert_eq!(want[1], Resolved::Step(1, vec![]), "the entry step carries nothing");
+    let Resolved::Call(_, main_args) = &want[2] else {
+        panic!("main's call follows the entry step")
+    };
+    assert_eq!(want[3], Resolved::Step(9, main_args.clone()), "main's first step carries its args");
+
+    assert_eq!(got, want, "the in-memory container must decode as the native one does");
+}

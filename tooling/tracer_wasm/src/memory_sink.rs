@@ -316,13 +316,27 @@ impl TraceSink for MemorySink {
     /// across the `test_programs/trace` fixtures, where the auto-step made the
     /// in-memory stream overshoot by exactly one step per non-toplevel call.
     /// The recorder has already emitted the caller's step itself.
+    ///
+    /// ## Why the argument values are pushed AFTER the Call
+    ///
+    /// Each argument is also a variable of the callee's first step — that is
+    /// what the Nim writer's `TraceWriter::arg` does, and what
+    /// `codetracer-trace-format-spec/trace-events.md` §"Recorder Integration —
+    /// Staging Values" requires. A `Value` belongs to the step that is open
+    /// when it arrives, and until the `Call` flushes it that is the CALLER's
+    /// last step: pushed in front of the `Call`, `main`'s three arguments
+    /// decode as variables of `<toplevel>`'s entry step, and a callee's
+    /// parameter as a second value of a caller variable of the same name.
+    /// Pushed after it, they wait for the callee's first step, exactly as in
+    /// the native container. `tests/trace_artifact.rs::
+    /// call_arguments_land_on_the_call_and_the_callees_first_step` holds this.
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
-        if function_id != TOP_LEVEL_FUNCTION_ID {
-            for arg in &args {
-                self.push(TraceLowLevelEvent::Value(arg.clone()));
-            }
-        }
+        let values: Vec<FullValueRecord> =
+            if function_id != TOP_LEVEL_FUNCTION_ID { args.clone() } else { Vec::new() };
         self.push(TraceLowLevelEvent::Call(CallRecord { function_id, args }));
+        for value in values {
+            self.push(TraceLowLevelEvent::Value(value));
+        }
     }
 
     fn register_return(&mut self, return_value: ValueRecord) {

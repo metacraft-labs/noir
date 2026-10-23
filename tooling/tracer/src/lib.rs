@@ -58,6 +58,50 @@ enum DebugStepResult<Error> {
     Error(Error),
 }
 
+/// A tracer write held back, in order, while a call record waits for its frame's parameters.
+/// See [`PendingCall`].
+enum DeferredWrite {
+    Step(SourceLocation),
+    Variables(StackFrame),
+    Print(String),
+}
+
+/// A call whose record has not been written yet, because its frame's parameters are not all
+/// bound.
+///
+/// WHY A CALL RECORD IS WRITTEN LATE. The record's arguments are read from the callee's frame
+/// (`tracer_glue::convert_params_to_args_vec`), and a frame appears at `__debug_fn_enter`, before
+/// any parameter is bound: under column-aware stepping the instrumenter binds the parameters
+/// afterwards, one step per parameter, at each parameter's own column in the signature
+/// (`a_1_mul`'s first steps are `(1,1)`, `(3,13)`, `(3,21)`, `(3,29)`). A record written when the
+/// frame appears therefore carries no argument at all, and a viewer renders every call as `()`.
+///
+/// WHY THE WRITES AFTER IT ARE HELD AS WELL. A trace is an ordered stream, and the call record
+/// opens the callee's frame: every step, variable and print event between the frame appearing and
+/// its parameters being bound belongs INSIDE the call. Writing them while the record waits would
+/// file them under the caller. So they are kept here, in order, and replayed right after the
+/// record, which makes the stream identical to the one an eager record produces except that the
+/// record carries its arguments.
+///
+/// The record is written (see [`TracingContext::settle_pending_call`] and
+/// [`TracingContext::write_pending_call`]):
+///
+/// * when the frame's parameters are all bound, at the start of the update that first sees it;
+/// * when the frame stack changes so that the frame is gone or a deeper frame is entered — with
+///   whatever is bound by then, before that update's returns and calls, which must follow it;
+/// * when tracing ends, normally or on an error, so a run that stops early still closes the
+///   stream with every call it entered.
+struct PendingCall {
+    /// Where the caller was when the frame appeared; `register_call` files the function under it.
+    call_site: SourceLocation,
+    /// The frame's index in the frame stack. It is always the innermost frame: entering a deeper
+    /// one writes this record first.
+    depth: usize,
+    /// The latest snapshot of the frame, which is what the record's arguments are read from.
+    frame: StackFrame,
+    writes: Vec<DeferredWrite>,
+}
+
 pub struct StringWriter {
     target: Rc<RefCell<String>>,
 }
@@ -99,6 +143,9 @@ pub struct TracingContext<'a, B: BlackBoxFunctionSolver<FieldElement>> {
     /// a compile without `instrument_debug` produces — and what every Aztec contract artifact is.
     /// See [`TracingContext::update_record`], which is the only reader.
     uninstrumented: bool,
+    /// The call whose record waits for its frame's parameters, with the writes that follow it.
+    /// `None` whenever every entered call has been written. See [`PendingCall`].
+    pending_call: Option<PendingCall>,
 }
 
 impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
@@ -185,6 +232,7 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
             print_output,
             trace_started: false,
             uninstrumented,
+            pending_call: None,
         }
     }
 
@@ -271,12 +319,96 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         }
     }
 
-    fn maybe_report_print_events(&self, tracer: &mut dyn TraceSink) {
-        let mut s = self.print_output.borrow_mut();
-        if !(*s).is_empty() {
-            register_print(tracer, (*s).as_str());
-            *s = String::new();
+    // THE THREE WRITES A CALL RECORD CAN BE WAITING IN FRONT OF. Each one goes to `tracer` at once
+    // when no call is pending, and into the pending call's queue otherwise, so the order the
+    // recorder decides on is the order on the wire. They take the fields they need rather than
+    // `&mut self`, because their callers hold a frame borrowed from `self.stack_frames`.
+
+    fn maybe_report_print_events(
+        print_output: &RefCell<String>,
+        pending_call: &mut Option<PendingCall>,
+        tracer: &mut dyn TraceSink,
+    ) {
+        let s = std::mem::take(&mut *print_output.borrow_mut());
+        if s.is_empty() {
+            return;
         }
+        match pending_call {
+            Some(pending) => pending.writes.push(DeferredWrite::Print(s)),
+            None => register_print(tracer, &s),
+        }
+    }
+
+    fn write_step(
+        pending_call: &mut Option<PendingCall>,
+        tracer: &mut dyn TraceSink,
+        location: &SourceLocation,
+    ) {
+        match pending_call {
+            Some(pending) => pending.writes.push(DeferredWrite::Step(location.clone())),
+            None => register_step(tracer, location),
+        }
+    }
+
+    fn write_variables(
+        pending_call: &mut Option<PendingCall>,
+        tracer: &mut dyn TraceSink,
+        frame: &StackFrame,
+    ) {
+        match pending_call {
+            Some(pending) => pending.writes.push(DeferredWrite::Variables(frame.clone())),
+            None => register_variables(tracer, frame),
+        }
+    }
+
+    /// Writes the pending call's record, with the arguments bound in `frame`, and then every write
+    /// that was held behind it, in the order they were made. A no-op when no call is pending.
+    fn write_pending_call(&mut self, tracer: &mut dyn TraceSink, frame: Option<&StackFrame>) {
+        let Some(pending) = self.pending_call.take() else {
+            return;
+        };
+        register_call(tracer, &pending.call_site, frame.unwrap_or(&pending.frame));
+        for write in pending.writes {
+            match write {
+                DeferredWrite::Step(location) => register_step(tracer, &location),
+                DeferredWrite::Variables(frame) => register_variables(tracer, &frame),
+                DeferredWrite::Print(s) => register_print(tracer, &s),
+            }
+        }
+    }
+
+    /// Decides, at the start of an update, whether the pending call's record can be written now.
+    ///
+    /// `stack_frames` is the frame stack at this pause; `self.stack_frames` still holds the one the
+    /// pending call was last seen in. The comparison is `tail_diff_vecs`'s, the same one
+    /// [`TracingContext::update_record`] uses to find returns and calls, so "the frame is still
+    /// there" means exactly what it means for the return it would otherwise be reported as.
+    fn settle_pending_call(&mut self, tracer: &mut dyn TraceSink, stack_frames: &[StackFrame]) {
+        let Some(pending) = &mut self.pending_call else {
+            return;
+        };
+        let depth = pending.depth;
+        let (first_nomatch, _, _) = tail_diff_vecs(&self.stack_frames, stack_frames);
+        let still_open = first_nomatch > depth;
+        if !still_open {
+            // Returned from (or replaced) before every parameter was bound: write it with what
+            // was bound in the last snapshot it appeared in, ahead of the return this update
+            // reports for it.
+            self.write_pending_call(tracer, None);
+        } else if stack_frames.len() > depth + 1 || stack_frames[depth].all_params_bound() {
+            // Either every parameter is bound now, or a deeper call is being entered, whose record
+            // must come after this one. The frame as it is at this pause is the most complete.
+            self.write_pending_call(tracer, Some(&stack_frames[depth]));
+        } else {
+            pending.frame = stack_frames[depth].clone();
+        }
+    }
+
+    /// Writes the pending call's record, if any, because tracing is ending. Every path out of
+    /// [`trace_circuit_with_executor`]'s loop, and [`handle_function_error`] before it records the
+    /// error, goes through here, so no entered call is left out of the trace.
+    fn finish_pending_call(&mut self, tracer: &mut dyn TraceSink) {
+        self.write_pending_call(tracer, None);
     }
 
     /// Whether `location` points at a line that is nothing but a closing brace.
@@ -341,6 +473,10 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         self.ensure_trace_started(tracer, source_locations);
 
         let stack_frames = get_stack_frames(&self.debug_context);
+        // Before anything this update writes: a pending call's record either becomes complete
+        // here, or has to precede the returns and calls below. See `PendingCall`.
+        self.settle_pending_call(tracer, &stack_frames);
+
         let (first_nomatch, dropped_frames, new_frames) =
             tail_diff_vecs(&self.stack_frames, &stack_frames);
         let returned_from_frame = !dropped_frames.is_empty();
@@ -355,17 +491,29 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
                 let frame = stack_frames
                     .get(caller_index)
                     .unwrap_or_else(|| &self.stack_frames[caller_index]);
-                register_step(tracer, call_site_location);
-                register_variables(tracer, frame);
+                Self::write_step(&mut self.pending_call, tracer, call_site_location);
+                Self::write_variables(&mut self.pending_call, tracer, frame);
                 Self::maybe_update_saved_return_value(frame, &mut self.saved_return_value);
-                self.maybe_report_print_events(tracer);
+                Self::maybe_report_print_events(&self.print_output, &mut self.pending_call, tracer);
             }
         }
 
         assert!(new_frames.len() <= 1, "more than one frame entered at the same step");
-        if !new_frames.is_empty() {
+        if let Some(&frame) = new_frames.first() {
             let location = self.source_locations.last().expect("no previous location before call");
-            register_call(tracer, location, new_frames[0]);
+            if frame.all_params_bound() {
+                register_call(tracer, location, frame);
+            } else {
+                // The frame appeared before its parameters were bound, which under column-aware
+                // stepping is every function that declares a named one. Hold the record until
+                // they are, and everything written meanwhile behind it. See `PendingCall`.
+                self.pending_call = Some(PendingCall {
+                    call_site: location.clone(),
+                    depth: stack_frames.len() - 1,
+                    frame: frame.clone(),
+                    writes: Vec::new(),
+                });
+            }
         }
 
         // AN UNINSTRUMENTED PROGRAM HAS NO VARIABLE FRAMES AND STILL HAS SOURCE POSITIONS, AND IT
@@ -396,8 +544,8 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
         // instead of by a symptom they share.
         if self.uninstrumented && !returned_from_frame {
             if let Some(location) = source_locations.last() {
-                self.maybe_report_print_events(tracer);
-                register_step(tracer, location);
+                Self::maybe_report_print_events(&self.print_output, &mut self.pending_call, tracer);
+                Self::write_step(&mut self.pending_call, tracer, location);
             }
             self.stack_frames = stack_frames;
             return;
@@ -413,9 +561,9 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
             let location = &source_locations[index];
             let nested_closing_brace = index > 0 && self.is_closing_brace_location(location);
             if !nested_closing_brace {
-                self.maybe_report_print_events(tracer);
-                register_step(tracer, location);
-                register_variables(tracer, &stack_frames[index]);
+                Self::maybe_report_print_events(&self.print_output, &mut self.pending_call, tracer);
+                Self::write_step(&mut self.pending_call, tracer, location);
+                Self::write_variables(&mut self.pending_call, tracer, &stack_frames[index]);
                 Self::maybe_update_saved_return_value(
                     &stack_frames[index],
                     &mut self.saved_return_value,
@@ -690,6 +838,10 @@ pub fn trace_circuit_with_executor<'a, B: BlackBoxFunctionSolver<FieldElement>>(
         tracing_context.source_locations = source_locations;
     }
 
+    // Every `break` above lands here — the end of the program, and each error arm — so a call
+    // still waiting for its parameters is written before the trace is closed.
+    tracing_context.finish_pending_call(tracer);
+
     Ok(())
 }
 
@@ -730,5 +882,8 @@ fn handle_function_error<F, B: BlackBoxFunctionSolver<FieldElement>>(
         get_source_locations_for_call_stack(&tracing_context.debug_context, debug_locations);
 
     tracing_context.update_record(tracer, &source_locations);
+    // The error belongs to the innermost call, so that call's record has to precede it even
+    // when the failure came before its parameters were all bound.
+    tracing_context.finish_pending_call(tracer);
     register_error(tracer, &err_str);
 }

@@ -627,6 +627,38 @@ fn the_event<'a>(
     found[0]
 }
 
+/// The arguments one `call_entry` carries, as `(varname, value)` in the order the call record
+/// stores them — which is the callee's parameter order.
+///
+/// Every argument must name its variable: an argument whose `varname` the reader could not
+/// resolve fails here instead of being skipped, so a test comparing the names cannot be satisfied
+/// by a record that lost one.
+fn call_args(entry: &serde_json::Value) -> Vec<(&str, &serde_json::Value)> {
+    entry["args"]
+        .as_array()
+        .unwrap_or_else(|| panic!("call_entry.args should be a JSON array; got {entry}"))
+        .iter()
+        .map(|arg| {
+            let name = arg["varname"]
+                .as_str()
+                .unwrap_or_else(|| panic!("every call argument names its variable; got {arg}"));
+            (name, &arg["value"])
+        })
+        .collect()
+}
+
+/// Just the names of [`call_args`], for an exact-equality assertion on the parameter list.
+fn call_arg_names(entry: &serde_json::Value) -> Vec<&str> {
+    call_args(entry).into_iter().map(|(name, _)| name).collect()
+}
+
+/// A `ValueRecord::Int` argument's integer, asserting the variant first so an `Int` that turned
+/// into anything else fails by name rather than reading as `None`.
+fn int_value(v: &serde_json::Value) -> i64 {
+    assert_eq!(v["kind"].as_str(), Some("Int"), "expected a ValueRecord::Int; got {v}");
+    v["i"].as_i64().unwrap_or_else(|| panic!("an Int carries `i`; got {v}"))
+}
+
 fn observed_event_kinds(doc: &serde_json::Value) -> Vec<String> {
     // Filter out `sekDeltaColumn` aux cursor-nudges (FU-Column-Aware-
     // Nav-Noir) so fixture assertions that pre-date column-aware mode
@@ -774,11 +806,19 @@ fn test_a_1_mul_via_ct_print_full() {
         ]
     );
 
-    // Column-aware `register_call` fires before params are bound, so
-    // `call_entry.args` is empty (deferred-bind: see FU notes).
+    // ---- call_entry args ----------------------------------------------------
+    // `main(mut x: u32, y: u32, z: u32)` called with `Prover.toml`'s 3, 4 and
+    // 429981696. The parameters are bound one step per parameter AFTER the frame
+    // appears (see the binding test below), so the recorder holds `main`'s call
+    // record until all three are bound and only then writes it — see
+    // `TracingContext::update_record`'s pending call. The `mut` the signature
+    // carries is not part of the name.
     let entry = the_event(events, "call_entry", "main");
-    let args = entry["args"].as_array().unwrap();
-    assert!(args.is_empty(), "expected empty call_entry.args; got {args:?}");
+    assert_eq!(call_arg_names(entry), vec!["x", "y", "z"], "main's args; entry={entry}");
+    let args = call_args(entry);
+    assert_eq!(int_value(args[0].1), 3, "main's x; entry={entry}");
+    assert_eq!(int_value(args[1].1), 4, "main's y; entry={entry}");
+    assert_eq!(int_value(args[2].1), 429981696, "main's z; entry={entry}");
 
     // ---- per-step `x` value sequence (column-aware) -----------------------
     let xs: Vec<Option<i64>> = events
@@ -797,33 +837,36 @@ fn test_a_1_mul_via_ct_print_full() {
     // (column 10) and the instrumented assignment (column 5), so every value
     // of `x` is observed twice before the next multiplication.
     //
-    // THE TWO LEADING `None`s ARE NOW ESTABLISHED RATHER THAN MERELY PINNED.
-    // The 2026-08 reconciliation re-pinned this vector to what the tree emits
-    // and dropped the record that the leading run had ever been in doubt — the
-    // campaign's "a pin that has forgotten it was provisional" shape. Measured
-    // on 2026-08-31, the recorder's full (line, column) sequence for `a_1_mul`
-    // explains it exactly, and `test_a_1_mul_parameter_binding_explains_the_
-    // leading_unbound_steps` below turns that explanation into assertions:
+    // THE ONE LEADING `None`, AND WHY STEP 2 ALREADY READS 3. The recorder's
+    // full (line, column) sequence for `a_1_mul` explains the head of this
+    // vector exactly, and `test_a_1_mul_parameter_binding_explains_the_
+    // leading_unbound_steps` below turns the explanation into assertions:
     //
     //   step 1  line 1 col 1   — the historical entry step `ensure_trace_started`
-    //                            emits via `TraceSink::start(path, Line(1))`.
-    //                            No frame variables are bound yet.
-    //   step 2  line 3 col 13  — the column of `x` in `fn main(mut x: u32, …)`.
-    //                            This is `x`'s OWN binding step, and a parameter
-    //                            is bound after its step is recorded, so `x` is
-    //                            still absent here.
-    //   step 3  line 3 col 21  — the column of `y`. `x` now reads 3.
+    //                            emits via `TraceSink::start(path, Line(1))`,
+    //                            in `<toplevel>`. Nothing is bound.
+    //   step 2  line 3 col 13  — `main`'s first step, at the column of `x` in
+    //                            `fn main(mut x: u32, …)`: `x`'s OWN binding
+    //                            step. The FRAME has no `x` yet — a parameter is
+    //                            bound after its step is recorded — but the step
+    //                            carries `main`'s three arguments, because the
+    //                            call record that precedes it does: the trace
+    //                            format registers every call argument as a
+    //                            variable of the callee's next step as well
+    //                            (`TraceWriter::arg`;
+    //                            `codetracer-trace-format-spec/trace-events.md`,
+    //                            "Recorder Integration — Staging Values").
+    //   step 3  line 3 col 21  — the column of `y`. The frame's `x` reads 3.
     //
-    // So the run of `None`s is two because there are exactly two steps before
-    // `x`'s binding takes effect — the entry step and `x`'s own — and it would
-    // be three only if a parameter were bound before its step or a second entry
-    // step existed. That is a property with a cause, not a number that came out
-    // of a run.
+    // So the run of `None`s is one: the entry step, which belongs to the
+    // writer's frame and not to `main`. It would be two if `main`'s call record
+    // were written without its arguments, which is what a record written when
+    // the frame appears — before any parameter is bound — produces.
     assert_eq!(
         xs,
         vec![
             None,
-            None,
+            Some(3),
             Some(3),
             Some(3),
             Some(3),
@@ -846,28 +889,32 @@ fn test_a_1_mul_via_ct_print_full() {
     assert_eq!(events.last().unwrap()["function"].as_str(), Some("<toplevel>"));
 }
 
-/// THE TWO LEADING `None`s IN `a_1_mul`'s VALUE SEQUENCE, ESTABLISHED.
+/// THE LEADING UNBOUND STEP IN `a_1_mul`'s VALUE SEQUENCE, ESTABLISHED.
 ///
-/// `test_a_1_mul_via_ct_print_full` pins `xs` as `[None, None, Some(3), …]`.
-/// The 2026-08 reconciliation re-pinned that vector to whatever the tree
-/// emitted and removed the note that the leading run had ever been questioned,
-/// which left a correct number standing on nothing — the same "a pin that has
-/// forgotten it was provisional" shape this campaign records elsewhere. The
-/// question was whether the run should be two or three.
+/// `test_a_1_mul_via_ct_print_full` pins `xs` as `[None, Some(3), …]`. This test
+/// asserts the structure that produces that head instead of restating it.
 ///
-/// It is two, and the cause is the parameter-binding steps. Measured on this
-/// tree, `a_1_mul`'s first four steps are `(1,1)`, `(3,13)`, `(3,21)`, `(3,29)`
-/// — the entry step, then one step per parameter AT THAT PARAMETER'S OWN COLUMN
-/// in `fn main(mut x: u32, y: u32, z: u32) {`. A parameter's value is bound
-/// after its own step is recorded, so `x` is absent at step 2 and present from
-/// step 3, `y` absent through step 3 and present at step 4, and `z` present only
-/// from step 5.
+/// `a_1_mul`'s first four steps are `(1,1)`, `(3,13)`, `(3,21)`, `(3,29)` — the
+/// entry step, then one step per parameter AT THAT PARAMETER'S OWN COLUMN in
+/// `fn main(mut x: u32, y: u32, z: u32) {`. A parameter's value is bound in the
+/// frame after its own step is recorded, so the frame has no `x` at step 2, `x`
+/// but no `y` at step 3, `x` and `y` but no `z` at step 4, and all three from
+/// step 5.
 ///
-/// This test asserts that structure instead of restating the vector, and every
-/// column it uses is DERIVED from the fixture's own signature line rather than
-/// typed, so a recorder that started binding parameters eagerly, or emitted a
-/// second entry step, fails here by name rather than moving a number in a list
-/// nobody can explain.
+/// Step 2 nonetheless carries all three values. It is `main`'s first step, and
+/// the call record in front of it carries `main`'s arguments; the trace format
+/// registers each call argument as a variable of the callee's next step as well
+/// (`TraceWriter::arg`; `codetracer-trace-format-spec/trace-events.md`,
+/// "Recorder Integration — Staging Values"). The recorder can only give the call
+/// record those arguments because it holds the record until the frame's
+/// parameters are bound, and writes it, ahead of the steps it held, at step 5's
+/// update (see `PendingCall` in `src/lib.rs`).
+///
+/// Every column used here is DERIVED from the fixture's own signature line
+/// rather than typed, so a recorder that started binding parameters eagerly,
+/// emitted a second entry step, or wrote `main`'s call record without its
+/// arguments fails here by name rather than moving a number in a list nobody
+/// can explain.
 /// One step of `a_1_mul` as
 /// `test_a_1_mul_parameter_binding_explains_the_leading_unbound_steps` reads it:
 /// `(line, column, x, y, z)`, with each parameter `None` until it is bound.
@@ -938,15 +985,20 @@ fn test_a_1_mul_parameter_binding_explains_the_leading_unbound_steps() {
         "entry step binds nothing"
     );
 
-    // 2. `x`'s own binding step, at `x`'s column, with `x` still absent.
+    // 2. `x`'s own binding step, at `x`'s column. It is `main`'s first step,
+    //    so it carries the three arguments the call record carries.
     assert_eq!(
         (steps[1].0, steps[1].1),
         (sig_line_number, col_x),
         "step 2 is `x`'s binding step, at `x`'s own column in the signature",
     );
-    assert_eq!(steps[1].2, None, "`x` is not yet bound at its own binding step");
+    assert_eq!(
+        (steps[1].2, steps[1].3, steps[1].4),
+        (Some(3), Some(4), Some(429981696)),
+        "`main`'s first step carries the call's arguments",
+    );
 
-    // 3. `y`'s step: `x` is bound now, `y` is not.
+    // 3. `y`'s step: the frame has `x` now, and not `y`.
     assert_eq!((steps[2].0, steps[2].1), (sig_line_number, col_y), "step 3 is `y`'s binding step",);
     assert_eq!(steps[2].2, Some(3), "`x` reads its argument from `y`'s step onward");
     assert_eq!(steps[2].3, None, "`y` is not yet bound at its own binding step");
@@ -964,13 +1016,11 @@ fn test_a_1_mul_parameter_binding_explains_the_leading_unbound_steps() {
     );
 
     // THE CONCLUSION THE PIN NEEDED: the run of leading steps at which `x` is
-    // unbound is exactly two, and it is two because of the two steps named
-    // above — not because a run once produced two.
+    // unbound is exactly one — the entry step, which belongs to `<toplevel>`.
+    // Every step of `main` reads `x`: the first from the call's arguments, the
+    // rest from the frame.
     let leading_unbound = steps.iter().take_while(|s| s.2.is_none()).count();
-    assert_eq!(
-        leading_unbound, 2,
-        "`x` should be unbound for exactly the entry step and its own binding step",
-    );
+    assert_eq!(leading_unbound, 1, "`x` should be unbound at exactly the entry step");
 }
 
 /// THE `assert` ON LINE 3 OF `multi_stmt_per_line` PRODUCES NO STEP — **AND THAT
@@ -1150,15 +1200,39 @@ fn test_a_2_function_calls_via_ct_print_full() {
         ]
     );
 
-    // Column-aware register_call fires before params are bound, so
-    // every call_entry has empty `args` for now (see a_1_mul test).
-    for entry in events.iter().filter(|e| e["kind"] == "call_entry") {
-        let args = entry["args"].as_array().unwrap();
-        assert!(
-            args.is_empty(),
-            "expected empty call_entry.args under column-aware mode; got {args:?}",
-        );
-    }
+    // ---- call_entry args ----------------------------------------------------
+    // Every call carries its arguments, in call order: `main(x: Field, y: pub
+    // Field)` with `Prover.toml`'s 4 and 5, then `foo(x)` -> `bar(x)` with 4,
+    // then `foo(y)` -> `bar(y)` with 5. `<toplevel>` is the writer's frame and
+    // has none. The callee's parameter NAME is recorded, not the caller's
+    // expression, so the second `foo` is called with `x = 5`. Each parameter is
+    // bound after the frame appears, so this holds only because the recorder
+    // defers each call record until its frame's parameters are bound (see a_1_mul).
+    let call_args_seen: Vec<(String, Vec<(String, i64)>)> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_entry")
+        .map(|e| {
+            (
+                e["function"].as_str().expect("call_entry.function str").to_string(),
+                call_args(e)
+                    .into_iter()
+                    .map(|(name, value)| (name.to_string(), field_small_int(value)))
+                    .collect(),
+            )
+        })
+        .collect();
+    let expected_call_args: Vec<(String, Vec<(String, i64)>)> = [
+        ("<toplevel>", vec![]),
+        ("main", vec![("x", 4), ("y", 5)]),
+        ("foo", vec![("x", 4)]),
+        ("bar", vec![("y", 4)]),
+        ("foo", vec![("x", 5)]),
+        ("bar", vec![("y", 5)]),
+    ]
+    .into_iter()
+    .map(|(f, args)| (f.to_string(), args.into_iter().map(|(n, v)| (n.to_string(), v)).collect()))
+    .collect();
+    assert_eq!(call_args_seen, expected_call_args);
 
     // foo's return_value is `()` (Raw with text "()", type_id 4)
     let foo_exits: Vec<&str> = events
@@ -1360,12 +1434,14 @@ fn test_if_then_else_reduced_via_ct_print_full() {
     assert_eq!(events.len(), 72);
     assert_eq!(observed_call_sequence(&doc), vec!["<toplevel>".to_string(), "main".to_string()]);
 
-    // Column-aware call_entry has empty args (see a_1_mul).
+    // `main(x: u32, y: pub u32, z: u32)` with `Prover.toml`'s 600, 5, 600; the
+    // call record is deferred until all three are bound (see a_1_mul).
     let entry = the_event(events, "call_entry", "main");
-    assert!(
-        entry["args"].as_array().unwrap().is_empty(),
-        "call_entry.args should be empty under column-aware mode",
-    );
+    assert_eq!(call_arg_names(entry), vec!["x", "y", "z"], "main's args; entry={entry}");
+    let args = call_args(entry);
+    assert_eq!(int_value(args[0].1), 600, "main's x; entry={entry}");
+    assert_eq!(int_value(args[1].1), 5, "main's y; entry={entry}");
+    assert_eq!(int_value(args[2].1), 600, "main's z; entry={entry}");
 
     // The penultimate step (line 11, the `assert(result == z)` line)
     // should surface `result == 600` so the assertion can succeed.
@@ -1432,6 +1508,15 @@ fn test_assert_via_ct_print_full() {
     assert_eq!(io_events.len(), 1);
     let io = io_events[0];
     assert_eq!(io["io_kind"].as_str(), Some("Error"));
+
+    // `main(x: Field, y: pub Field)` with `Prover.toml`'s 10 and 10. The run
+    // ends in an error; both parameters are bound long before the failing
+    // `assert`, so the deferred call record is complete when it is written.
+    let entry = the_event(events, "call_entry", "main");
+    assert_eq!(call_arg_names(entry), vec!["x", "y"], "main's args; entry={entry}");
+    let args = call_args(entry);
+    assert_eq!(field_small_int(args[0].1), 10, "main's x; entry={entry}");
+    assert_eq!(field_small_int(args[1].1), 10, "main's y; entry={entry}");
     assert_eq!(
         io["text"].as_str(),
         Some("Failed to solve program: 'Failed to solve brillig function'")
@@ -1514,22 +1599,42 @@ fn test_types_test_via_ct_print_full() {
     assert_eq!(observed_call_sequence(&doc), vec!["<toplevel>".to_string(), "main".to_string()]);
 
     // ---- call_entry args ------------------------------------------------
-    // Column-aware register_call fires before params are bound, so the
-    // `args` array is empty under the new mode (see a_1_mul).  When the
-    // follow-up patch lands the deferred `register_call`, the original
-    // per-param assertions can be restored here.
+    // `main(a: Field, b: u32, c: Point, d: Field, e: i8, f: bool, g: str<11>,
+    // h: [Field; 2])`. The parameters bind one per step on the declaration
+    // line after the frame appears, and the recorder defers the call record
+    // until all eight are bound (see a_1_mul), so the record carries all eight
+    // with `Prover.toml`'s values, in declaration order. The FIELD-typed ones —
+    // a, c.x, c.y, d, h[0], h[1] — carry the OQ-4 rendering; b (u32) and e (i8)
+    // are ordinary integers.
     let entry = the_event(events, "call_entry", "main");
-    let args = entry["args"].as_array().unwrap();
-    assert!(args.is_empty(), "call_entry.args should be empty; got {args:?}");
-    // The first user-visible step should surface every param the
-    // debugger has bound by the time we reach the body.  Use this to
-    // pin the per-arg values that the old `args[i]` assertions
-    // covered.
-    // Walk steps in order; params bind one-by-one on the function-
-    // declaration line (column-aware mode no longer collapses the
-    // bindings), so the *first* step that surfaces all eight expected
-    // params (a..h) gives us the post-binding snapshot.
     let expected_names: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "h"];
+    assert_eq!(call_arg_names(entry), expected_names.to_vec(), "main's args; entry={entry}");
+    let args: std::collections::BTreeMap<&str, &serde_json::Value> =
+        call_args(entry).into_iter().collect();
+    assert_eq!(field_small_int(args[&"a"]), 1);
+    assert_eq!(int_value(args[&"b"]), 2);
+    assert_eq!(args[&"c"]["kind"].as_str(), Some("Struct"));
+    let c_arg_fields = args[&"c"]["field_values"].as_array().unwrap();
+    assert_eq!(c_arg_fields.len(), 2);
+    assert_eq!(field_small_int(&c_arg_fields[0]), 9);
+    assert_eq!(field_small_int(&c_arg_fields[1]), 10);
+    assert_eq!(field_small_int(args[&"d"]), 3);
+    assert_eq!(int_value(args[&"e"]), 4);
+    assert_eq!(args[&"f"]["kind"].as_str(), Some("Bool"));
+    assert_eq!(args[&"f"]["b"].as_bool(), Some(true));
+    assert_eq!(args[&"g"]["kind"].as_str(), Some("String"));
+    assert_eq!(args[&"g"]["text"].as_str(), Some("hello world"));
+    assert_eq!(args[&"h"]["kind"].as_str(), Some("Sequence"));
+    assert_eq!(args[&"h"]["is_slice"].as_bool(), Some(false));
+    let h_arg_elems = args[&"h"]["elements"].as_array().unwrap();
+    assert_eq!(h_arg_elems.len(), 2);
+    assert_eq!(field_small_int(&h_arg_elems[0]), 7);
+    assert_eq!(field_small_int(&h_arg_elems[1]), 8);
+
+    // The same values as STEP variables. The first step that surfaces all
+    // eight is `main`'s first step, which carries the call's arguments (see
+    // a_1_mul); the frame itself binds them one by one on the declaration line
+    // after it.
     let first_body_vars: std::collections::BTreeMap<&str, &serde_json::Value> = events
         .iter()
         .filter(|e| e["kind"] == "step" && !is_aux_column_step(e))
@@ -1570,6 +1675,247 @@ fn test_types_test_via_ct_print_full() {
     // call_exit returns Void
     let exit = the_event(events, "call_exit", "main");
     assert_eq!(exit["return_value"]["kind"].as_str(), Some("Void"));
+}
+
+/// The `noir_space_ship` shape: calls whose parameters are a STRUCT and an
+/// ARRAY, a nested call that passes them on with a scalar, and a call with no
+/// parameters.
+///
+/// CodeTracer's own `test-programs/noir_space_ship` renders every call-trace
+/// entry as `()` when its call records carry no arguments, and that program's
+/// `main` takes two `Field`s and two `[Field; 8]`s while `iterate_asteroids` /
+/// `calculate_damage` pass them on. This program is the same shape in a dozen
+/// lines, so the struct and array arms of the call-argument path are pinned
+/// here rather than only through the scalar fixtures.
+///
+/// Pins, by exact equality:
+///
+/// * the call sequence and each call's argument names and values;
+/// * that `base_damage`, which declares no parameter, carries none — its
+///   record is written when its frame appears, because there is nothing to
+///   wait for;
+/// * that every `call_entry` is followed directly by a step of the callee:
+///   holding a record back until its parameters are bound must not let the
+///   steps it waited behind leak out in front of it;
+/// * that a call's first step carries the call's arguments as its variables.
+///   That is the trace format's contract for a call argument:
+///   `TraceWriter::arg` registers each argument as a variable of the callee's
+///   next step as well as on the call record
+///   (`codetracer-trace-format-spec/trace-events.md`, "Recorder Integration —
+///   Staging Values").
+#[test]
+fn test_struct_and_array_call_arguments_are_recorded() {
+    let main_nr = "\
+struct Ship {
+    shield: u32,
+    regen: u32,
+}
+
+fn calculate_damage(ship: Ship, masses: [u32; 3], index: u32) -> u32 {
+    let damage = masses[index] / 10;
+    ship.shield + ship.regen - damage
+}
+
+fn base_damage() -> u32 {
+    1
+}
+
+fn main(ship: Ship, masses: [u32; 3]) -> pub u32 {
+    let first = calculate_damage(ship, masses, 1);
+    first - base_damage()
+}
+";
+    let prover_toml = "\
+masses = [\"10\", \"20\", \"30\"]
+
+[ship]
+shield = \"100\"
+regen = \"5\"
+";
+    let Some(doc) = record_and_dump_full_source(
+        "test_struct_and_array_call_arguments_are_recorded",
+        "space_ship_shape",
+        main_nr,
+        prover_toml,
+    ) else {
+        return;
+    };
+    let events = doc["events"].as_array().expect("events array");
+
+    assert_eq!(
+        observed_call_sequence(&doc),
+        vec!["<toplevel>", "main", "calculate_damage", "base_damage"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    );
+
+    // `Ship { shield: 100, regen: 5 }` as a `Struct` of two `Int` fields.
+    let assert_ship = |v: &serde_json::Value, what: &str| {
+        assert_eq!(v["kind"].as_str(), Some("Struct"), "{what}: {v}");
+        let fields: Vec<i64> =
+            v["field_values"].as_array().unwrap().iter().map(int_value).collect();
+        assert_eq!(fields, vec![100, 5], "{what}: Ship {{ shield, regen }}; {v}");
+    };
+    // `[10, 20, 30]` as a non-slice `Sequence` of `Int`s.
+    let assert_masses = |v: &serde_json::Value, what: &str| {
+        assert_eq!(v["kind"].as_str(), Some("Sequence"), "{what}: {v}");
+        assert_eq!(v["is_slice"].as_bool(), Some(false), "{what}: {v}");
+        let elements: Vec<i64> = v["elements"].as_array().unwrap().iter().map(int_value).collect();
+        assert_eq!(elements, vec![10, 20, 30], "{what}: {v}");
+    };
+
+    let main_entry = the_event(events, "call_entry", "main");
+    assert_eq!(call_arg_names(main_entry), vec!["ship", "masses"], "entry={main_entry}");
+    let main_args = call_args(main_entry);
+    assert_ship(main_args[0].1, "main's ship");
+    assert_masses(main_args[1].1, "main's masses");
+
+    let damage_entry = the_event(events, "call_entry", "calculate_damage");
+    assert_eq!(
+        call_arg_names(damage_entry),
+        vec!["ship", "masses", "index"],
+        "entry={damage_entry}"
+    );
+    let damage_args = call_args(damage_entry);
+    assert_ship(damage_args[0].1, "calculate_damage's ship");
+    assert_masses(damage_args[1].1, "calculate_damage's masses");
+    assert_eq!(int_value(damage_args[2].1), 1, "calculate_damage's index");
+
+    let base_entry = the_event(events, "call_entry", "base_damage");
+    assert_eq!(call_arg_names(base_entry), Vec::<&str>::new(), "entry={base_entry}");
+
+    // Each call record is followed directly by a step of its callee.
+    for function in ["main", "calculate_damage", "base_damage"] {
+        let at = events
+            .iter()
+            .position(|e| e["kind"] == "call_entry" && e["function"] == function)
+            .unwrap();
+        let next = &events[at + 1];
+        assert_eq!(next["kind"].as_str(), Some("step"), "after {function}'s call_entry: {next}");
+        assert_eq!(next["function"].as_str(), Some(function), "after {function}'s call_entry");
+    }
+
+    // And for each call that HAS arguments, that step carries them, by name and
+    // in order. `base_damage` is left out on purpose: its body is a constant,
+    // its one step is reported at the call site in `main` (line 17) with
+    // `main`'s variables. A zero-parameter call's record is written when its
+    // frame appears, so that step is not shaped by the deferred call record at
+    // all, and pinning it here would pass it off as correct.
+    for function in ["main", "calculate_damage"] {
+        let at = events
+            .iter()
+            .position(|e| e["kind"] == "call_entry" && e["function"] == function)
+            .unwrap();
+        let next = &events[at + 1];
+        let step_var_names: Vec<&str> = next["vars"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["varname"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            step_var_names,
+            call_arg_names(&events[at]),
+            "{function}'s first step carries its arguments; step={next}"
+        );
+    }
+
+    // The callees compute from the arguments their records carry. (`main`'s own
+    // exit is not pinned: its `pub` return value is recorded as `Void`, which
+    // is a separate matter from its call record.)
+    let damage_exit = the_event(events, "call_exit", "calculate_damage");
+    assert_eq!(int_value(&damage_exit["return_value"]), 103, "100 + 5 - 20 / 10");
+    let base_exit = the_event(events, "call_exit", "base_damage");
+    assert_eq!(int_value(&base_exit["return_value"]), 1);
+}
+
+/// Calls whose parameter list the instrumenter can only PARTLY bind, and a
+/// recursive call.
+///
+/// The instrumenter binds a parameter only under a plain name: `_` binds
+/// nothing, and a destructuring pattern such as `(a, b)` binds `a` and `b`
+/// under their own names, never under the pattern's text, which is the name
+/// the frame declares (`noirc_frontend::debug`, `insert_var` and
+/// `pattern_vars`). A recorder that waited for EVERY declared parameter would
+/// wait for `shift`'s forever: it would hold the call record, and every step
+/// behind it, until `shift` returned, and then write it with the values the
+/// frame had at the end — `v = 18` after the body's two assignments, instead
+/// of the `4` it was called with.
+///
+/// Pins, by exact equality:
+///
+/// * `shift`'s record carries `v = 4`, its value at the call. `_` and `(a, b)`
+///   are not recorded as arguments: no variable has either name;
+/// * each of the three nested `countdown` calls carries its own `n`: the frame
+///   stack is compared by function name, and a recursive entry is a new,
+///   deeper frame of the same name;
+/// * every `call_entry` is followed directly by a step of the callee.
+#[test]
+fn test_partly_bindable_parameters_and_recursion_record_the_call_time_arguments() {
+    let main_nr = "\
+fn shift(mut v: u32, _: u32, (a, b): (u32, u32)) -> u32 {
+    v = v + a;
+    v = v * b;
+    v
+}
+
+unconstrained fn countdown(n: u32) -> u32 {
+    if n == 0 { 0 } else { n + countdown(n - 1) }
+}
+
+fn main(x: u32) -> pub u32 {
+    let s = shift(x, 7, (2, 3));
+    // Safety: a pure function of its argument, called only to be traced.
+    let c = unsafe { countdown(2) };
+    s + c
+}
+";
+    let Some(doc) = record_and_dump_full_source(
+        "test_partly_bindable_parameters_and_recursion_record_the_call_time_arguments",
+        "partly_bindable",
+        main_nr,
+        "x = \"4\"\n",
+    ) else {
+        return;
+    };
+    let events = doc["events"].as_array().expect("events array");
+
+    let calls: Vec<(String, Vec<(String, i64)>)> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_entry")
+        .map(|e| {
+            (
+                e["function"].as_str().expect("call_entry.function str").to_string(),
+                call_args(e).into_iter().map(|(n, v)| (n.to_string(), int_value(v))).collect(),
+            )
+        })
+        .collect();
+    let expected: Vec<(String, Vec<(String, i64)>)> = [
+        ("<toplevel>", vec![]),
+        ("main", vec![("x", 4)]),
+        ("shift", vec![("v", 4)]),
+        ("countdown", vec![("n", 2)]),
+        ("countdown", vec![("n", 1)]),
+        ("countdown", vec![("n", 0)]),
+    ]
+    .into_iter()
+    .map(|(f, args)| (f.to_string(), args.into_iter().map(|(n, v)| (n.to_string(), v)).collect()))
+    .collect();
+    assert_eq!(calls, expected);
+
+    let shift_exit = the_event(events, "call_exit", "shift");
+    assert_eq!(int_value(&shift_exit["return_value"]), 18, "(4 + 2) * 3");
+
+    for (at, entry) in events.iter().enumerate().filter(|(_, e)| e["kind"] == "call_entry") {
+        let function = entry["function"].as_str().unwrap();
+        if function == "<toplevel>" {
+            continue;
+        }
+        let next = &events[at + 1];
+        assert_eq!(next["kind"].as_str(), Some("step"), "after {function}'s call_entry: {next}");
+        assert_eq!(next["function"].as_str(), Some(function), "after {function}'s call_entry");
+    }
 }
 
 /// FU-Column-Aware-Nav-Noir acceptance: three statements on a single
@@ -2018,6 +2364,15 @@ fn test_trace_test_name_traces_the_named_test_instead_of_main() {
         calls,
         vec!["<toplevel>".to_string(), "test_passes".to_string(), "add_one".to_string()]
     );
+    // A zero-parameter entry point has nothing to bind, so its call record is
+    // written as soon as its frame appears and carries no argument. `add_one`
+    // binds `v` one step after its frame appears, and its record carries it.
+    let events = doc["events"].as_array().unwrap();
+    let test_entry = the_event(events, "call_entry", "test_passes");
+    assert_eq!(call_arg_names(test_entry), Vec::<&str>::new(), "entry={test_entry}");
+    let add_one_entry = the_event(events, "call_entry", "add_one");
+    assert_eq!(call_arg_names(add_one_entry), vec!["v"], "entry={add_one_entry}");
+    assert_eq!(field_small_int(call_args(add_one_entry)[0].1), 2, "entry={add_one_entry}");
     // Instrumented like `main` is: the test's locals are recorded.
     let varnames = string_array(&doc, "varnames");
     assert!(varnames.contains(&"r"), "varnames={varnames:?}");

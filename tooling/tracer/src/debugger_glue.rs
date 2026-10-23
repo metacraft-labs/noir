@@ -55,14 +55,22 @@ fn convert_debugger_stack_frame(
     variables.sort();
 
     let mut function_param_indexes = Vec::new();
+    let mut bindable_param_count = 0;
     for param_name in &debugger_stack_frame.function_params {
         // Note(stanm): `mut` in params is put in the name; remove it.
         let stripped_param_name = match param_name.strip_prefix("mut ") {
             Some(stripped_param_name) => stripped_param_name,
             None => param_name,
         };
+        if is_bindable_param_name(stripped_param_name) {
+            bindable_param_count += 1;
+        }
         match variables.binary_search_by(|var| var.name.as_str().cmp(stripped_param_name)) {
             Err(_) => {
+                // A parameter that is not bound YET is the ordinary case: a frame appears before
+                // its parameters are bound (see `StackFrame::bindable_param_count`), and the
+                // recorder holds the call record until they are. So this cannot be an error.
+                //
                 // This panic causes a crash when tracing zk_dungeon:
                 // TODO(BSN-2056): investigate why this happens
                 //panic!("param_name {param_name} not found in variables {variables:?}");
@@ -70,7 +78,19 @@ fn convert_debugger_stack_frame(
             Ok(index) => function_param_indexes.push(index),
         };
     }
-    StackFrame { function_name, function_param_indexes, variables }
+    StackFrame { function_name, function_param_indexes, bindable_param_count, variables }
+}
+
+/// Whether the instrumenter ever binds a variable under the parameter name `name` (without its
+/// `mut `), i.e. whether `name` can ever show up in a frame's `variables`.
+///
+/// The frame's parameter names are the parameters' PATTERNS printed as text
+/// (`noirc_frontend::debug`'s `pattern_to_string`), while the instrumenter binds the identifiers
+/// inside each pattern under their own names and skips `_` (`pattern_vars`, `insert_var`). So
+/// only a pattern that is a single identifier other than `_` is ever bound under the name the
+/// frame declares; `_`, `(a, b)` and `Point { x: a, y: b }` never are.
+fn is_bindable_param_name(name: &str) -> bool {
+    name != "_" && !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// Converts a debugger `Location` into a tracer `SourceLocation`.
