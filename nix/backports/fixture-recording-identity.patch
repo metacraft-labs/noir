@@ -1,0 +1,107 @@
+--- a/tooling/nargo_cli/src/cli/trace_cmd.rs
++++ b/tooling/nargo_cli/src/cli/trace_cmd.rs
+@@ -20,7 +20,7 @@
+ 
+ use crate::errors::CliError;
+ 
+-use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
++use codetracer_trace_writer::{NimTraceWriter, TraceEventsFileFormat};
+ 
+ use super::NargoConfig;
+ 
+@@ -57,6 +57,15 @@
+     /// the source-level instrumenter only runs on the debugging compile path.
+     #[clap(long)]
+     emit_debug_artifact: Option<PathBuf>,
++
++    /// Pin the canonical UUIDv7 recording id instead of minting one.
++    #[clap(long)]
++    recording_id: Option<String>,
++
++    /// Store a stable logical working directory in container metadata.
++    /// Source paths are still normalized against the actual working directory.
++    #[clap(long)]
++    recording_workdir: Option<PathBuf>,
+ }
+ 
+ pub(crate) fn run(args: TraceCommand, config: NargoConfig) -> Result<(), CliError> {
+@@ -96,7 +105,14 @@
+         })?;
+     }
+ 
+-    trace_program_and_decode(compiled_program, package, &args.prover_name, &args.out_dir)
++    trace_program_and_decode(
++        compiled_program,
++        package,
++        &args.prover_name,
++        &args.out_dir,
++        args.recording_id.as_deref(),
++        args.recording_workdir.as_deref(),
++    )
+ }
+ 
+ fn trace_program_and_decode(
+@@ -104,6 +120,8 @@
+     package: &Package,
+     prover_name: &str,
+     out_dir: &str,
++    recording_id: Option<&str>,
++    recording_workdir: Option<&std::path::Path>,
+ ) -> Result<(), CliError> {
+     // Parse the initial witness values from Prover.toml
+     let (inputs_map, _) = read_inputs_from_file(
+@@ -111,7 +129,7 @@
+         &program.abi,
+     )?;
+ 
+-    trace_program(&program, &package.name, &inputs_map, out_dir)
++    trace_program(&program, &package.name, &inputs_map, out_dir, recording_id, recording_workdir)
+ }
+ 
+ pub(crate) fn trace_program(
+@@ -119,6 +137,8 @@
+     crate_name: &CrateName,
+     inputs_map: &InputMap,
+     out_dir: &str,
++    recording_id: Option<&str>,
++    recording_workdir: Option<&std::path::Path>,
+ ) -> Result<(), CliError> {
+     let initial_witness = compiled_program.abi.encode(inputs_map, None)?;
+ 
+@@ -136,22 +156,30 @@
+     };
+ 
+     let crate_name_string: String = crate_name.into();
+-    // CTFS is the only trace format nargo emits; the writer factory is kept
+-    // for symmetry with other recorders and to centralize the format choice
+-    // in `codetracer_trace_writer`.
++    // Identity must be pinned before the writer starts emitting meta.dat.
+     let mut writer =
+-        create_trace_writer(crate_name_string.as_str(), &[], TraceEventsFileFormat::Ctfs);
++        NimTraceWriter::new(crate_name_string.as_str(), &[], TraceEventsFileFormat::Ctfs);
++    if let Some(id) = recording_id {
++        writer
++            .set_recording_id(id)
++            .map_err(|err| CliError::Generic(format!("setting recording id: {err}")))?;
++    }
+     // `NimWriterSink` is the `noir_tracer` adapter over the Nim writer's
+     // `TraceWriter` trait; the recorder itself is typed against the
+     // platform-agnostic `TraceSink`.
+-    let mut tracer = NimWriterSink::new(&mut *writer);
++    let mut tracer = NimWriterSink::new(&mut writer);
+ 
+     // The recorder no longer reaches for `std::env::current_dir()` itself --
+     // that is ambient state a wasm host does not have. The CLI, which does have
+     // a working directory, supplies it, so the emitted container is unchanged.
+     let options = TraceOptions::with_workdir(std::env::current_dir().ok());
+ 
+-    begin_trace(&mut tracer, out_dir, &crate_name_string, options.workdir.as_deref());
++    begin_trace(
++        &mut tracer,
++        out_dir,
++        &crate_name_string,
++        recording_workdir.or(options.workdir.as_deref()),
++    );
+     if let Err(error) = noir_tracer::trace_circuit(
+         &Bn254BlackBoxSolver,
+         &compiled_program.program.functions,
