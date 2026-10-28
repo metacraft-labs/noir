@@ -12,9 +12,54 @@ pub struct DebugVars<F> {
     frames: Vec<(DebugFnId, HashMap<DebugVarId, PrintableValue<F>>)>,
 }
 
+#[cfg(test)]
+mod variable_order_tests {
+    use super::*;
+    use acvm::FieldElement;
+
+    #[test]
+    fn shadowed_variables_follow_debug_binding_identity() {
+        let mut debug = DebugVars::<FieldElement>::default();
+        let fn_id = DebugFnId(0);
+        let type_id = DebugTypeId(0);
+        debug.functions.insert(fn_id, DebugFunction { name: "main".into(), arg_names: vec![] });
+        debug.types.insert(type_id, PrintableType::Field);
+        debug.push_fn(fn_id);
+        // The instrumenter allocates increasing IDs at declarations. Retain
+        // every binding, with the newer shadowing binding after the old one.
+        for id in (0..64).rev() {
+            debug.variables.insert(
+                DebugVarId(id),
+                DebugVariable { name: "bounds".into(), debug_type_id: type_id },
+            );
+            let value = if id == 63 { 508u32 } else { id };
+            debug.assign_var(DebugVarId(id), &[FieldElement::from(value)]);
+        }
+        let frame = debug.current_stack_frame().unwrap();
+        let values: Vec<_> = frame
+            .variables
+            .iter()
+            .map(|(_, value, _)| match value {
+                PrintableValue::Field(value) => value.to_u128(),
+                other => panic!("expected field binding, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(values, (0..63).chain(std::iter::once(508)).collect::<Vec<_>>());
+        debug.drop_var(DebugVarId(63));
+        let after_drop = debug.current_stack_frame().unwrap();
+        assert_eq!(after_drop.variables.len(), 63);
+        assert_eq!(
+            after_drop.variables.last().unwrap().1,
+            &PrintableValue::Field(FieldElement::from(62u32))
+        );
+    }
+}
+
 pub struct StackFrame<'a, F> {
     pub function_name: &'a str,
     pub function_params: Vec<&'a str>,
+    /// Bindings in increasing debug identity (declaration) order. Equal names
+    /// remain distinct, with a newer shadowing binding after its outer binding.
     pub variables: Vec<(&'a str, &'a PrintableValue<F>, &'a PrintableType)>,
 }
 
@@ -48,8 +93,14 @@ impl<F: AcirField> DebugVars<F> {
 
         let params: Vec<&str> =
             debug_fn.arg_names.iter().map(|arg_name| arg_name.as_str()).collect();
-        let vars: Vec<(&str, &PrintableValue<F>, &PrintableType)> = frame
-            .iter()
+        // DebugVarIds are allocated in declaration order. Preserve that order
+        // before discarding identity: a later stable sort by name must keep
+        // outer bindings before their newer shadowing bindings, so replay's
+        // last value for a name is the active binding rather than a random one.
+        let mut bindings: Vec<_> = frame.iter().collect();
+        bindings.sort_unstable_by_key(|(var_id, _)| var_id.0);
+        let vars: Vec<(&str, &PrintableValue<F>, &PrintableType)> = bindings
+            .into_iter()
             .filter_map(|(var_id, var_value)| {
                 self.lookup_var(*var_id).map(|(name, typ)| (name, var_value, typ))
             })

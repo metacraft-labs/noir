@@ -41,7 +41,17 @@ let
       package.source or ""
     )
   ) (builtins.fromTOML (builtins.readFile "${compiler}/Cargo.lock")).package;
-  backportHash = builtins.hashFile "sha256" ./backports/fixture-recording-identity.patch;
+  backports = [
+    ./backports/fixture-recording-identity.patch
+    ./backports/debug-binding-order.patch
+  ];
+  backportHash = builtins.hashString "sha256" (pkgs.lib.concatMapStrings builtins.readFile backports);
+  backportFiles = builtins.listToAttrs (
+    map (patch: {
+      name = builtins.baseNameOf patch;
+      value = builtins.hashFile "sha256" patch;
+    }) backports
+  );
 in
 assert
   formatPackages != [ ]
@@ -57,7 +67,7 @@ pkgs.rustPlatform.buildRustPackage {
   pname = "noir-fixture-recorder-v6";
   version = "1.0.0-beta.26";
   src = compiler;
-  patches = [ ./backports/fixture-recording-identity.patch ];
+  patches = backports;
 
   cargoLock = {
     lockFile = "${compiler}/Cargo.lock";
@@ -72,7 +82,7 @@ pkgs.rustPlatform.buildRustPackage {
   nativeBuildInputs = [ pkgs.nim ];
   RUSTC_BOOTSTRAP = "1";
   GIT_COMMIT = compilerRev;
-  GIT_DIRTY = "true"; # The declared identity backport changes the compiler.
+  GIT_DIRTY = "true"; # The declared backports change the compiler.
   CODETRACER_TRACE_FORMAT_NIM_DIR = writer;
   CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL = "1";
   CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS = "${results}:${stew}";
@@ -100,7 +110,7 @@ pkgs.rustPlatform.buildRustPackage {
   postInstall = ''
     mkdir -p "$out/share/noir-fixture-recorder"
     cat > "$out/share/noir-fixture-recorder/provenance.json" <<EOF
-    {"compilerRev":"${compilerRev}","traceFormatRev":"${formatRev}","writerRev":"${writerRev}","metaSchema":6,"backportSha256":"${backportHash}","rustcVersion":"${pkgs.rustc.version}","nimVersion":"${pkgs.nim.version}"}
+    {"compilerRev":"${compilerRev}","traceFormatRev":"${formatRev}","writerRev":"${writerRev}","metaSchema":6,"backportSha256":"${backportHash}","backportFiles":${builtins.toJSON backportFiles},"rustcVersion":"${pkgs.rustc.version}","nimVersion":"${pkgs.nim.version}"}
     EOF
   '';
   passthru = {

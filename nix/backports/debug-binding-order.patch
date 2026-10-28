@@ -1,0 +1,19 @@
+--- a/tooling/noirc_artifacts/src/debug_vars.rs
++++ b/tooling/noirc_artifacts/src/debug_vars.rs
+@@ -48,8 +48,14 @@
+ 
+         let params: Vec<&str> =
+             debug_fn.arg_names.iter().map(|arg_name| arg_name.as_str()).collect();
+-        let vars: Vec<(&str, &PrintableValue<F>, &PrintableType)> = frame
+-            .iter()
++        // DebugVarIds are allocated in declaration order. Preserve that order
++        // before discarding identity: a later stable sort by name must keep
++        // outer bindings before their newer shadowing bindings, so replay's
++        // last value for a name is the active binding rather than a random one.
++        let mut bindings: Vec<_> = frame.iter().collect();
++        bindings.sort_unstable_by_key(|(var_id, _)| var_id.0);
++        let vars: Vec<(&str, &PrintableValue<F>, &PrintableType)> = bindings
++            .into_iter()
+             .filter_map(|(var_id, var_value)| {
+                 self.lookup_var(*var_id).map(|(name, typ)| (name, var_value, typ))
+             })

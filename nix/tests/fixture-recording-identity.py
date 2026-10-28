@@ -12,7 +12,14 @@ def project(root):
         '[package]\nname = "identity"\ntype = "bin"\nauthors = []\n'
     )
     (root / "src/main.nr").write_text(
-        "unconstrained fn main() { let x: u32 = 42; println(x); assert(x == 42); }\n"
+        "unconstrained fn main() {\n"
+        "    let x: u32 = 42;\n"
+        "    let x = x + 1;\n"
+        "    let x = x + 1;\n"
+        "    let x = x + 1;\n"
+        "    println(x);\n"
+        "    assert(x == 45);\n"
+        "}\n"
     )
     (root / "Prover.toml").write_text("")
 
@@ -31,7 +38,12 @@ with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as se
     project(b)
     identity = "01949fcc-7d92-7e9c-8000-000000000001"
     baseline = trace(a, identity)
-    assert baseline == trace(b, identity), "recordings depend on the source directory"
+    # Separate processes randomize the debugger's hash-table iteration. Equal
+    # variable names must retain declaration order, independent of that seed.
+    for run in range(12):
+        assert baseline == trace(a if run % 2 else b, identity), (
+            f"run {run}: recordings depend on source directory or shadowed binding order"
+        )
     assert baseline != trace(a, "01949fcc-7d92-7e9c-8000-000000000002"), "id ignored"
     assert baseline != trace(a, identity, "/fixtures/another"), "workdir ignored"
     assert trace(a) != trace(a), "default recordings must mint independent identities"
