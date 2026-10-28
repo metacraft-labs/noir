@@ -482,7 +482,7 @@ fn printable_type_to_kind_and_name(printable_type: &PrintableType) -> (TypeKind,
         PrintableType::Struct { name, .. } => (TypeKind::Struct, name.clone()),
         PrintableType::Unit => (TypeKind::Raw, "()".to_string()),
         PrintableType::Tuple { .. } => (TypeKind::Tuple, "(..)".to_string()),
-        PrintableType::Reference { .. } => (TypeKind::Ref, "&".to_string()),
+        PrintableType::Reference { .. } => (TypeKind::Ref, printable_type.to_string()),
         PrintableType::Function { unconstrained, .. } => {
             let type_name = if *unconstrained { "unconstrained fn" } else { "fn" };
             (TypeKind::FunctionKind, type_name.to_string())

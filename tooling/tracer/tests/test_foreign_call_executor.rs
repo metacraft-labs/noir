@@ -67,6 +67,7 @@ struct RecordingSink {
     next_path_id: usize,
     next_function_id: usize,
     types: Vec<(TypeKind, String)>,
+    values: Vec<(String, ValueRecord)>,
 }
 
 impl RecordingSink {
@@ -171,6 +172,7 @@ impl TraceSink for RecordingSink {
     }
 
     fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
+        self.values.push((name.to_owned(), value.clone()));
         self.push(format!("var {} = {:?}", name, value));
     }
 
@@ -806,4 +808,142 @@ fn constant_body_in_another_file_does_not_borrow_the_callers_source() {
         "cross-file constant callee has an empty frame: {lines:#?}"
     );
     assert_eq!(lines[returned], "return Int { i: 100, type_id: TypeId(2) }");
+}
+
+#[test]
+fn mutable_reference_snapshots_preserve_referents_and_type_identity() {
+    let program = compile(
+        r#"
+struct TestStruct { a: Field, b: u32 }
+fn inspect(parameter_s: &mut TestStruct) { let c = parameter_s.b; assert(c == 10); }
+fn main(x: Field) {
+    let mut q = TestStruct { a: x, b: 10 };
+    let s = &mut q;
+    inspect(s);
+    let mut n: u32 = 5;
+    let w = &mut n;
+    assert(*w == 5);
+}
+"#,
+    );
+    let artifact = debug_artifact_of(&program);
+    let mut sink = RecordingSink::default();
+    trace_circuit(
+        &Bn254BlackBoxSolver,
+        &program.program.functions,
+        &artifact,
+        witness_for(&program, 5),
+        &program.program.unconstrained_functions,
+        &program.abi.error_types,
+        &options(),
+        &mut sink,
+    )
+    .expect("reference fixture traces successfully");
+    let first_reference =
+        sink.values.iter().find(|(name, _)| name == "s").expect("s binding is visible");
+    assert!(
+        matches!(&first_reference.1, ValueRecord::Reference { mutable: true, .. }),
+        "a mutable reference must carry its referent instead of None: {first_reference:?}"
+    );
+    for name in ["&mut TestStruct", "&mut u32"] {
+        assert!(
+            sink.types.iter().any(|(kind, typ)| *kind == TypeKind::Ref && typ == name),
+            "reference type must identify its target and mutability: {:?}",
+            sink.types
+        );
+    }
+    let type_id = |name: &str| TypeId(sink.types.iter().position(|(_, typ)| typ == name).unwrap());
+    let struct_value = ValueRecord::Struct {
+        field_values: vec![
+            ValueRecord::String {
+                text: "0x0000000000000000000000000000000000000000000000000000000000000005"
+                    .to_owned(),
+                type_id: type_id("Field"),
+            },
+            ValueRecord::Int { i: 10, type_id: type_id("u32") },
+        ],
+        type_id: type_id("TestStruct"),
+    };
+    for (binding, referent, reference_type) in [
+        ("s", struct_value.clone(), "&mut TestStruct"),
+        ("parameter_s", struct_value, "&mut TestStruct"),
+        ("w", ValueRecord::Int { i: 5, type_id: type_id("u32") }, "&mut u32"),
+    ] {
+        let records: Vec<_> = sink
+            .values
+            .iter()
+            .filter(|(name, _)| name == binding)
+            .map(|(_, value)| value)
+            .collect();
+        assert!(!records.is_empty(), "missing reference binding {binding}");
+        let expected = ValueRecord::Reference {
+            dereferenced: Box::new(referent),
+            address: 0,
+            mutable: true,
+            type_id: type_id(reference_type),
+        };
+        for record in records {
+            assert_eq!(
+                record, &expected,
+                "reference binding {binding} must preserve its complete referent"
+            );
+        }
+    }
+}
+
+#[test]
+fn reference_snapshots_walk_composites_and_nested_references() {
+    let program = compile(
+        r#"
+fn main(x: Field) {
+    let mut numbers: [u32; 2] = [3, 7];
+    let array_ref = &mut numbers;
+    assert(array_ref[1] == 7);
+    let nested_ref = &array_ref;
+    assert(nested_ref[0] == 3);
+    let mut pair = (x, 9u32);
+    let tuple_ref = &mut pair;
+    assert(tuple_ref.1 == 9);
+    let mut empty = ();
+    let unit_ref = &mut empty;
+}
+"#,
+    );
+    let artifact = debug_artifact_of(&program);
+    let mut sink = RecordingSink::default();
+    trace_circuit(
+        &Bn254BlackBoxSolver,
+        &program.program.functions,
+        &artifact,
+        witness_for(&program, 5),
+        &program.program.unconstrained_functions,
+        &program.abi.error_types,
+        &options(),
+        &mut sink,
+    )
+    .expect("composite reference fixture traces successfully");
+    for (reference, target, mutable) in [
+        ("array_ref", "numbers", true),
+        ("nested_ref", "array_ref", false),
+        ("tuple_ref", "pair", true),
+        ("unit_ref", "empty", true),
+    ] {
+        let expected_target =
+            &sink.values.iter().find(|(name, _)| name == target).expect("referent is recorded").1;
+        let records: Vec<_> = sink.values.iter().filter(|(name, _)| name == reference).collect();
+        assert!(!records.is_empty(), "missing reference {reference}");
+        for (_, value) in records {
+            match value {
+                ValueRecord::Reference { dereferenced, mutable: actual_mutable, .. } => {
+                    assert_eq!(
+                        dereferenced.as_ref(),
+                        expected_target,
+                        "{reference} must walk the complete referent"
+                    );
+                    assert_eq!(*actual_mutable, mutable, "{reference} mutability");
+                }
+                other => panic!("{reference} must be a reference, got {other:?}"),
+            }
+        }
+    }
 }

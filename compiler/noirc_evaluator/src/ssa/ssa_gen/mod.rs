@@ -1383,8 +1383,25 @@ impl FunctionContext<'_> {
         // The ownership pass decides which arguments need a `Clone` (lowered to an
         // `IncrementRc` for arrays), including skipping the clone for callees known
         // not to modify their arguments. See `noirc_frontend::ownership::clone_elision`.
+        let snapshots_references = matches!(
+            &self.builder.current_function.dfg[function],
+            super::ir::value::Value::ForeignFunction { name, .. } if name == "__debug_var_assign"
+        );
         for argument in &call.arguments {
-            let mut values = self.codegen_expression(argument)?.into_value_list(self);
+            let mut values = self.codegen_expression(argument)?;
+            if snapshots_references {
+                // The debugger records values, while an ordinary oracle receives reference
+                // addresses. Load each layer before flattening so a reference to a struct
+                // snapshots every field using the same layout as its original type metadata.
+                if let Some(typ) = argument.return_type() {
+                    let mut typ = typ.as_ref();
+                    while let ast::Type::Reference(element_type, _) = typ {
+                        values = self.dereference(&values, element_type);
+                        typ = element_type;
+                    }
+                }
+            }
+            let mut values = values.into_value_list(self);
             arguments.append(&mut values);
         }
 

@@ -117,11 +117,18 @@ impl<F: AcirField> DebugVars<F> {
         let type_id = &self.variables.get(&var_id).unwrap().debug_type_id;
         let printable_type = self.types.get(type_id).unwrap();
 
+        // Debug assignment oracles serialize a snapshot of the referent, rather than
+        // the addresses ordinary oracles receive. Keep the reference metadata on the
+        // binding for consumers, but decode its payload using the terminal target type.
+        let mut value_type = printable_type;
+        while let PrintableType::Reference { typ, .. } = value_type {
+            value_type = typ;
+        }
         self.frames
             .last_mut()
             .expect("unexpected empty stack frames")
             .1
-            .insert(var_id, decode_printable_value(&mut values.iter().copied(), printable_type));
+            .insert(var_id, decode_printable_value(&mut values.iter().copied(), value_type));
     }
 
     pub fn assign_field(&mut self, var_id: DebugVarId, indexes: Vec<u32>, values: &[F]) {
