@@ -792,7 +792,20 @@ pub fn trace_circuit_with_executor<'a, B: BlackBoxFunctionSolver<FieldElement>>(
     let _ = TraceSink::ensure_type_id(tracer, TypeKind::None, "None");
     loop {
         let source_locations = match tracing_context.step_debugger() {
-            DebugStepResult::Finished => break,
+            DebugStepResult::Finished => {
+                // `main` can leave its instrumented frame without another source pause,
+                // so `update_record` never observes its return. Flush its call before
+                // recording the result captured by opcode stepping. A unit result stays
+                // implicit, letting the writer close a void call with its VoidReturn
+                // marker; errors never take this successful-completion path.
+                tracing_context.finish_pending_call(tracer);
+                if tracing_context.saved_return_value.as_ref().is_some_and(|value| {
+                    !matches!(value.typ, noirc_printable_type::PrintableType::Unit)
+                }) {
+                    register_return(tracer, &tracing_context.saved_return_value);
+                }
+                break;
+            }
             DebugStepResult::Error(err) => match &err {
                 NargoError::ExecutionError(ExecutionError::SolvingError(
                     OpcodeResolutionError::BrilligFunctionFailed {

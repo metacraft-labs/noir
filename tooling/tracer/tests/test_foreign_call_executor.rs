@@ -679,6 +679,65 @@ fn trace_call_steps_with_files(source: &str, files: &[(&str, &str)]) -> Vec<Stri
 }
 
 #[test]
+fn main_public_return_value_is_recorded_when_execution_finishes() {
+    let lines = trace_call_steps("fn main(x: u32) -> pub u32 {\n    let z = x + 100;\n    z\n}\n");
+    assert_eq!(
+        lines.iter().filter(|line| line.starts_with("return ")).collect::<Vec<_>>(),
+        ["return Int { i: 102, type_id: TypeId(1) }"],
+        "main's computed public result must close its call: {lines:#?}"
+    );
+}
+
+#[test]
+fn main_constant_and_array_public_results_are_recorded() {
+    for (source, expected) in [
+        ("fn main(x: u32) -> pub u32 { 100 }", "return Int { i: 100, type_id: TypeId(1) }"),
+        (
+            "fn main(x: u32) -> pub [u32; 2] { [x, x + 100] }",
+            "return Sequence { elements: [Int { i: 2, type_id: TypeId(1) }, Int { i: 102, type_id: TypeId(1) }], is_slice: false, type_id: TypeId(2) }",
+        ),
+    ] {
+        let lines = trace_call_steps(source);
+        assert_eq!(
+            lines.iter().filter(|line| line.starts_with("return ")).collect::<Vec<_>>(),
+            [expected],
+            "the complete typed main result must be recorded: {lines:#?}"
+        );
+    }
+}
+
+#[test]
+fn main_return_is_distinct_from_its_callees_return() {
+    let lines = trace_call_steps(
+        "fn base_damage() -> u32 { 100 }\nfn main(x: u32) -> pub u32 {\n    let damage = base_damage();\n    damage + x\n}\n",
+    );
+    assert_eq!(
+        lines.iter().filter(|line| line.starts_with("return ")).collect::<Vec<_>>(),
+        ["return Int { i: 100, type_id: TypeId(1) }", "return Int { i: 102, type_id: TypeId(1) }",],
+        "the callee and main must each return their own value: {lines:#?}"
+    );
+}
+
+#[test]
+fn void_and_failed_main_do_not_reuse_a_callees_return_value() {
+    for body in ["assert(damage + x == 102);", "assert(damage + x == 102)", "assert(false);"] {
+        let lines = trace_call_steps(&format!(
+            "fn base_damage() -> u32 {{ 100 }}\nfn main(x: u32) {{\n    let damage = base_damage();\n    {body}\n}}\n",
+        ));
+        assert_eq!(
+            lines.iter().filter(|line| line.starts_with("return ")).collect::<Vec<_>>(),
+            ["return Int { i: 100, type_id: TypeId(1) }"],
+            "void and failing main must keep their implicit void return: {lines:#?}"
+        );
+        assert_eq!(
+            lines.iter().any(|line| line.starts_with("event Error ")),
+            body == "assert(false);",
+            "the failing control must actually fail: {lines:#?}"
+        );
+    }
+}
+
+#[test]
 fn constant_body_call_has_its_own_step_and_preserves_the_callers_call_site() {
     let lines = trace_call_steps(
         "fn base_damage() -> u32 {\n    100\n}\n\nfn main(x: Field) {\n    let d = base_damage();\n    assert(d as Field + x == 102);\n}\n",

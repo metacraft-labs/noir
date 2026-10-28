@@ -1834,13 +1834,35 @@ regen = \"5\"
     );
     assert_eq!(base_steps[0]["vars"], serde_json::json!([]));
 
-    // The callees compute from the arguments their records carry. (`main`'s own
-    // exit is not pinned: its `pub` return value is recorded as `Void`, which
-    // is a separate matter from its call record.)
+    // Each call, including main, returns the value computed from its arguments.
     let damage_exit = the_event(events, "call_exit", "calculate_damage");
     assert_eq!(int_value(&damage_exit["return_value"]), 103, "100 + 5 - 20 / 10");
     let base_exit = the_event(events, "call_exit", "base_damage");
     assert_eq!(int_value(&base_exit["return_value"]), 1);
+    let main_exit = the_event(events, "call_exit", "main");
+    assert_eq!(int_value(&main_exit["return_value"]), 102, "103 - 1");
+}
+
+#[test]
+fn test_main_public_return_value_via_ct_print_full() {
+    let Some(doc) = record_and_dump_full_source(
+        "test_main_public_return_value_via_ct_print_full",
+        "pub_return",
+        "fn main(x: u32, y: u32) -> pub u32 {\n    let z = x + y;\n    z\n}\n",
+        "x = 100\ny = 2\n",
+    ) else {
+        return;
+    };
+    let events = doc["events"].as_array().expect("events array");
+    let main_exit = the_event(events, "call_exit", "main");
+    assert_eq!(
+        main_exit["return_value"],
+        serde_json::json!({"kind": "Int", "i": 102, "type_id": 1}),
+        "main must close with its typed public result"
+    );
+    assert_eq!(events[events.len() - 2], *main_exit, "main exits before toplevel");
+    let toplevel_exit = the_event(events, "call_exit", "<toplevel>");
+    assert_eq!(toplevel_exit["return_value"]["kind"], "Void");
 }
 
 /// Calls whose parameter list the instrumenter can only PARTLY bind, and a
