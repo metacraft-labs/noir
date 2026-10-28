@@ -282,9 +282,16 @@ impl<D: TraceForeignCallExecutor> TraceForeignCallExecutor for RefusingUnknown<D
 /// `instrument_debug` injects the `__debug_*` calls the variable recorder reads, and
 /// `force_brillig` is what the tracer executes.
 fn compile(source: &str) -> CompiledProgram {
+    compile_with_files(source, &[])
+}
+
+fn compile_with_files(source: &str, files: &[(&str, &str)]) -> CompiledProgram {
     let entry_point = Path::new("src/main.nr");
     let mut file_manager = file_manager_with_stdlib(Path::new(""));
     file_manager.add_file_with_source(entry_point, source.to_string());
+    for (path, content) in files {
+        file_manager.add_file_with_source(Path::new(path), content.to_string());
+    }
 
     let mut parsed_files = parse_all(&file_manager);
     let debug_instrumenter =
@@ -643,3 +650,160 @@ fn the_default_executor_answers_an_unimplemented_void_oracle_with_an_empty_resul
 /// hundred lines up.
 #[allow(dead_code)]
 fn _witness_stack_is_in_scope(_: WitnessStack<FieldElement>) {}
+
+// This sink observes the real compiler and debugger at the trace-event boundary;
+// no compiler, execution, or frame state is mocked.
+fn trace_call_steps(source: &str) -> Vec<String> {
+    trace_call_steps_with_files(source, &[])
+}
+
+fn trace_call_steps_with_files(source: &str, files: &[(&str, &str)]) -> Vec<String> {
+    let program = compile_with_files(source, files);
+    let artifact = debug_artifact_of(&program);
+    let solver = Bn254BlackBoxSolver::default();
+    let mut sink = RecordingSink::default();
+    trace_circuit(
+        &solver,
+        &program.program.functions,
+        &artifact,
+        witness_for(&program, 2),
+        &program.program.unconstrained_functions,
+        &program.abi.error_types,
+        &options(),
+        &mut sink,
+    )
+    .expect("call-step program traces");
+    sink.lines
+}
+
+#[test]
+fn constant_body_call_has_its_own_step_and_preserves_the_callers_call_site() {
+    let lines = trace_call_steps(
+        "fn base_damage() -> u32 {\n    100\n}\n\nfn main(x: Field) {\n    let d = base_damage();\n    assert(d as Field + x == 102);\n}\n",
+    );
+    let call = lines
+        .iter()
+        .position(|line| line == "call fn=1 args=0")
+        .expect("base_damage call must be recorded");
+    let returned = call
+        + 1
+        + lines[call + 1..]
+            .iter()
+            .position(|line| line.starts_with("return "))
+            .expect("callee returns");
+    let first_step = lines[call + 1..returned]
+        .iter()
+        .find(|line| line.starts_with("step "))
+        .expect("base_damage must own a step");
+    assert!(
+        first_step.starts_with("step src/main.nr:1:")
+            || first_step.starts_with("step src/main.nr:2:"),
+        "constant-body callee must step in its own source; stream: {lines:#?}"
+    );
+    assert!(
+        lines[call + 1..returned]
+            .iter()
+            .filter(|line| line.starts_with("step "))
+            .all(|line| line.starts_with("step src/main.nr:1:")
+                || line.starts_with("step src/main.nr:2:")),
+        "every callee step stays in its own source: {lines:#?}"
+    );
+    let before = lines[..call]
+        .iter()
+        .rposition(|line| line.starts_with("step "))
+        .expect("caller must step before entering the callee");
+    assert_eq!(lines[before], "step src/main.nr:6:13", "caller keeps its pre-call step");
+    assert!(
+        lines[before + 1..call].iter().any(|line| line.starts_with("var x = ")),
+        "pre-call step carries the caller's x"
+    );
+    assert!(
+        !lines[call + 1..returned].iter().any(|line| line.starts_with("var ")),
+        "zero-parameter constant callee has no variables: {lines:#?}"
+    );
+    assert_eq!(lines[returned], "return Int { i: 100, type_id: TypeId(2) }");
+    let resumed = lines[returned + 1..]
+        .iter()
+        .find(|line| line.starts_with("step "))
+        .expect("caller resumes after return");
+    assert_eq!(resumed, "step src/main.nr:6:13", "caller resumes at its call site");
+}
+
+#[test]
+fn local_body_control_and_single_line_constant_keep_their_own_steps() {
+    for body in ["100", "let a = 100; a"] {
+        let lines = trace_call_steps(&format!(
+            "fn base_damage() -> u32 {{ {body} }}\nfn main(x: Field) {{\n    let d = base_damage();\n    assert(d as Field + x == 102);\n}}\n"
+        ));
+        let call = lines.iter().position(|line| line == "call fn=1 args=0").unwrap();
+        let returned = call
+            + 1
+            + lines[call + 1..].iter().position(|line| line.starts_with("return ")).unwrap();
+        let steps: Vec<_> =
+            lines[call + 1..returned].iter().filter(|line| line.starts_with("step ")).collect();
+        assert!(!steps.is_empty(), "callee must own a step: {lines:#?}");
+        assert!(
+            steps.iter().all(|line| line.starts_with("step src/main.nr:1:")),
+            "callee steps stay in its single-line body: {lines:#?}"
+        );
+        assert!(
+            !lines[call + 1..returned].iter().any(|line| line.starts_with("var x = ")),
+            "caller variables stay outside callee: {lines:#?}"
+        );
+    }
+}
+
+#[test]
+fn nested_constant_body_call_anchors_in_the_innermost_function() {
+    let lines = trace_call_steps(
+        "fn base_damage() -> u32 {\n    100\n}\nfn relay() -> u32 {\n    base_damage()\n}\nfn main(x: Field) {\n    let d = relay();\n    assert(d as Field + x == 102);\n}\n",
+    );
+    let call =
+        lines.iter().position(|line| line == "call fn=2 args=0").expect("nested base_damage call");
+    let returned =
+        call + 1 + lines[call + 1..].iter().position(|line| line.starts_with("return ")).unwrap();
+    assert_eq!(
+        &lines[call + 1..returned],
+        &["step src/main.nr:1:25", "type Int u32 -> 2"],
+        "innermost constant call owns only its own empty-frame anchor"
+    );
+}
+
+#[test]
+fn multiline_materialized_body_control_keeps_its_located_step() {
+    let lines = trace_call_steps(
+        "fn base_damage() -> u32 {\n    let a = 100;\n    a\n}\nfn main(x: Field) {\n    let d = base_damage();\n    assert(d as Field + x == 102);\n}\n",
+    );
+    let call = lines.iter().position(|line| line == "call fn=1 args=0").unwrap();
+    let returned =
+        call + 1 + lines[call + 1..].iter().position(|line| line.starts_with("return ")).unwrap();
+    let steps: Vec<_> =
+        lines[call + 1..returned].iter().filter(|line| line.starts_with("step ")).collect();
+    assert_eq!(steps, ["step src/main.nr:2:9"], "materialized-body control");
+    assert!(!lines[call + 1..returned].iter().any(|line| line.starts_with("var x = ")));
+    assert_eq!(lines[returned], "return Int { i: 100, type_id: TypeId(2) }");
+}
+
+#[test]
+fn constant_body_in_another_file_does_not_borrow_the_callers_source() {
+    let lines = trace_call_steps_with_files(
+        "mod damage;\nfn main(x: Field) {\n    let d = damage::base_damage();\n    assert(d as Field + x == 102);\n}\n",
+        &[("src/damage.nr", "pub fn base_damage() -> u32 {\n    100\n}\n")],
+    );
+    let call = lines.iter().position(|line| line == "call fn=1 args=0").unwrap();
+    let returned =
+        call + 1 + lines[call + 1..].iter().position(|line| line.starts_with("return ")).unwrap();
+    let steps: Vec<_> =
+        lines[call + 1..returned].iter().filter(|line| line.starts_with("step ")).collect();
+    assert!(!steps.is_empty(), "cross-file callee must own a step: {lines:#?}");
+    assert!(
+        steps.iter().all(|line| line.starts_with("step src/damage.nr:1:")
+            || line.starts_with("step src/damage.nr:2:")),
+        "every callee step uses the callee's file: {lines:#?}"
+    );
+    assert!(
+        !lines[call + 1..returned].iter().any(|line| line.starts_with("var ")),
+        "cross-file constant callee has an empty frame: {lines:#?}"
+    );
+    assert_eq!(lines[returned], "return Int { i: 100, type_id: TypeId(2) }");
+}

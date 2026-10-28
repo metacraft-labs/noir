@@ -1796,13 +1796,9 @@ regen = \"5\"
         assert_eq!(next["function"].as_str(), Some(function), "after {function}'s call_entry");
     }
 
-    // And for each call that HAS arguments, that step carries them, by name and
-    // in order. `base_damage` is left out on purpose: its body is a constant,
-    // its one step is reported at the call site in `main` (line 17) with
-    // `main`'s variables. A zero-parameter call's record is written when its
-    // frame appears, so that step is not shaped by the deferred call record at
-    // all, and pinning it here would pass it off as correct.
-    for function in ["main", "calculate_damage"] {
+    // Each entry step carries that callee's arguments, including the empty
+    // frame of a zero-parameter function with a constant body.
+    for function in ["main", "calculate_damage", "base_damage"] {
         let at = events
             .iter()
             .position(|e| e["kind"] == "call_entry" && e["function"] == function)
@@ -1820,6 +1816,23 @@ regen = \"5\"
             "{function}'s first step carries its arguments; step={next}"
         );
     }
+
+    let base_definition = main_nr
+        .lines()
+        .position(|line| line.starts_with("fn base_damage"))
+        .expect("fixture declares base_damage") as u64
+        + 1;
+    let base_steps: Vec<_> = events
+        .iter()
+        .filter(|event| event["kind"] == "step" && event["function"] == "base_damage")
+        .collect();
+    assert_eq!(base_steps.len(), 1, "constant callee owns one entry anchor");
+    assert_eq!(
+        base_steps[0]["line"].as_u64(),
+        Some(base_definition),
+        "constant callee's step is at its definition, not the caller's call site"
+    );
+    assert_eq!(base_steps[0]["vars"], serde_json::json!([]));
 
     // The callees compute from the arguments their records carry. (`main`'s own
     // exit is not pinned: its `pub` return value is recorded as `Void`, which

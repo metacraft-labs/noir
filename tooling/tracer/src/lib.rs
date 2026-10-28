@@ -560,7 +560,16 @@ impl<'a, B: BlackBoxFunctionSolver<FieldElement>> TracingContext<'a, B> {
             let index = index as usize;
             let location = &source_locations[index];
             let nested_closing_brace = index > 0 && self.is_closing_brace_location(location);
-            if !nested_closing_brace {
+            // A constant body can reach its closing brace at the first pause after
+            // __debug_fn_enter. Its definition was the preceding source location;
+            // anchor the new frame there so its call owns a step of its own.
+            let entry_anchor = nested_closing_brace && !new_frames.is_empty();
+            if !nested_closing_brace || entry_anchor {
+                let location = if entry_anchor {
+                    self.source_locations.last().expect("no previous location before call")
+                } else {
+                    location
+                };
                 Self::maybe_report_print_events(&self.print_output, &mut self.pending_call, tracer);
                 Self::write_step(&mut self.pending_call, tracer, location);
                 Self::write_variables(&mut self.pending_call, tracer, &stack_frames[index]);
