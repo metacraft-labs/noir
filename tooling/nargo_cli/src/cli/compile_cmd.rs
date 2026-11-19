@@ -64,6 +64,14 @@ pub(crate) fn run(args: CompileCommand, workspace: Workspace) -> Result<(), CliE
     Ok(())
 }
 
+// The three control sequences `--watch` writes, spelled out rather than taken
+// from `termion`: termion builds only on Unix, so it kept nargo from compiling
+// for Windows at all, and these are the bytes it produced (CSI s, CSI u,
+// CSI J), which Windows consoles honour too.
+const CURSOR_SAVE: &str = "\x1b[s";
+const CURSOR_RESTORE: &str = "\x1b[u";
+const CLEAR_AFTER_CURSOR: &str = "\x1b[J";
+
 /// Continuously recompile the workspace on any Noir file change event.
 fn watch_workspace(
     workspace: &Workspace,
@@ -79,7 +87,7 @@ fn watch_workspace(
     debouncer.watch(&workspace.root_dir, RecursiveMode::Recursive)?;
 
     let mut screen = std::io::stdout();
-    write!(screen, "{}", termion::cursor::Save).unwrap();
+    write!(screen, "{CURSOR_SAVE}").unwrap();
     screen.flush().unwrap();
     let debug_compile_stdin = None;
     let _ = compile_workspace_full(workspace, compile_options, debug_compile_stdin);
@@ -101,7 +109,7 @@ fn watch_workspace(
         });
 
         if noir_files_modified {
-            write!(screen, "{}{}", termion::cursor::Restore, termion::clear::AfterCursor).unwrap();
+            write!(screen, "{CURSOR_RESTORE}{CLEAR_AFTER_CURSOR}").unwrap();
             screen.flush().unwrap();
             let debug_compile_stdin = None;
             let _ = compile_workspace_full(workspace, compile_options, debug_compile_stdin);

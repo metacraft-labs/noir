@@ -84,7 +84,6 @@ clap-markdown = { git = "https://github.com/noir-lang/clap-markdown", rev = "450
 codetracer_trace_writer.workspace = true
 
 notify-debouncer-full = "0.7.0"
-termion = "4"
 
 # Logs
 tracing.workspace = true
